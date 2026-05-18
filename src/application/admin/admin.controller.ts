@@ -24,7 +24,7 @@ import { ReconciliationService } from './reconciliation.service';
 import { CurrentUser } from '../../core/decorators/current-user.decorator';
 import { RolesGuard } from '../../core/guards/roles.guard';
 import { Roles } from '../../core/decorators/roles.decorator';
-import { CreateSettingDto, UpdateSettingDto, UpdateCurrencySettingDto } from './dto/admin.dto';
+import { CreateSettingDto, UpdateSettingDto, UpdateCurrencySettingDto, UpdateVaSourceCurrencySettingDto } from './dto/admin.dto';
 
 // ── SETTINGS PÚBLICOS (Require auth, retorna solo settings con is_public=true) ──
 
@@ -44,6 +44,12 @@ export class PublicSettingsController {
   @ApiQuery({ name: 'context', required: false, enum: ['ramp', 'va', 'supplier'] })
   getActiveCurrencies(@Query('context') context?: string) {
     return this.adminService.getActiveCurrencies(context);
+  }
+
+  @Get('va-source-currencies')
+  @ApiOperation({ summary: 'Obtener monedas fiat activas para depósitos VA' })
+  getActiveVaSourceCurrencies() {
+    return this.adminService.getActiveVaSourceCurrencies();
   }
 }
 
@@ -123,6 +129,26 @@ export class AdminController {
     @CurrentUser() user: User,
   ) {
     return this.adminService.updateCurrencySetting(currency, dto, user.id);
+  }
+
+  // ── VA SOURCE CURRENCY SETTINGS ──────────────
+
+  @Get('va-source-currency-settings')
+  @Roles('admin', 'super_admin')
+  @ApiOperation({ summary: 'Listar monedas fiat para depósitos VA' })
+  getVaSourceCurrencySettings() {
+    return this.adminService.getVaSourceCurrencySettings();
+  }
+
+  @Patch('va-source-currency-settings/:currency')
+  @Roles('admin', 'super_admin')
+  @ApiOperation({ summary: 'Activar o desactivar una moneda fiat para depósitos VA' })
+  updateVaSourceCurrencySetting(
+    @Param('currency') currency: string,
+    @Body() dto: UpdateVaSourceCurrencySettingDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.adminService.updateVaSourceCurrencySetting(currency, dto, user.id);
   }
 
   // ── AUDIT LOGS ───────────────────────────────

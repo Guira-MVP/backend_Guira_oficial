@@ -38,6 +38,13 @@ export class UpdateCurrencySettingDto {
   is_active_supplier?: boolean;
 }
 
+export class UpdateVaSourceCurrencySettingDto {
+  @ApiPropertyOptional({ description: 'Activar o desactivar esta moneda fiat para depósitos VA' })
+  @IsBoolean()
+  @IsOptional()
+  is_active?: boolean;
+}
+
 export class CreateSettingDto extends UpdateSettingDto {
   @ApiProperty()
   @IsString()

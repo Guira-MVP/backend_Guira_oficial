@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
-import { UpdateSettingDto, CreateSettingDto, UpdateCurrencySettingDto } from './dto/admin.dto';
+import { UpdateSettingDto, CreateSettingDto, UpdateCurrencySettingDto, UpdateVaSourceCurrencySettingDto } from './dto/admin.dto';
 
 @Injectable()
 export class AdminService {
@@ -162,6 +162,61 @@ export class AdminService {
       table_name: 'currency_settings',
       record_id: null,
       new_values: { currency, [changedField]: newValue },
+      source: 'admin_panel',
+    });
+
+    return data;
+  }
+
+  // ── VA SOURCE CURRENCY SETTINGS ──────────────────────────────────
+
+  async getVaSourceCurrencySettings() {
+    const { data, error } = await this.supabase
+      .from('va_source_currency_settings')
+      .select('*')
+      .order('sort_order', { ascending: true });
+
+    if (error) throw new BadRequestException(error.message);
+    return data;
+  }
+
+  async getActiveVaSourceCurrencies(): Promise<string[]> {
+    const { data, error } = await this.supabase
+      .from('va_source_currency_settings')
+      .select('currency')
+      .eq('is_active', true)
+      .order('sort_order', { ascending: true });
+
+    if (error) throw new BadRequestException(error.message);
+    return (data ?? []).map((r) => r.currency);
+  }
+
+  async updateVaSourceCurrencySetting(
+    currency: string,
+    dto: UpdateVaSourceCurrencySettingDto,
+    actorId: string,
+  ) {
+    const { data, error } = await this.supabase
+      .from('va_source_currency_settings')
+      .update({
+        is_active: dto.is_active,
+        updated_by: actorId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('currency', currency.toLowerCase())
+      .select()
+      .single();
+
+    if (error || !data)
+      throw new NotFoundException(`Moneda fiat '${currency}' no encontrada en VA source settings`);
+
+    await this.supabase.from('audit_logs').insert({
+      performed_by: actorId,
+      role: 'admin',
+      action: dto.is_active ? 'ENABLE_VA_SOURCE_CURRENCY' : 'DISABLE_VA_SOURCE_CURRENCY',
+      table_name: 'va_source_currency_settings',
+      record_id: null,
+      new_values: { currency, is_active: dto.is_active },
       source: 'admin_panel',
     });
 

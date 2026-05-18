@@ -49,11 +49,26 @@ export class BridgeService {
     }
   }
 
+  private async assertVaSourceCurrencyActive(currency: string): Promise<void> {
+    const { data } = await this.supabase
+      .from('va_source_currency_settings')
+      .select('is_active')
+      .eq('currency', currency.toLowerCase())
+      .single();
+
+    if (!data || !data.is_active) {
+      throw new BadRequestException(
+        `Los depósitos en ${currency.toUpperCase()} no están disponibles actualmente.`,
+      );
+    }
+  }
+
   /** Crea Virtual Account en Bridge + guarda en DB. */
   async createVirtualAccount(userId: string, dto: CreateVirtualAccountDto) {
     const profile = await this.getVerifiedProfile(userId);
 
     await this.assertCurrencyActive(dto.destination_currency);
+    await this.assertVaSourceCurrencyActive(dto.source_currency);
 
     // Validación: no pueden venir ambos destinos a la vez
     if (dto.destination_wallet_id && dto.destination_address) {
