@@ -47,9 +47,9 @@ export class PublicSettingsController {
   }
 
   @Get('va-source-currencies')
-  @ApiOperation({ summary: 'Obtener monedas fiat activas para depósitos VA' })
-  getActiveVaSourceCurrencies() {
-    return this.adminService.getActiveVaSourceCurrencies();
+  @ApiOperation({ summary: 'Obtener todas las monedas fiat para depósitos VA (activas e inactivas)' })
+  getAllVaSourceCurrencies() {
+    return this.adminService.getVaSourceCurrencySettings();
   }
 }
 
