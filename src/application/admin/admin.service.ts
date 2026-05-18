@@ -180,15 +180,15 @@ export class AdminService {
     return data;
   }
 
-  async getActiveVaSourceCurrencies(): Promise<string[]> {
+  async getActiveVaSourceCurrencies() {
     const { data, error } = await this.supabase
       .from('va_source_currency_settings')
-      .select('currency')
+      .select('currency, label, rail_label, flag_iso, is_active, sort_order')
       .eq('is_active', true)
       .order('sort_order', { ascending: true });
 
     if (error) throw new BadRequestException(error.message);
-    return (data ?? []).map((r) => r.currency);
+    return data ?? [];
   }
 
   async updateVaSourceCurrencySetting(
