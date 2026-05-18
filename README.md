@@ -1,98 +1,208 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Guira Backend API
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+REST API de la plataforma financiera Guira. Construida con NestJS y Supabase, soporta transferencias interbancarias, wallets multi-moneda, cumplimiento KYC/KYB e integracion con Bridge para pagos internacionales.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Tecnologias principales
 
-## Description
+- **Runtime:** Node.js >= 22.0.0
+- **Framework:** NestJS 11
+- **Base de datos / Auth:** Supabase (PostgreSQL + Auth)
+- **Pagos internacionales:** Bridge API
+- **Documentacion:** Swagger / OpenAPI
+- **Contenedores:** Docker + Docker Compose
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## Requisitos previos
 
-## Project setup
+- Node.js >= 22.0.0
+- npm >= 10
+- Cuenta en [Supabase](https://supabase.com)
+- Credenciales de [Bridge API](https://bridge.xyz) (sandbox o produccion)
+
+## Instalacion
 
 ```bash
-$ npm install
+git clone git@github.com:MAIKIREX/backend_Guira_oficial.git
+cd backend_Guira_oficial
+
+npm install
+
+cp .env.example .env
 ```
 
-## Compile and run the project
+Editar `.env` con las credenciales correspondientes (ver seccion de Variables de entorno).
+
+## Ejecucion
 
 ```bash
-# development
-$ npm run start
+# Desarrollo con hot reload
+npm run start:dev
 
-# watch mode
-$ npm run start:dev
+# Produccion
+npm run build
+npm run start:prod
 
-# production mode
-$ npm run start:prod
+# Debug
+npm run start:debug
 ```
 
-## Run tests
+La API queda disponible en `http://localhost:3001/api` por defecto.
+La documentacion Swagger se expone en `http://localhost:3001/api/docs` (solo en entornos no productivos).
+
+## Docker
 
 ```bash
-# unit tests
-$ npm run test
+# Levantar contenedor de desarrollo
+docker-compose up
 
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+# Reconstruir imagen
+docker-compose up --build
 ```
 
-## Deployment
+El `docker-compose.yml` monta el codigo fuente con hot reload activado. Para produccion se usa un build multi-etapa que produce una imagen optimizada ejecutada como usuario no-root.
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+## Variables de entorno
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+| Variable | Descripcion | Ejemplo |
+|---|---|---|
+| `PORT` | Puerto del servidor | `3001` |
+| `PATH_SUBDOMAIN` | Prefijo global de rutas | `api` |
+| `URL_FRONTEND` | Origenes CORS permitidos (separados por coma) | `http://localhost:5173` |
+| `SUPABASE_URL` | URL del proyecto Supabase | `https://xxx.supabase.co` |
+| `SUPABASE_ANON_KEY` | Clave anonima de Supabase | `eyJ...` |
+| `SUPABASE_SERVICE_ROLE_KEY` | Clave de servicio de Supabase (bypasa RLS) | `eyJ...` |
+| `BRIDGE_API_URL` | URL base de Bridge API | `https://api.sandbox.bridge.xyz/v0` |
+| `BRIDGE_API_KEY` | Clave de API de Bridge | `sk_test_...` |
+| `BRIDGE_WEBHOOK_ID` | ID del webhook registrado en Bridge | `wep_...` |
+| `BRIDGE_WEBHOOK_PUBLIC_KEY` | Clave publica RSA para verificar firmas | `-----BEGIN PUBLIC KEY-----...` |
+| `BRIDGE_WEBHOOK_URL` | URL publica que recibe eventos de Bridge | `https://dominio.com/api/webhooks/bridge` |
+
+## Arquitectura
+
+```
+src/
+├── app.module.ts
+├── main.ts
+├── application/                  # Modulos de negocio
+│   ├── auth/                     # Autenticacion y sesion
+│   ├── profiles/                 # Perfiles de usuario
+│   ├── onboarding/               # Flujo KYC/KYB
+│   ├── wallets/                  # Wallets multi-moneda
+│   ├── ledger/                   # Historial de transacciones
+│   ├── payment-orders/           # Ordenes de pago (core)
+│   ├── fees/                     # Comisiones
+│   ├── exchange-rates/           # Tipos de cambio
+│   ├── bridge/                   # Integracion Bridge API
+│   ├── suppliers/                # Beneficiarios / proveedores
+│   ├── client-bank-accounts/     # Cuentas bancarias de clientes
+│   ├── compliance/               # KYC/KYB y documentos
+│   ├── notifications/            # Email y SMS
+│   ├── webhooks/                 # Eventos entrantes (Bridge)
+│   ├── psav/                     # Cuentas PSAV (cripto)
+│   ├── admin/                    # Panel de administracion
+│   └── support/                  # Tickets de soporte
+└── core/                         # Infraestructura transversal
+    ├── config/                   # Validacion de env vars (Joi)
+    ├── guards/                   # Auth, Roles, Rate limit
+    ├── decorators/               # @CurrentUser, @Roles, @Public
+    ├── supabase/                 # Cliente global Supabase
+    ├── pdf/                      # Generacion de PDFs
+    └── export/                   # Exportacion Excel
+```
+
+## Autenticacion y roles
+
+Todas las rutas requieren un JWT de Supabase en el header `Authorization: Bearer <token>`, excepto las marcadas con el decorador `@Public()`.
+
+El guard valida el token, carga el perfil del usuario y bloquea cuentas inactivas o congeladas.
+
+| Rol | Descripcion |
+|---|---|
+| `client` | Usuario final de la plataforma |
+| `staff` | Operador interno |
+| `admin` | Administrador con acceso completo |
+| `super_admin` | Superadministrador |
+
+## Endpoints principales
+
+### Auth — `/api/auth`
+
+| Metodo | Ruta | Descripcion | Auth |
+|---|---|---|---|
+| POST | `/auth/register` | Registro de usuario | Publica |
+| POST | `/auth/login` | Login con email y contrasena | Publica |
+| GET | `/auth/me` | Perfil del usuario autenticado | JWT |
+| POST | `/auth/refresh` | Renovar token de acceso | Publica |
+| POST | `/auth/logout` | Cerrar sesion | JWT |
+| POST | `/auth/forgot-password` | Solicitar reseteo de contrasena | Publica |
+| POST | `/auth/reset-password` | Confirmar nuevo password | JWT |
+| POST | `/auth/oauth-callback` | Callback de proveedor OAuth | Publica |
+
+### Wallets — `/api/wallets`
+
+| Metodo | Ruta | Descripcion |
+|---|---|---|
+| GET | `/wallets` | Listar wallets del usuario |
+| GET | `/wallets/balances` | Saldos en todas las monedas |
+| GET | `/wallets/balances/:currency` | Saldo de una moneda especifica |
+| GET | `/wallets/payin-routes` | Cuentas virtuales para deposito |
+
+### Ordenes de pago — `/api/payment-orders`
+
+| Metodo | Ruta | Descripcion |
+|---|---|---|
+| POST | `/payment-orders/interbank` | Crear transferencia interbancaraio |
+| POST | `/payment-orders/wallet-ramp` | On-ramp / off-ramp via Bridge |
+| GET | `/payment-orders` | Listar ordenes del usuario |
+| GET | `/payment-orders/:id` | Detalle de una orden |
+| GET | `/payment-orders/:id/pdf` | Generar comprobante PDF |
+| POST | `/payment-orders/:id/confirm-deposit` | Confirmar deposito con comprobante |
+| POST | `/payment-orders/:id/cancel` | Cancelar orden pendiente |
+| GET | `/payment-orders/exchange-rates` | Tipos de cambio vigentes |
+| GET | `/payment-orders/export` | Exportar historial (Excel/PDF) |
+| GET | `/payment-orders/limits/:flow_type` | Limites min/max por flujo |
+
+### Admin — `/api/admin`
+
+| Metodo | Ruta | Descripcion |
+|---|---|---|
+| GET | `/admin/payment-orders` | Listar todas las ordenes |
+| GET | `/admin/payment-orders/stats` | Estadisticas del dashboard |
+| POST | `/admin/payment-orders/:id/approve` | Aprobar orden |
+| POST | `/admin/payment-orders/:id/complete` | Completar orden |
+| POST | `/admin/payment-orders/:id/fail` | Marcar orden como fallida |
+| POST | `/admin/wallets/balances/adjust` | Ajuste manual de saldo |
+| POST | `/admin/wallets/initialize/:userId` | Reinicializar wallets post-KYC |
+
+## Seguridad
+
+- Rate limiting global: 100 peticiones / 60 segundos por IP
+- Headers de seguridad con Helmet
+- Validacion de firma RSA-SHA256 en webhooks de Bridge
+- Validacion estricta de DTOs con `class-validator` (whitelist)
+- Contenedor Docker ejecutado como usuario no-root
+
+## Tests
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+# Unitarios
+npm test
+
+# Watch mode
+npm run test:watch
+
+# Cobertura
+npm run test:cov
+
+# End-to-end
+npm run test:e2e
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+## Scripts disponibles
 
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+| Script | Descripcion |
+|---|---|
+| `npm run build` | Compilar TypeScript |
+| `npm run start:dev` | Desarrollo con hot reload |
+| `npm run start:prod` | Iniciar servidor de produccion |
+| `npm run lint` | Corregir errores de linting |
+| `npm run format` | Formatear codigo con Prettier |
