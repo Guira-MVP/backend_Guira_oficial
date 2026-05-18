@@ -111,11 +111,15 @@ export class AdminService {
     return data;
   }
 
-  async getActiveCurrencies(): Promise<string[]> {
+  async getActiveCurrencies(context?: string): Promise<string[]> {
+    let column = 'is_active';
+    if (context === 'va') column = 'is_active_va';
+    if (context === 'supplier') column = 'is_active_supplier';
+
     const { data, error } = await this.supabase
       .from('currency_settings')
       .select('currency')
-      .eq('is_active', true)
+      .eq(column, true)
       .order('sort_order', { ascending: true });
 
     if (error) throw new BadRequestException(error.message);
@@ -127,26 +131,37 @@ export class AdminService {
     dto: UpdateCurrencySettingDto,
     actorId: string,
   ) {
+    const updateData: Record<string, unknown> = {
+      updated_by: actorId,
+      updated_at: new Date().toISOString(),
+    };
+    if (dto.is_active !== undefined) updateData.is_active = dto.is_active;
+    if (dto.is_active_va !== undefined) updateData.is_active_va = dto.is_active_va;
+    if (dto.is_active_supplier !== undefined) updateData.is_active_supplier = dto.is_active_supplier;
+
     const { data, error } = await this.supabase
       .from('currency_settings')
-      .update({
-        is_active: dto.is_active,
-        updated_by: actorId,
-        updated_at: new Date().toISOString(),
-      })
+      .update(updateData)
       .eq('currency', currency)
       .select()
       .single();
 
     if (error || !data) throw new NotFoundException(`Divisa '${currency}' no encontrada`);
 
+    const changedField = dto.is_active_va !== undefined
+      ? 'is_active_va'
+      : dto.is_active_supplier !== undefined
+        ? 'is_active_supplier'
+        : 'is_active';
+    const newValue = updateData[changedField] as boolean;
+
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
       role: 'admin',
-      action: dto.is_active ? 'ENABLE_CURRENCY' : 'DISABLE_CURRENCY',
+      action: newValue ? 'ENABLE_CURRENCY' : 'DISABLE_CURRENCY',
       table_name: 'currency_settings',
       record_id: null,
-      new_values: { currency, is_active: dto.is_active },
+      new_values: { currency, [changedField]: newValue },
       source: 'admin_panel',
     });
 

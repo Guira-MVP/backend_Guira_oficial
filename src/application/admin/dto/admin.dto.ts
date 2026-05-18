@@ -22,9 +22,20 @@ export class UpdateSettingDto {
 }
 
 export class UpdateCurrencySettingDto {
-  @ApiProperty()
+  @ApiPropertyOptional()
   @IsBoolean()
-  is_active: boolean;
+  @IsOptional()
+  is_active?: boolean;
+
+  @ApiPropertyOptional()
+  @IsBoolean()
+  @IsOptional()
+  is_active_va?: boolean;
+
+  @ApiPropertyOptional()
+  @IsBoolean()
+  @IsOptional()
+  is_active_supplier?: boolean;
 }
 
 export class CreateSettingDto extends UpdateSettingDto {

@@ -40,9 +40,10 @@ export class PublicSettingsController {
   }
 
   @Get('currencies')
-  @ApiOperation({ summary: 'Obtener divisas activas (requiere auth)' })
-  getActiveCurrencies() {
-    return this.adminService.getActiveCurrencies();
+  @ApiOperation({ summary: 'Obtener divisas activas por contexto (requiere auth)' })
+  @ApiQuery({ name: 'context', required: false, enum: ['ramp', 'va', 'supplier'] })
+  getActiveCurrencies(@Query('context') context?: string) {
+    return this.adminService.getActiveCurrencies(context);
   }
 }
 

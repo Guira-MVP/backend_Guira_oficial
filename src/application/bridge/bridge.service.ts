@@ -38,13 +38,13 @@ export class BridgeService {
   private async assertCurrencyActive(currency: string): Promise<void> {
     const { data } = await this.supabase
       .from('currency_settings')
-      .select('is_active')
+      .select('is_active_va')
       .eq('currency', currency.toLowerCase())
       .single();
 
-    if (!data || !data.is_active) {
+    if (!data || !data.is_active_va) {
       throw new BadRequestException(
-        `La divisa ${currency.toUpperCase()} no está habilitada en este momento.`,
+        `La divisa ${currency.toUpperCase()} no está habilitada para cuentas virtuales.`,
       );
     }
   }

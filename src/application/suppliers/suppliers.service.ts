@@ -34,6 +34,20 @@ export class SuppliersService {
     private readonly bridgeService: BridgeService,
   ) {}
 
+  private async assertCurrencyActiveForSupplier(currency: string): Promise<void> {
+    const { data } = await this.supabase
+      .from('currency_settings')
+      .select('is_active_supplier')
+      .eq('currency', currency.toLowerCase())
+      .single();
+
+    if (!data || !data.is_active_supplier) {
+      throw new BadRequestException(
+        `La divisa ${currency.toUpperCase()} no está habilitada para proveedores en este momento.`,
+      );
+    }
+  }
+
   /** Devuelve los rails ya registrados por un email para un usuario. */
   async getExistingRailsForEmail(userId: string, email: string): Promise<{
     exists: boolean;
@@ -184,10 +198,12 @@ export class SuppliersService {
       // Proveedor crypto: crear liquidation address apuntando a la wallet del proveedor
       // Regla de moneda: Tron → USDT, todas las demás redes → USDC.
       // Esto evita el exchange rate de Bridge al mantener la misma moneda de entrada y salida.
+      const isTron = (dto.wallet_network ?? 'solana').toLowerCase() === 'tron';
+      const laCurrency = isTron ? 'usdt' : 'usdc';
+
+      await this.assertCurrencyActiveForSupplier(laCurrency);
+
       try {
-        const isTron =
-          (dto.wallet_network ?? 'solana').toLowerCase() === 'tron';
-        const laCurrency = isTron ? 'usdt' : 'usdc';
 
         const la = await this.bridgeService.createLiquidationAddress(userId, {
           currency: laCurrency,
