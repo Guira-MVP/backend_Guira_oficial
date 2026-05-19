@@ -2875,6 +2875,7 @@ export class PaymentOrdersService {
     if (filters.to_date) query = query.lte('created_at', filters.to_date);
 
     const { data, count, error } = await query;
+    this.logger.debug(`listAllOrders → rows=${data?.length ?? 'null'} count=${count ?? 'null'} error=${error ? JSON.stringify(error) : 'none'}`);
     if (error) throw new BadRequestException(error.message);
     return { data: data ?? [], total: count ?? 0, page, limit };
   }
