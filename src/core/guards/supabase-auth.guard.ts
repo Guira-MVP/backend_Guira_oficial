@@ -93,7 +93,7 @@ export class SupabaseAuthGuard implements CanActivate {
 
     if (profileError || !profile) {
       this.logger.warn(
-        `Perfil no encontrado para usuario ${supabaseUser.id}: ${profileError?.message}`,
+        `Perfil no encontrado para usuario ${supabaseUser.id}: [${profileError?.code}] ${profileError?.message}`,
       );
       throw new UnauthorizedException(
         'Perfil de usuario no encontrado. Contacta soporte.',
