@@ -57,6 +57,12 @@ async function bootstrap() {
   // Security Headers — crossOriginResourcePolicy false para no bloquear peticiones cross-origin a la API
   app.use(helmet({ crossOriginResourcePolicy: false }));
 
+  // Deshabilitar cache en todos los endpoints de la API
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+  });
+
   // Validación/transformación global de DTOs
   app.useGlobalPipes(
     new ValidationPipe({
