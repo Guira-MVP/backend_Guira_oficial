@@ -8,7 +8,8 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { SupabaseClient } from '@supabase/supabase-js';
+import { ConfigService } from '@nestjs/config';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../supabase/supabase.module';
 
 export const IS_PUBLIC_KEY = 'isPublic';
@@ -46,15 +47,31 @@ export interface AuthenticatedUser {
  * request.user con los datos del perfil (role, is_active, is_frozen).
  *
  * Bloquea automáticamente cuentas inactivas o congeladas.
+ *
+ * NOTA: Se usa un cliente Supabase temporal (con anon key) exclusivamente
+ * para validar el JWT del usuario. Esto evita contaminar la instancia
+ * singleton (service_role) con el token del usuario, lo que causaría que
+ * las consultas posteriores se ejecuten bajo RLS del usuario en vez de
+ * con bypass de service_role.
  */
 @Injectable()
 export class SupabaseAuthGuard implements CanActivate {
   private readonly logger = new Logger(SupabaseAuthGuard.name);
+  private readonly authClient: SupabaseClient;
 
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly reflector: Reflector,
-  ) {}
+    private readonly configService: ConfigService,
+  ) {
+    // Cliente ligero y aislado, exclusivo para validar JWTs.
+    // Usa la anon key (no necesita service_role para auth.getUser).
+    const url = this.configService.get<string>('app.supabaseUrl')!;
+    const anonKey = this.configService.get<string>('app.supabaseAnonKey')!;
+    this.authClient = createClient(url, anonKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+  }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     // Rutas públicas: skip
@@ -73,8 +90,9 @@ export class SupabaseAuthGuard implements CanActivate {
 
     const token = authHeader.split(' ')[1];
 
-    // 1. Validar JWT con Supabase Auth
-    const { data, error } = await this.supabase.auth.getUser(token);
+    // 1. Validar JWT con un cliente aislado (NO el singleton de service_role)
+    //    para evitar contaminar el cliente global con el token del usuario.
+    const { data, error } = await this.authClient.auth.getUser(token);
 
     if (error || !data?.user) {
       throw new UnauthorizedException('Token inválido o expirado');
