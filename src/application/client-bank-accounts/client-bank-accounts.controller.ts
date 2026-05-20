@@ -130,7 +130,7 @@ export class AdminClientBankAccountsController {
     @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.service.approveChange(id, actor.id);
+    return this.service.approveChange(id, actor.id, actor.profile.role);
   }
 
   @Patch(':id/reject')
@@ -144,6 +144,6 @@ export class AdminClientBankAccountsController {
     @CurrentUser() actor: AuthenticatedUser,
     @Body('reason') reason?: string,
   ) {
-    return this.service.rejectChange(id, actor.id, reason);
+    return this.service.rejectChange(id, actor.id, actor.profile.role, reason);
   }
 }

@@ -17,7 +17,7 @@ import {
   ApiOperation,
   ApiQuery,
 } from '@nestjs/swagger';
-import type { User } from '@supabase/supabase-js';
+import { AuthenticatedUser } from '../../core/guards/supabase-auth.guard';
 
 import { AdminService } from './admin.service';
 import { ReconciliationService } from './reconciliation.service';
@@ -65,7 +65,7 @@ export class ActivityController {
   @ApiOperation({ summary: 'Feed de actividad del usuario logueado' })
   @ApiQuery({ name: 'limit', required: false })
   getMyActivity(
-    @CurrentUser() user: User,
+    @CurrentUser() user: AuthenticatedUser,
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
   ) {
     return this.adminService.getUserActivityLogs(user.id, limit);
@@ -96,8 +96,8 @@ export class AdminController {
   @Post('settings')
   @Roles('super_admin')
   @ApiOperation({ summary: 'Crear nuevo setting' })
-  createSetting(@Body() dto: CreateSettingDto, @CurrentUser() user: User) {
-    return this.adminService.createSetting(dto, user.id);
+  createSetting(@Body() dto: CreateSettingDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.adminService.createSetting(dto, user.id, user.profile.role);
   }
 
   @Patch('settings/:key')
@@ -106,9 +106,9 @@ export class AdminController {
   updateSetting(
     @Param('key') key: string,
     @Body() dto: UpdateSettingDto,
-    @CurrentUser() user: User,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.adminService.updateSetting(key, dto, user.id);
+    return this.adminService.updateSetting(key, dto, user.id, user.profile.role);
   }
 
   // ── CURRENCY SETTINGS ────────────────────────
@@ -126,9 +126,9 @@ export class AdminController {
   updateCurrencySetting(
     @Param('currency') currency: string,
     @Body() dto: UpdateCurrencySettingDto,
-    @CurrentUser() user: User,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.adminService.updateCurrencySetting(currency, dto, user.id);
+    return this.adminService.updateCurrencySetting(currency, dto, user.id, user.profile.role);
   }
 
   // ── VA SOURCE CURRENCY SETTINGS ──────────────
@@ -146,9 +146,9 @@ export class AdminController {
   updateVaSourceCurrencySetting(
     @Param('currency') currency: string,
     @Body() dto: UpdateVaSourceCurrencySettingDto,
-    @CurrentUser() user: User,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.adminService.updateVaSourceCurrencySetting(currency, dto, user.id);
+    return this.adminService.updateVaSourceCurrencySetting(currency, dto, user.id, user.profile.role);
   }
 
   // ── AUDIT LOGS ───────────────────────────────
@@ -196,7 +196,7 @@ export class AdminController {
   @ApiOperation({
     summary: 'Ejecutar proceso manual de reconciliación financiera',
   })
-  runReconciliation(@CurrentUser() user: User) {
+  runReconciliation(@CurrentUser() user: AuthenticatedUser) {
     return this.reconciliationService.runReconciliation(user.id);
   }
 

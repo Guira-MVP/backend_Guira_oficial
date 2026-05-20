@@ -48,29 +48,25 @@ export interface AuthenticatedUser {
  *
  * Bloquea automáticamente cuentas inactivas o congeladas.
  *
- * NOTA: Se usa un cliente Supabase temporal (con anon key) exclusivamente
- * para validar el JWT del usuario. Esto evita contaminar la instancia
- * singleton (service_role) con el token del usuario, lo que causaría que
- * las consultas posteriores se ejecuten bajo RLS del usuario en vez de
- * con bypass de service_role.
+ * NOTA: Se crea un cliente Supabase efímero por cada request para validar
+ * el JWT del usuario. Esto evita que el estado de sesión de un usuario
+ * quede en memoria de una instancia compartida (el SDK de Supabase escribe
+ * la sesión internamente aunque persistSession=false), lo que bajo
+ * concurrencia podría contaminar requests de otros usuarios.
  */
 @Injectable()
 export class SupabaseAuthGuard implements CanActivate {
   private readonly logger = new Logger(SupabaseAuthGuard.name);
-  private readonly authClient: SupabaseClient;
+  private readonly supabaseUrl: string;
+  private readonly supabaseAnonKey: string;
 
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly reflector: Reflector,
     private readonly configService: ConfigService,
   ) {
-    // Cliente ligero y aislado, exclusivo para validar JWTs.
-    // Usa la anon key (no necesita service_role para auth.getUser).
-    const url = this.configService.get<string>('app.supabaseUrl')!;
-    const anonKey = this.configService.get<string>('app.supabaseAnonKey')!;
-    this.authClient = createClient(url, anonKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
+    this.supabaseUrl = this.configService.get<string>('app.supabaseUrl')!;
+    this.supabaseAnonKey = this.configService.get<string>('app.supabaseAnonKey')!;
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -90,9 +86,13 @@ export class SupabaseAuthGuard implements CanActivate {
 
     const token = authHeader.split(' ')[1];
 
-    // 1. Validar JWT con un cliente aislado (NO el singleton de service_role)
-    //    para evitar contaminar el cliente global con el token del usuario.
-    const { data, error } = await this.authClient.auth.getUser(token);
+    // 1. Validar JWT con un cliente efímero por request (NO el singleton de service_role).
+    //    Un cliente nuevo por request garantiza que no hay estado de sesión compartido
+    //    entre requests concurrentes de distintos usuarios.
+    const ephemeralClient = createClient(this.supabaseUrl, this.supabaseAnonKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data, error } = await ephemeralClient.auth.getUser(token);
 
     if (error || !data?.user) {
       throw new UnauthorizedException('Token inválido o expirado');

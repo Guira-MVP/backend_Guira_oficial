@@ -291,7 +291,7 @@ export class ClientBankAccountsService {
   /**
    * Aprueba los cambios pendientes de una cuenta bancaria.
    */
-  async approveChange(accountId: string, actorId: string) {
+  async approveChange(accountId: string, actorId: string, actorRole: string) {
     const { data: account } = await this.supabase
       .from('client_bank_accounts')
       .select('*')
@@ -335,7 +335,7 @@ export class ClientBankAccountsService {
     // Audit log
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
-      role: 'staff',
+      role: actorRole,
       action: 'APPROVE_BANK_ACCOUNT_CHANGE',
       table_name: 'client_bank_accounts',
       record_id: accountId,
@@ -362,7 +362,7 @@ export class ClientBankAccountsService {
   /**
    * Rechaza los cambios pendientes de una cuenta bancaria.
    */
-  async rejectChange(accountId: string, actorId: string, reason?: string) {
+  async rejectChange(accountId: string, actorId: string, actorRole: string, reason?: string) {
     const { data: account } = await this.supabase
       .from('client_bank_accounts')
       .select('*')
@@ -390,7 +390,7 @@ export class ClientBankAccountsService {
     // Audit log
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
-      role: 'staff',
+      role: actorRole,
       action: 'REJECT_BANK_ACCOUNT_CHANGE',
       table_name: 'client_bank_accounts',
       record_id: accountId,

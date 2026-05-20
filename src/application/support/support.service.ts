@@ -111,7 +111,7 @@ export class SupportService {
     return { data, total: count, page, limit };
   }
 
-  async assignTicket(id: string, dto: AssignTicketDto, actorId: string) {
+  async assignTicket(id: string, dto: AssignTicketDto, actorId: string, actorRole: string) {
     const { data, error } = await this.supabase
       .from('support_tickets')
       .update({
@@ -126,7 +126,7 @@ export class SupportService {
 
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
-      role: 'staff',
+      role: actorRole,
       action: 'ASSIGN_TICKET',
       table_name: 'support_tickets',
       record_id: id,
@@ -137,7 +137,7 @@ export class SupportService {
     return data;
   }
 
-  async updateStatus(id: string, dto: UpdateTicketStatusDto, actorId: string) {
+  async updateStatus(id: string, dto: UpdateTicketStatusDto, actorId: string, actorRole: string) {
     const { data, error } = await this.supabase
       .from('support_tickets')
       .update({ status: dto.status, updated_at: new Date().toISOString() })
@@ -149,7 +149,7 @@ export class SupportService {
 
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
-      role: 'staff',
+      role: actorRole,
       action: 'UPDATE_TICKET_STATUS',
       table_name: 'support_tickets',
       record_id: id,
@@ -160,7 +160,7 @@ export class SupportService {
     return data;
   }
 
-  async resolveTicket(id: string, dto: ResolveTicketDto, actorId: string) {
+  async resolveTicket(id: string, dto: ResolveTicketDto, actorId: string, actorRole: string) {
     const { data: ticket, error } = await this.supabase
       .from('support_tickets')
       .update({
@@ -177,7 +177,7 @@ export class SupportService {
 
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
-      role: 'staff',
+      role: actorRole,
       action: 'RESOLVE_TICKET',
       table_name: 'support_tickets',
       record_id: id,

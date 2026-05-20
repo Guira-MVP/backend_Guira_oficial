@@ -35,19 +35,24 @@ type AuthEventType =
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
-  // Ephemeral client (anon key, no session persistence) used exclusively for
-  // user-auth operations (signIn, refresh, resetPassword) so that the singleton
-  // service-role client is never contaminated with a user session — which would
-  // cause RLS to apply to subsequent admin queries (see SupabaseAuthGuard).
-  private readonly authClient: SupabaseClient;
+  // URL y anon key se leen una vez en el constructor y se reutilizan para crear
+  // clientes efímeros por operación. Se evita un cliente compartido porque
+  // signInWithPassword/refreshSession escriben el estado de sesión en memoria
+  // del cliente aunque persistSession=false, lo que bajo concurrencia podría
+  // contaminar requests de otros usuarios (ver SupabaseAuthGuard).
+  private readonly supabaseUrl: string;
+  private readonly supabaseAnonKey: string;
 
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly configService: ConfigService,
   ) {
-    const url = this.configService.get<string>('app.supabaseUrl')!;
-    const anonKey = this.configService.get<string>('app.supabaseAnonKey')!;
-    this.authClient = createClient(url, anonKey, {
+    this.supabaseUrl = this.configService.get<string>('app.supabaseUrl')!;
+    this.supabaseAnonKey = this.configService.get<string>('app.supabaseAnonKey')!;
+  }
+
+  private createAuthClient(): SupabaseClient {
+    return createClient(this.supabaseUrl, this.supabaseAnonKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
   }
@@ -136,7 +141,7 @@ export class AuthService {
     user_id: string;
   }> {
     const { data, error } =
-      await this.authClient.auth.signInWithPassword({
+      await this.createAuthClient().auth.signInWithPassword({
         email: dto.email,
         password: dto.password,
       });
@@ -301,7 +306,7 @@ export class AuthService {
     refresh_token: string;
     expires_in: number;
   }> {
-    const { data, error } = await this.authClient.auth.refreshSession({
+    const { data, error } = await this.createAuthClient().auth.refreshSession({
       refresh_token: refreshToken,
     });
 
@@ -382,7 +387,7 @@ export class AuthService {
 
     // Usamos el cliente regular (no admin) para resetPasswordForEmail
     // para que use las plantillas de email configuradas en el proyecto
-    const { error } = await this.authClient.auth.resetPasswordForEmail(
+    const { error } = await this.createAuthClient().auth.resetPasswordForEmail(
       dto.email,
       {
         redirectTo: `${frontendUrl}/recuperar/update`,

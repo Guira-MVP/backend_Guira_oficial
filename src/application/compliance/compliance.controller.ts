@@ -15,7 +15,7 @@ import {
   ApiOperation,
   ApiQuery,
 } from '@nestjs/swagger';
-import type { User } from '@supabase/supabase-js';
+import { AuthenticatedUser } from '../../core/guards/supabase-auth.guard';
 import { ComplianceService } from './compliance.service';
 import { ComplianceActionsService } from './compliance-actions.service';
 import {
@@ -47,7 +47,7 @@ export class ComplianceController {
     summary: 'Obtener URL firmada para subir documento a Storage',
   })
   getUploadUrl(
-    @CurrentUser() user: User,
+    @CurrentUser() user: AuthenticatedUser,
     @Body() dto: GetDocumentUploadUrlDto,
   ) {
     return this.complianceService.getDocumentUploadUrl(user.id, dto);
@@ -56,7 +56,7 @@ export class ComplianceController {
   @Post('documents')
   @ApiOperation({ summary: 'Registrar documento tras subirlo a Storage' })
   registerDocument(
-    @CurrentUser() user: User,
+    @CurrentUser() user: AuthenticatedUser,
     @Body() dto: RegisterDocumentDto,
   ) {
     return this.complianceService.registerDocument(user.id, dto);
@@ -66,7 +66,7 @@ export class ComplianceController {
   @ApiOperation({ summary: 'Listar documentos del usuario' })
   @ApiQuery({ name: 'subject_type', required: false })
   listDocuments(
-    @CurrentUser() user: User,
+    @CurrentUser() user: AuthenticatedUser,
     @Query('subject_type') subjectType?: string,
   ) {
     return this.complianceService.listDocuments(user.id, subjectType);
@@ -76,7 +76,7 @@ export class ComplianceController {
 
   @Get('kyc')
   @ApiOperation({ summary: 'Obtener estado actual de KYC' })
-  getKyc(@CurrentUser() user: User) {
+  getKyc(@CurrentUser() user: AuthenticatedUser) {
     return this.complianceService.getKycApplication(user.id);
   }
 
@@ -84,7 +84,7 @@ export class ComplianceController {
 
   @Get('kyb')
   @ApiOperation({ summary: 'Obtener estado actual de KYB (empresa)' })
-  getKyb(@CurrentUser() user: User) {
+  getKyb(@CurrentUser() user: AuthenticatedUser) {
     return this.complianceService.getKybApplication(user.id);
   }
 
@@ -92,7 +92,7 @@ export class ComplianceController {
 
   @Get('reviews')
   @ApiOperation({ summary: 'Historial de revisiones compliance' })
-  getReviews(@CurrentUser() user: User) {
+  getReviews(@CurrentUser() user: AuthenticatedUser) {
     return this.complianceService.getComplianceReviews(user.id);
   }
 }
@@ -142,9 +142,9 @@ export class AdminComplianceController {
   assignReview(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: AssignReviewDto,
-    @CurrentUser() actor: User,
+    @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.actionsService.assignReview(id, dto.staff_user_id, actor.id);
+    return this.actionsService.assignReview(id, dto.staff_user_id, actor.id, actor.profile.role);
   }
 
   @Patch('reviews/:id/escalate')
@@ -152,9 +152,9 @@ export class AdminComplianceController {
   @ApiOperation({ summary: 'Escalar review a urgente' })
   escalateReview(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @CurrentUser() actor: User,
+    @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.actionsService.escalateReview(id, actor.id);
+    return this.actionsService.escalateReview(id, actor.id, actor.profile.role);
   }
 
   // ── COMMENTS ──────────────────────────────────────────────────────
@@ -165,7 +165,7 @@ export class AdminComplianceController {
   addComment(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: AddCommentDto,
-    @CurrentUser() actor: User,
+    @CurrentUser() actor: AuthenticatedUser,
   ) {
     return this.actionsService.addComment(
       id,
@@ -187,9 +187,9 @@ export class AdminComplianceController {
   approveReview(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: ApproveReviewDto,
-    @CurrentUser() actor: User,
+    @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.actionsService.approveReview(id, actor.id, dto.reason);
+    return this.actionsService.approveReview(id, actor.id, dto.reason, actor.profile.role);
   }
 
   @Post('reviews/:id/reject')
@@ -200,9 +200,9 @@ export class AdminComplianceController {
   rejectReview(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: RejectReviewDto,
-    @CurrentUser() actor: User,
+    @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.actionsService.rejectReview(id, actor.id, dto.reason);
+    return this.actionsService.rejectReview(id, actor.id, dto.reason, actor.profile.role);
   }
 
   @Post('reviews/:id/request-changes')
@@ -213,12 +213,13 @@ export class AdminComplianceController {
   requestChanges(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: RequestChangesDto,
-    @CurrentUser() actor: User,
+    @CurrentUser() actor: AuthenticatedUser,
   ) {
     return this.actionsService.requestChanges(
       id,
       actor.id,
       dto.reason,
+      actor.profile.role,
       dto.required_actions,
       dto.field_observations,
     );
@@ -242,8 +243,8 @@ export class AdminUserController {
   setTransactionLimits(
     @Param('id', new ParseUUIDPipe()) userId: string,
     @Body() dto: SetLimitsDto,
-    @CurrentUser() actor: User,
+    @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.actionsService.setTransactionLimits(userId, actor.id, dto);
+    return this.actionsService.setTransactionLimits(userId, actor.id, dto, actor.profile.role);
   }
 }

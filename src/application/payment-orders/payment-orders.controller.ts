@@ -13,7 +13,9 @@ import {
   BadRequestException,
   NotFoundException,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { IdempotencyInterceptor } from '../../core/interceptors/idempotency.interceptor';
 import {
   ApiTags,
   ApiBearerAuth,
@@ -74,6 +76,7 @@ export class PaymentOrdersController {
   // ── Crear órdenes ──
 
   @Post('interbank')
+  @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({ summary: 'Crear orden interbancaria (Bolivia ↔ Mundo)' })
   createInterbankOrder(
     @Body() dto: CreateInterbankOrderDto,
@@ -86,6 +89,7 @@ export class PaymentOrdersController {
   }
 
   @Post('wallet-ramp')
+  @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({ summary: 'Crear orden de rampa on/off (Wallet Bridge)' })
   createWalletRampOrder(
     @Body() dto: CreateWalletRampOrderDto,

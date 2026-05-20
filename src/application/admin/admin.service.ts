@@ -47,7 +47,7 @@ export class AdminService {
     return data;
   }
 
-  async updateSetting(key: string, dto: UpdateSettingDto, actorId: string) {
+  async updateSetting(key: string, dto: UpdateSettingDto, actorId: string, actorRole: string) {
     const old = await this.getSetting(key);
 
     const { data, error } = await this.supabase
@@ -65,7 +65,7 @@ export class AdminService {
 
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
-      role: 'super_admin',
+      role: actorRole,
       action: 'UPDATE_SETTING',
       table_name: 'app_settings',
       record_id: null,
@@ -77,7 +77,7 @@ export class AdminService {
     return data;
   }
 
-  async createSetting(dto: CreateSettingDto, actorId: string) {
+  async createSetting(dto: CreateSettingDto, actorId: string, actorRole: string) {
     const { data, error } = await this.supabase
       .from('app_settings')
       .insert({ ...dto, updated_by: actorId })
@@ -88,7 +88,7 @@ export class AdminService {
 
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
-      role: 'super_admin',
+      role: actorRole,
       action: 'CREATE_SETTING',
       table_name: 'app_settings',
       record_id: null,
@@ -130,6 +130,7 @@ export class AdminService {
     currency: string,
     dto: UpdateCurrencySettingDto,
     actorId: string,
+    actorRole: string,
   ) {
     const updateData: Record<string, unknown> = {
       updated_by: actorId,
@@ -157,7 +158,7 @@ export class AdminService {
 
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
-      role: 'admin',
+      role: actorRole,
       action: newValue ? 'ENABLE_CURRENCY' : 'DISABLE_CURRENCY',
       table_name: 'currency_settings',
       record_id: null,
@@ -195,6 +196,7 @@ export class AdminService {
     currency: string,
     dto: UpdateVaSourceCurrencySettingDto,
     actorId: string,
+    actorRole: string,
   ) {
     const { data, error } = await this.supabase
       .from('va_source_currency_settings')
@@ -212,7 +214,7 @@ export class AdminService {
 
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
-      role: 'admin',
+      role: actorRole,
       action: dto.is_active ? 'ENABLE_VA_SOURCE_CURRENCY' : 'DISABLE_VA_SOURCE_CURRENCY',
       table_name: 'va_source_currency_settings',
       record_id: null,

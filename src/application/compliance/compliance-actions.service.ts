@@ -293,7 +293,7 @@ export class ComplianceActionsService {
 
   // ── REVIEWS (Acciones) ────────────────────────────────────────────
 
-  async assignReview(reviewId: string, staffUserId: string, actorId: string) {
+  async assignReview(reviewId: string, staffUserId: string, actorId: string, actorRole: string) {
     await this.supabase
       .from('compliance_reviews')
       .update({ assigned_to: staffUserId })
@@ -302,7 +302,7 @@ export class ComplianceActionsService {
     // Audit log
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
-      role: 'staff',
+      role: actorRole,
       action: 'ASSIGN_COMPLIANCE_REVIEW',
       table_name: 'compliance_reviews',
       record_id: reviewId,
@@ -313,7 +313,7 @@ export class ComplianceActionsService {
     return { message: 'Review asignado' };
   }
 
-  async escalateReview(reviewId: string, actorId: string) {
+  async escalateReview(reviewId: string, actorId: string, actorRole: string) {
     await this.supabase
       .from('compliance_reviews')
       .update({ priority: 'urgent' })
@@ -321,7 +321,7 @@ export class ComplianceActionsService {
 
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
-      role: 'staff',
+      role: actorRole,
       action: 'ESCALATE_COMPLIANCE_REVIEW',
       table_name: 'compliance_reviews',
       record_id: reviewId,
@@ -362,7 +362,7 @@ export class ComplianceActionsService {
    * NO aprueba la cuenta directamente — la aprobación final viene del webhook de Bridge.
    * El review permanece ABIERTO hasta recibir respuesta de Bridge.
    */
-  async approveReview(reviewId: string, actorId: string, reason: string) {
+  async approveReview(reviewId: string, actorId: string, reason: string, actorRole: string) {
     const { data: review } = await this.supabase
       .from('compliance_reviews')
       .select('subject_type, subject_id, status')
@@ -395,7 +395,7 @@ export class ComplianceActionsService {
     // 4. Audit Log
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
-      role: 'staff',
+      role: actorRole,
       action: 'SENT_TO_BRIDGE',
       table_name: 'compliance_reviews',
       record_id: reviewId,
@@ -619,7 +619,7 @@ export class ComplianceActionsService {
     return null;
   }
 
-  async rejectReview(reviewId: string, actorId: string, reason: string) {
+  async rejectReview(reviewId: string, actorId: string, reason: string, actorRole: string) {
     const { data: review } = await this.supabase
       .from('compliance_reviews')
       .select('subject_type, subject_id, status')
@@ -655,7 +655,7 @@ export class ComplianceActionsService {
     // 4. Audit Log
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
-      role: 'staff',
+      role: actorRole,
       action: 'REJECT_COMPLIANCE_REVIEW',
       table_name: 'compliance_reviews',
       record_id: reviewId,
@@ -670,6 +670,7 @@ export class ComplianceActionsService {
     reviewId: string,
     actorId: string,
     reason: string,
+    actorRole: string,
     requiredActions?: string[],
     fieldObservations?: Record<string, string>,
   ) {
@@ -790,7 +791,7 @@ export class ComplianceActionsService {
     // 5. Audit log
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
-      role: 'staff',
+      role: actorRole,
       action: 'REQUEST_CHANGES_COMPLIANCE_REVIEW',
       table_name: 'compliance_reviews',
       record_id: reviewId,
@@ -1016,6 +1017,7 @@ export class ComplianceActionsService {
     userId: string,
     actorId: string,
     dto: SetLimitsDto,
+    actorRole: string,
   ) {
     const { data: current } = await this.supabase
       .from('transaction_limits')
@@ -1045,7 +1047,7 @@ export class ComplianceActionsService {
 
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
-      role: 'admin',
+      role: actorRole,
       action: 'SET_TRANSACTION_LIMITS',
       table_name: 'transaction_limits',
       record_id: userId,

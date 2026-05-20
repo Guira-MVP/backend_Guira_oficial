@@ -17,7 +17,7 @@ import {
   ApiOperation,
   ApiQuery,
 } from '@nestjs/swagger';
-import type { User } from '@supabase/supabase-js';
+import { AuthenticatedUser } from '../../core/guards/supabase-auth.guard';
 
 import { SupportService } from './support.service';
 import { CurrentUser } from '../../core/decorators/current-user.decorator';
@@ -40,7 +40,7 @@ export class SupportController {
   @Post()
   @ApiBearerAuth('supabase-jwt')
   @ApiOperation({ summary: 'Crear un nuevo ticket de soporte' })
-  createTicket(@Body() dto: CreateTicketDto, @CurrentUser() user: User) {
+  createTicket(@Body() dto: CreateTicketDto, @CurrentUser() user: AuthenticatedUser) {
     // Si el usuario no manda auth se puede permitir omitiendo ApiBearerAuth y validando manual,
     // pero para M-Guira lo dejaremos protegido por ahora:
     return this.supportService.createTicket(dto, user?.id);
@@ -49,7 +49,7 @@ export class SupportController {
   @Get()
   @ApiBearerAuth('supabase-jwt')
   @ApiOperation({ summary: 'Listar mis tickets' })
-  getMyTickets(@CurrentUser() user: User) {
+  getMyTickets(@CurrentUser() user: AuthenticatedUser) {
     return this.supportService.getUserTickets(user.id);
   }
 
@@ -58,7 +58,7 @@ export class SupportController {
   @ApiOperation({ summary: 'Ver detalle de un ticket' })
   getTicket(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @CurrentUser() user: User,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.supportService.getTicket(id, user.id);
   }
@@ -97,9 +97,9 @@ export class AdminSupportController {
   assignTicket(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: AssignTicketDto,
-    @CurrentUser() user: User,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.supportService.assignTicket(id, dto, user.id);
+    return this.supportService.assignTicket(id, dto, user.id, user.profile.role);
   }
 
   @Patch(':id/status')
@@ -108,9 +108,9 @@ export class AdminSupportController {
   updateStatus(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateTicketStatusDto,
-    @CurrentUser() user: User,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.supportService.updateStatus(id, dto, user.id);
+    return this.supportService.updateStatus(id, dto, user.id, user.profile.role);
   }
 
   @Patch(':id/resolve')
@@ -119,8 +119,8 @@ export class AdminSupportController {
   resolveTicket(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: ResolveTicketDto,
-    @CurrentUser() user: User,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.supportService.resolveTicket(id, dto, user.id);
+    return this.supportService.resolveTicket(id, dto, user.id, user.profile.role);
   }
 }
