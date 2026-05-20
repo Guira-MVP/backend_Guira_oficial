@@ -10,40 +10,70 @@ import {
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../supabase/supabase.module';
 
-/**
- * Configuración del rate limiter.
- * - maxAttempts: intentos permitidos en la ventana
- * - windowMinutes: tamaño de la ventana en minutos
- * - blockMinutes: tiempo de bloqueo tras exceder el límite
- */
-const RATE_LIMIT_CONFIG = {
+const RATE_LIMIT_DEFAULTS = {
   maxAttempts: 5,
   windowMinutes: 15,
   blockMinutes: 15,
 };
 
-/**
- * Guard que implementa rate limiting basado en la tabla `auth_rate_limits`.
- * Se aplica manualmente en rutas sensibles como registro y refresh.
- *
- * Uso en controller:
- *   @UseGuards(RateLimitGuard)
- *   @Post('register')
- */
 @Injectable()
 export class RateLimitGuard implements CanActivate {
   private readonly logger = new Logger(RateLimitGuard.name);
+
+  private configCache: {
+    value: typeof RATE_LIMIT_DEFAULTS;
+    expiresAt: number;
+  } | null = null;
 
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
   ) {}
 
+  private async getConfig(): Promise<typeof RATE_LIMIT_DEFAULTS> {
+    if (this.configCache && Date.now() < this.configCache.expiresAt) {
+      return this.configCache.value;
+    }
+
+    try {
+      const { data } = await this.supabase
+        .from('app_settings')
+        .select('key, value')
+        .in('key', [
+          'RATE_LIMIT_MAX_ATTEMPTS',
+          'RATE_LIMIT_WINDOW_MINUTES',
+          'RATE_LIMIT_BLOCK_MINUTES',
+        ]);
+
+      const map = Object.fromEntries(
+        (data ?? []).map((r) => [r.key, Number(r.value)]),
+      );
+
+      const config = {
+        maxAttempts:
+          map['RATE_LIMIT_MAX_ATTEMPTS'] ?? RATE_LIMIT_DEFAULTS.maxAttempts,
+        windowMinutes:
+          map['RATE_LIMIT_WINDOW_MINUTES'] ??
+          RATE_LIMIT_DEFAULTS.windowMinutes,
+        blockMinutes:
+          map['RATE_LIMIT_BLOCK_MINUTES'] ?? RATE_LIMIT_DEFAULTS.blockMinutes,
+      };
+
+      this.configCache = { value: config, expiresAt: Date.now() + 60_000 };
+      return config;
+    } catch {
+      this.logger.warn(
+        'No se pudo leer config de rate limit desde app_settings, usando valores por defecto',
+      );
+      return RATE_LIMIT_DEFAULTS;
+    }
+  }
+
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
     const identifier = this.getIdentifier(request);
     const action = this.getAction(request);
+    const config = await this.getConfig();
 
-    // Verificar si ya está bloqueado
     const { data: existing } = await this.supabase
       .from('auth_rate_limits')
       .select('*')
@@ -52,7 +82,6 @@ export class RateLimitGuard implements CanActivate {
       .single();
 
     if (existing) {
-      // Verificar bloqueo activo
       if (
         existing.blocked_until &&
         new Date(existing.blocked_until) > new Date()
@@ -71,12 +100,10 @@ export class RateLimitGuard implements CanActivate {
         );
       }
 
-      // Verificar si la ventana expiró → resetear
       const windowStart = new Date(
-        Date.now() - RATE_LIMIT_CONFIG.windowMinutes * 60 * 1000,
+        Date.now() - config.windowMinutes * 60 * 1000,
       );
       if (new Date(existing.first_attempt_at) < windowStart) {
-        // Ventana expirada, resetear contador
         await this.supabase
           .from('auth_rate_limits')
           .update({
@@ -90,17 +117,15 @@ export class RateLimitGuard implements CanActivate {
         return true;
       }
 
-      // Incrementar contador
       const newCount = (existing.attempt_count ?? 0) + 1;
       const updatePayload: Record<string, unknown> = {
         attempt_count: newCount,
         last_attempt_at: new Date().toISOString(),
       };
 
-      // Bloquear si excede el límite
-      if (newCount >= RATE_LIMIT_CONFIG.maxAttempts) {
+      if (newCount >= config.maxAttempts) {
         updatePayload.blocked_until = new Date(
-          Date.now() + RATE_LIMIT_CONFIG.blockMinutes * 60 * 1000,
+          Date.now() + config.blockMinutes * 60 * 1000,
         ).toISOString();
 
         this.logger.warn(
@@ -113,18 +138,17 @@ export class RateLimitGuard implements CanActivate {
         .update(updatePayload)
         .eq('id', existing.id);
 
-      if (newCount >= RATE_LIMIT_CONFIG.maxAttempts) {
+      if (newCount >= config.maxAttempts) {
         throw new HttpException(
           {
             statusCode: HttpStatus.TOO_MANY_REQUESTS,
-            message: `Demasiados intentos. Intenta de nuevo en ${RATE_LIMIT_CONFIG.blockMinutes} minuto(s).`,
-            retryAfter: RATE_LIMIT_CONFIG.blockMinutes,
+            message: `Demasiados intentos. Intenta de nuevo en ${config.blockMinutes} minuto(s).`,
+            retryAfter: config.blockMinutes,
           },
           HttpStatus.TOO_MANY_REQUESTS,
         );
       }
     } else {
-      // Primer intento: crear registro
       await this.supabase.from('auth_rate_limits').insert({
         identifier,
         identifier_type: 'ip',
