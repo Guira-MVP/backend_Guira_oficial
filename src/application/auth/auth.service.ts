@@ -8,7 +8,7 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { SupabaseClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -35,11 +35,22 @@ type AuthEventType =
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
+  // Ephemeral client (anon key, no session persistence) used exclusively for
+  // user-auth operations (signIn, refresh, resetPassword) so that the singleton
+  // service-role client is never contaminated with a user session — which would
+  // cause RLS to apply to subsequent admin queries (see SupabaseAuthGuard).
+  private readonly authClient: SupabaseClient;
 
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly configService: ConfigService,
-  ) {}
+  ) {
+    const url = this.configService.get<string>('app.supabaseUrl')!;
+    const anonKey = this.configService.get<string>('app.supabaseAnonKey')!;
+    this.authClient = createClient(url, anonKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+  }
 
   // ─────────────────────────────────────────────────────────────
   // Auth Event Logging (Hallazgo 5: Auditoría de eventos)
@@ -125,7 +136,7 @@ export class AuthService {
     user_id: string;
   }> {
     const { data, error } =
-      await this.supabase.auth.signInWithPassword({
+      await this.authClient.auth.signInWithPassword({
         email: dto.email,
         password: dto.password,
       });
@@ -290,7 +301,7 @@ export class AuthService {
     refresh_token: string;
     expires_in: number;
   }> {
-    const { data, error } = await this.supabase.auth.refreshSession({
+    const { data, error } = await this.authClient.auth.refreshSession({
       refresh_token: refreshToken,
     });
 
@@ -371,7 +382,7 @@ export class AuthService {
 
     // Usamos el cliente regular (no admin) para resetPasswordForEmail
     // para que use las plantillas de email configuradas en el proyecto
-    const { error } = await this.supabase.auth.resetPasswordForEmail(
+    const { error } = await this.authClient.auth.resetPasswordForEmail(
       dto.email,
       {
         redirectTo: `${frontendUrl}/recuperar/update`,
