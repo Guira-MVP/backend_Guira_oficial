@@ -698,6 +698,13 @@ export class PaymentOrdersService {
       );
     }
 
+    // Bloquear si ya existe un expediente activo hacia la misma divisa destino
+    await this.assertNoConflictingPsavOrder(
+      userId,
+      'bolivia_to_wallet',
+      dto.destination_currency,
+    );
+
     const { data: order, error } = await this.supabase
       .from('payment_orders')
       .insert({
@@ -759,6 +766,13 @@ export class PaymentOrdersService {
     );
 
     const rateData = await this.exchangeRatesService.getRate('USD_BOB');
+
+    // Bloquear si ya existe un expediente world_to_bolivia activo
+    await this.assertNoConflictingPsavOrder(
+      userId,
+      'world_to_bolivia',
+      'BOB',
+    );
 
     const { data: order, error } = await this.supabase
       .from('payment_orders')
@@ -997,6 +1011,150 @@ export class PaymentOrdersService {
           `que utiliza la misma dirección de recepción ` +
           `(${normalizedCurrency} en ${normalizedNetwork}). ` +
           `Completa o cancela ese expediente antes de crear uno nuevo.`,
+      );
+    }
+  }
+
+  /**
+   * Bloquea si el usuario ya tiene una orden activa del mismo flow_type
+   * hacia la misma divisa destino. Cubre flujos PSAV (on-ramp) que no
+   * pasan por Bridge:
+   *   - bolivia_to_wallet  (BOB → USDC/USDT en Bridge wallet)
+   *   - world_to_bolivia   (USD → BOB, destino siempre BOB)
+   *
+   * Estados activos: waiting_deposit, deposit_received, processing.
+   * Respaldado por partial unique indexes:
+   *   idx_po_b2w_active_per_dest_currency
+   *   idx_po_w2b_active_per_dest_currency
+   */
+  private async assertNoConflictingPsavOrder(
+    userId: string,
+    flowType: string,
+    destinationCurrency: string,
+  ): Promise<void> {
+    const normalized = destinationCurrency.toUpperCase();
+
+    const { data: conflicting } = await this.supabase
+      .from('payment_orders')
+      .select('id, status, created_at')
+      .eq('user_id', userId)
+      .eq('flow_type', flowType)
+      .eq('destination_currency', normalized)
+      .in('status', ['waiting_deposit', 'deposit_received', 'processing'])
+      .limit(1)
+      .maybeSingle();
+
+    if (conflicting) {
+      const shortId = conflicting.id.slice(0, 8);
+      throw new BadRequestException(
+        `Ya tienes un expediente activo (${shortId}) de tipo ${flowType} ` +
+          `hacia ${normalized}. Completa o cancela ese expediente antes ` +
+          `de crear uno nuevo.`,
+      );
+    }
+  }
+
+  /**
+   * Bloquea si el usuario ya tiene un off-ramp activo desde la misma
+   * moneda fuente. Cubre:
+   *   - bridge_wallet_to_fiat_bo (crypto → BOB vía PSAV)
+   *
+   * Estados activos: created, processing (off-ramps nunca usan waiting_deposit).
+   * Respaldado por idx_po_bw2fbo_active_per_src.
+   */
+  private async assertNoConflictingOffRampOrder(
+    userId: string,
+    flowType: string,
+    sourceCurrency: string,
+  ): Promise<void> {
+    const normalized = sourceCurrency.toUpperCase();
+
+    const { data: conflicting } = await this.supabase
+      .from('payment_orders')
+      .select('id, status, created_at')
+      .eq('user_id', userId)
+      .eq('flow_type', flowType)
+      .eq('source_currency', normalized)
+      .in('status', ['created', 'processing'])
+      .limit(1)
+      .maybeSingle();
+
+    if (conflicting) {
+      const shortId = conflicting.id.slice(0, 8);
+      throw new BadRequestException(
+        `Ya tienes un retiro activo (${shortId}) desde ${normalized}. ` +
+          `Espera a que se complete o cancélalo antes de crear uno nuevo.`,
+      );
+    }
+  }
+
+  /**
+   * Bloquea si el usuario ya tiene un off-ramp crypto activo con la
+   * misma moneda fuente hacia la misma red destino. Cubre:
+   *   - bridge_wallet_to_crypto
+   *
+   * Respaldado por idx_po_bw2c_active_per_src_dest.
+   */
+  private async assertNoConflictingCryptoOffRamp(
+    userId: string,
+    sourceCurrency: string,
+    destinationNetwork: string,
+  ): Promise<void> {
+    const normCurrency = sourceCurrency.toUpperCase();
+    const normNetwork = destinationNetwork.toLowerCase();
+
+    const { data: conflicting } = await this.supabase
+      .from('payment_orders')
+      .select('id, status, created_at')
+      .eq('user_id', userId)
+      .eq('flow_type', 'bridge_wallet_to_crypto')
+      .eq('source_currency', normCurrency)
+      .eq('destination_network', normNetwork)
+      .in('status', ['created', 'processing'])
+      .limit(1)
+      .maybeSingle();
+
+    if (conflicting) {
+      const shortId = conflicting.id.slice(0, 8);
+      throw new BadRequestException(
+        `Ya tienes un retiro crypto activo (${shortId}) desde ${normCurrency} ` +
+          `hacia la red ${normNetwork}. Espera a que se complete o cancélalo ` +
+          `antes de crear uno nuevo.`,
+      );
+    }
+  }
+
+  /**
+   * Bloquea si el usuario ya tiene un off-ramp fiat US activo con la
+   * misma moneda fuente hacia el mismo proveedor. Cubre:
+   *   - bridge_wallet_to_fiat_us
+   *
+   * Respaldado por idx_po_bw2fus_active_per_src_supplier.
+   */
+  private async assertNoConflictingFiatUsOffRamp(
+    userId: string,
+    sourceCurrency: string,
+    supplierId: string,
+  ): Promise<void> {
+    const normCurrency = sourceCurrency.toUpperCase();
+
+    const { data: conflicting } = await this.supabase
+      .from('payment_orders')
+      .select('id, status, created_at')
+      .eq('user_id', userId)
+      .eq('flow_type', 'bridge_wallet_to_fiat_us')
+      .eq('source_currency', normCurrency)
+      .eq('supplier_id', supplierId)
+      .in('status', ['created', 'processing'])
+      .limit(1)
+      .maybeSingle();
+
+    if (conflicting) {
+      const shortId = conflicting.id.slice(0, 8);
+      throw new BadRequestException(
+        `Ya tienes un retiro activo (${shortId}) desde ${normCurrency} ` +
+          `hacia este proveedor. Espera a que se complete o cancélalo ` +
+          `antes de crear uno nuevo.`,
       );
     }
   }
@@ -1552,6 +1710,13 @@ export class PaymentOrdersService {
       );
     }
 
+    // Bloquear si ya existe un off-ramp activo desde la misma moneda
+    await this.assertNoConflictingOffRampOrder(
+      userId,
+      'bridge_wallet_to_fiat_bo',
+      sourceCurrency,
+    );
+
     // Reservar saldo
     await this.supabase.rpc('reserve_balance', {
       p_user_id: userId,
@@ -1759,6 +1924,13 @@ export class PaymentOrdersService {
         `Saldo insuficiente. Necesitas $${totalNeeded} pero tienes $${balance?.available_amount ?? 0}`,
       );
     }
+
+    // Bloquear si ya existe un off-ramp crypto activo hacia la misma red
+    await this.assertNoConflictingCryptoOffRamp(
+      userId,
+      sourceCurrency,
+      dto.destination_network ?? '',
+    );
 
     // Reservar saldo
     await this.supabase.rpc('reserve_balance', {
@@ -2055,6 +2227,13 @@ export class PaymentOrdersService {
         `Saldo insuficiente. Necesitas $${totalNeeded} pero tienes $${balance?.available_amount ?? 0}`,
       );
     }
+
+    // Bloquear si ya existe un off-ramp fiat US activo hacia el mismo proveedor
+    await this.assertNoConflictingFiatUsOffRamp(
+      userId,
+      sourceCurrency,
+      dto.supplier_id!,
+    );
 
     // Reservar saldo
     await this.supabase.rpc('reserve_balance', {
