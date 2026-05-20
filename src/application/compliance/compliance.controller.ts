@@ -15,7 +15,7 @@ import {
   ApiOperation,
   ApiQuery,
 } from '@nestjs/swagger';
-import { AuthenticatedUser } from '../../core/guards/supabase-auth.guard';
+import type { AuthenticatedUser } from '../../core/guards/supabase-auth.guard';
 import { ComplianceService } from './compliance.service';
 import { ComplianceActionsService } from './compliance-actions.service';
 import {
