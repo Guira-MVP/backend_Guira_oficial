@@ -363,20 +363,6 @@ export class BridgeCustomerService {
     URY: 'rut',
   };
 
-  /** Mapa de entity_type interno → business_type de Bridge. */
-  private static readonly ENTITY_TYPE_TO_BRIDGE: Record<string, string> = {
-    LLC: 'llc',
-    Corp: 'corporation',
-    Corporation: 'corporation',
-    SA: 'corporation',
-    SAS: 'corporation',
-    SRL: 'llc',
-    Partnership: 'partnership',
-    SoleProprietor: 'sole_prop',
-    Trust: 'trust',
-    Cooperative: 'cooperative',
-    Other: 'other',
-  };
 
   private static readonly STORAGE_BUCKET = 'kyc-documents';
 
@@ -620,10 +606,7 @@ export class BridgeCustomerService {
     if (person.most_recent_occupation) {
       payload.most_recent_occupation = person.most_recent_occupation;
     }
-    // AUDIT FIX — is_pep: persist PEP status for individual customers to Bridge
-    if (person.is_pep !== undefined && person.is_pep !== null) {
-      payload.is_pep = person.is_pep;
-    }
+    payload.client_reference_id = userId;
 
     return payload;
   }
@@ -682,11 +665,9 @@ export class BridgeCustomerService {
       payload.business_trade_name = business.trade_name;
     }
 
-    // Entity type — H11: map to Bridge enum
+    // Entity type: BusinessTypeEnum values already match Bridge enum directly
     if (business.entity_type) {
-      payload.business_type = this.mapEntityType(
-        business.entity_type as string,
-      );
+      payload.business_type = business.entity_type;
     }
 
     if (business.website) {
@@ -849,6 +830,8 @@ export class BridgeCustomerService {
     if (documents.length > 0) {
       payload.documents = documents;
     }
+
+    payload.client_reference_id = userId;
 
     return payload;
   }
@@ -1298,11 +1281,6 @@ export class BridgeCustomerService {
     const upper = code.toUpperCase().trim();
     if (upper.length === 3) return upper; // Ya es alpha-3
     return BridgeCustomerService.ALPHA2_TO_ALPHA3[upper] ?? upper;
-  }
-
-  /** Mapea entity_type interno al enum business_type de Bridge. */
-  private mapEntityType(entityType: string): string {
-    return BridgeCustomerService.ENTITY_TYPE_TO_BRIDGE[entityType] ?? 'other';
   }
 
   /** Mapea id_type interno al tipo de documento que Bridge acepta. */
