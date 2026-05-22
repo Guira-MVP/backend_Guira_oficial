@@ -17,7 +17,6 @@ import {
 import type { Request } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
-import { RegisterDto } from './dto/register.dto';
 import { RefreshTokenDto } from './dto/auth-response.dto';
 import { ForgotPasswordDto, ResetPasswordDto } from './dto/password-reset.dto';
 import { OAuthCallbackDto } from './dto/oauth-callback.dto';
@@ -50,27 +49,6 @@ export class AuthController {
   async login(@Body() dto: LoginDto, @Req() req: Request) {
     const context = this.authService.extractRequestContext(req);
     return this.authService.login(dto, context);
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // Register
-  // ─────────────────────────────────────────────────────────────
-
-  @Post('register')
-  @Public()
-  @UseGuards(RateLimitGuard)
-  @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({
-    summary: 'Registrar nuevo usuario',
-    description:
-      'Crea un usuario en Supabase Auth. El trigger de DB creará el perfil automáticamente con role=client y onboarding_status=pending.',
-  })
-  @ApiResponse({ status: 201, description: 'Usuario creado exitosamente' })
-  @ApiResponse({ status: 409, description: 'Email ya registrado' })
-  @ApiResponse({ status: 429, description: 'Demasiados intentos' })
-  async register(@Body() dto: RegisterDto, @Req() req: Request) {
-    const context = this.authService.extractRequestContext(req);
-    return this.authService.register(dto, context);
   }
 
   // ─────────────────────────────────────────────────────────────

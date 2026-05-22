@@ -1043,7 +1043,8 @@ export class WebhooksService {
       await this.supabase
         .from('payment_orders')
         .update({ va_deposit_status: 'payment_submitted' })
-        .eq('deposit_id', depositId);
+        .eq('deposit_id', depositId)
+        .not('status', 'in', '("completed","refunded","cancelled","swept_external")');
     }
   }
 
@@ -1101,9 +1102,27 @@ export class WebhooksService {
       .maybeSingle();
 
     if (!order) {
-      this.logger.warn(
-        `VA payment_processed: no hay order pendiente para deposit_id=${depositId}`,
-      );
+      // Re-entrega sobre orden ya completada: solo corregir va_deposit_status si hace falta
+      const { data: completedOrder } = await this.supabase
+        .from('payment_orders')
+        .select('id, va_deposit_status')
+        .eq('deposit_id', depositId ?? '')
+        .eq('status', 'completed')
+        .maybeSingle();
+
+      if (completedOrder && completedOrder.va_deposit_status !== 'payment_processed') {
+        await this.supabase
+          .from('payment_orders')
+          .update({ va_deposit_status: 'payment_processed' })
+          .eq('id', completedOrder.id);
+        this.logger.log(
+          `VA payment_processed (re-delivery): va_deposit_status corregido a payment_processed para order ${completedOrder.id}`,
+        );
+      } else {
+        this.logger.warn(
+          `VA payment_processed: no hay order pendiente para deposit_id=${depositId}`,
+        );
+      }
       return;
     }
 

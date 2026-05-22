@@ -1,7 +1,6 @@
 import {
   Injectable,
   Inject,
-  ConflictException,
   UnauthorizedException,
   NotFoundException,
   Logger,
@@ -10,9 +9,8 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
-import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
-import { AuthResponseDto, MeResponseDto } from './dto/auth-response.dto';
+import { MeResponseDto } from './dto/auth-response.dto';
 import { ForgotPasswordDto, ResetPasswordDto } from './dto/password-reset.dto';
 
 /**
@@ -176,95 +174,6 @@ export class AuthService {
       refresh_token: data.session.refresh_token,
       expires_in: data.session.expires_in ?? 3600,
       user_id: data.user.id,
-    };
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // Register
-  // ─────────────────────────────────────────────────────────────
-
-  /**
-   * Registra un nuevo usuario en Supabase Auth.
-   * El trigger `handle_new_user` crea automáticamente el perfil en `profiles`.
-   */
-  async register(
-    dto: RegisterDto,
-    context?: { ip_address: string; user_agent: string },
-  ): Promise<AuthResponseDto> {
-    // ─── El usuario ya fue creado en Supabase Auth por el frontend ───
-    // Este endpoint solo se encarga de verificar que existe y asegurar
-    // que el perfil (profiles) tenga full_name y datos iniciales.
-
-    // Buscar el usuario recién creado por email
-    const { data: existingUsers } = await this.supabase.auth.admin.listUsers({
-      page: 1,
-      perPage: 1,
-      // @ts-expect-error – Supabase admin API acepta filter en runtime
-      filter: `email.eq.${dto.email.toLowerCase()}`,
-    });
-
-    const users =
-      (existingUsers as { users?: { id: string; email?: string }[] })?.users ?? [];
-    const existingUser = users.find(
-      (u) => u.email?.toLowerCase() === dto.email.toLowerCase(),
-    );
-
-    if (!existingUser) {
-      // Si no encontramos al usuario, puede que aún no se haya propagado
-      // o que el signup en Supabase haya fallado silenciosamente.
-      throw new ConflictException(
-        'No se encontró la cuenta en el sistema de autenticación. Por favor, intenta registrarte nuevamente.',
-      );
-    }
-
-    // Verificar si ya tiene un perfil completo (evitar duplicados)
-    const { data: existingProfile } = await this.supabase
-      .from('profiles')
-      .select('id, full_name')
-      .eq('id', existingUser.id)
-      .maybeSingle();
-
-    if (existingProfile && existingProfile.full_name) {
-      // El perfil ya está completo — posible llamada duplicada
-      await this.logAuthEvent({
-        event_type: 'register_duplicate',
-        user_id: existingUser.id,
-        email: dto.email,
-        ip_address: context?.ip_address,
-        user_agent: context?.user_agent,
-      });
-
-      return {
-        user_id: existingUser.id,
-        email: existingUser.email ?? dto.email,
-        access_token: '',
-        refresh_token: '',
-        expires_in: 0,
-        onboarding_status: 'pending',
-      };
-    }
-
-    // Actualizar full_name en profiles (el trigger handle_new_user ya insertó el registro base)
-    await this.supabase
-      .from('profiles')
-      .update({ full_name: dto.full_name })
-      .eq('id', existingUser.id);
-
-    await this.logAuthEvent({
-      event_type: 'register_success',
-      user_id: existingUser.id,
-      email: dto.email,
-      ip_address: context?.ip_address,
-      user_agent: context?.user_agent,
-    });
-
-    return {
-      user_id: existingUser.id,
-      email: existingUser.email ?? dto.email,
-      access_token: '',
-      refresh_token: '',
-      expires_in: 0,
-      onboarding_status: 'pending',
     };
   }
 
