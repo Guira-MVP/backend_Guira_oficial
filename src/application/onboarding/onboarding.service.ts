@@ -4,6 +4,7 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  UnauthorizedException,
   Logger,
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
@@ -703,5 +704,83 @@ export class OnboardingService {
     } catch (err) {
       this.logger.warn(`Error notificando staff: ${err}`);
     }
+  }
+
+  // ─── Mobile Upload Token ───────────────────────────────────────────
+
+  async createMobileToken(userId: string, type: 'personal' | 'company', requiredDocs: string[]) {
+    // Invalidar tokens activos anteriores del mismo usuario
+    await this.supabase
+      .from('mobile_upload_tokens')
+      .update({ completed_at: new Date().toISOString() })
+      .eq('user_id', userId)
+      .is('completed_at', null)
+      .gt('expires_at', new Date().toISOString());
+
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+
+    const { error } = await this.supabase.from('mobile_upload_tokens').insert({
+      user_id: userId,
+      token_hash: tokenHash,
+      onboarding_type: type,
+      required_docs: requiredDocs,
+      expires_at: expiresAt,
+    });
+    if (error) throw new BadRequestException(error.message);
+
+    return { token: rawToken, expires_at: expiresAt };
+  }
+
+  async resolveMobileToken(rawToken: string) {
+    const hash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const { data } = await this.supabase
+      .from('mobile_upload_tokens')
+      .select('id, user_id, onboarding_type, required_docs, expires_at, completed_at')
+      .eq('token_hash', hash)
+      .maybeSingle();
+
+    if (!data) throw new UnauthorizedException('Token inválido');
+    if (data.completed_at) throw new UnauthorizedException('Este enlace ya fue utilizado');
+    if (new Date(data.expires_at) < new Date()) throw new UnauthorizedException('Token expirado');
+
+    return {
+      userId: data.user_id as string,
+      onboardingType: data.onboarding_type as string,
+      requiredDocs: data.required_docs as string[],
+      tokenId: data.id as string,
+    };
+  }
+
+  async getMobileTokenStatus(userId: string, rawToken: string) {
+    const hash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const { data } = await this.supabase
+      .from('mobile_upload_tokens')
+      .select('expires_at, completed_at, required_docs')
+      .eq('token_hash', hash)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!data) throw new NotFoundException('Token no encontrado');
+
+    const { data: docs } = await this.supabase
+      .from('documents')
+      .select('document_type')
+      .eq('user_id', userId)
+      .eq('status', 'pending')
+      .in('document_type', data.required_docs as string[]);
+
+    return {
+      completed: !!data.completed_at,
+      uploaded_docs: (docs ?? []).map((d: { document_type: string }) => d.document_type),
+      expires_at: data.expires_at,
+    };
+  }
+
+  async completeMobileToken(tokenId: string) {
+    await this.supabase
+      .from('mobile_upload_tokens')
+      .update({ completed_at: new Date().toISOString() })
+      .eq('id', tokenId);
   }
 }

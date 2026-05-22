@@ -24,8 +24,10 @@ import { OnboardingService } from './onboarding.service';
 import { CreatePersonDto } from './dto/create-person.dto';
 import { CreateBusinessDto } from './dto/create-business.dto';
 import { CreateDirectorDto, CreateUboDto } from './dto/create-director-ubo.dto';
+import { CreateMobileTokenDto } from './dto/create-mobile-token.dto';
 import { CurrentUser } from '../../core/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../core/guards/supabase-auth.guard';
+import { Public } from '../../core/guards/supabase-auth.guard';
 
 @ApiTags('Onboarding')
 @ApiBearerAuth('supabase-jwt')
@@ -271,5 +273,74 @@ export class OnboardingController {
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
     return this.onboardingService.getDocumentSignedUrl(user.id, id);
+  }
+
+  // ─── Mobile Token (autenticado con JWT) ───────────────────────────
+
+  @Post('mobile-token')
+  @ApiOperation({ summary: 'Generar token QR para subir documentos desde móvil' })
+  @ApiResponse({ status: 201, description: 'Token generado' })
+  createMobileToken(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreateMobileTokenDto,
+  ) {
+    return this.onboardingService.createMobileToken(
+      user.id, dto.onboarding_type, dto.required_docs,
+    );
+  }
+
+  @Get('mobile-token/status')
+  @ApiOperation({ summary: 'Estado del token móvil (polling desde escritorio)' })
+  getMobileTokenStatus(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('token') token: string,
+  ) {
+    return this.onboardingService.getMobileTokenStatus(user.id, token);
+  }
+
+  // ─── Mobile Upload (autenticado con token, sin JWT) ───────────────
+
+  @Public()
+  @Post('mobile-upload')
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Subir documento desde sesión móvil (sin JWT)' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        document_type: { type: 'string' },
+        subject_type: { type: 'string' },
+      },
+      required: ['file', 'document_type', 'subject_type'],
+    },
+  })
+  async mobileUpload(
+    @Query('token') rawToken: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: { document_type: string; subject_type: string; subject_id?: string },
+  ) {
+    const session = await this.onboardingService.resolveMobileToken(rawToken);
+    return this.onboardingService.uploadDocument(
+      session.userId, file, body.document_type, body.subject_type, body.subject_id,
+    );
+  }
+
+  @Public()
+  @Get('mobile-session')
+  @ApiOperation({ summary: 'Obtener datos de la sesión móvil (sin JWT)' })
+  async getMobileSession(@Query('token') rawToken: string) {
+    const session = await this.onboardingService.resolveMobileToken(rawToken);
+    return { onboarding_type: session.onboardingType, required_docs: session.requiredDocs };
+  }
+
+  @Public()
+  @Post('mobile-session/complete')
+  @ApiOperation({ summary: 'Marcar sesión móvil como completada' })
+  async completeMobileSession(@Query('token') rawToken: string) {
+    const session = await this.onboardingService.resolveMobileToken(rawToken);
+    await this.onboardingService.completeMobileToken(session.tokenId);
+    return { message: 'Sesión completada' };
   }
 }
