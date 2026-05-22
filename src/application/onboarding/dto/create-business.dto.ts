@@ -9,6 +9,7 @@ import {
   Length,
   IsEnum,
   IsNumber,
+  Matches,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -131,9 +132,10 @@ export class CreateBusinessDto {
   @IsEmail()
   email: string;
 
-  @ApiPropertyOptional({ example: '+52 33 1234 5678' })
+  @ApiPropertyOptional({ example: '+525512345678', description: 'Formato E.164: +[código país][número], sin espacios ni guiones' })
   @IsOptional()
   @IsString()
+  @Matches(/^\+[1-9]\d{6,14}$/, { message: 'El teléfono debe estar en formato E.164 (ej: +525512345678)' })
   phone?: string;
 
   @ApiProperty({ example: 'Av. Vallarta 3000' })

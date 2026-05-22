@@ -8,6 +8,7 @@ import {
   Length,
   IsEnum,
   IsNumber,
+  Matches,
   Min,
   Max,
 } from 'class-validator';
@@ -68,15 +69,14 @@ export class CreateDirectorDto {
   @Length(2, 3)
   country_of_residence?: string;
 
-  @ApiPropertyOptional({ enum: ['passport', 'drivers_license', 'national_id'] })
-  @IsOptional()
+  @ApiProperty({ enum: ['passport', 'drivers_license', 'national_id'] })
   @IsEnum(['passport', 'drivers_license', 'national_id'])
-  id_type?: string;
+  id_type: string;
 
-  @ApiPropertyOptional({ example: 'G98765432' })
-  @IsOptional()
+  @ApiProperty({ example: 'G98765432' })
   @IsString()
-  id_number?: string;
+  @IsNotEmpty()
+  id_number: string;
 
   @ApiPropertyOptional({ example: '2030-12-31' })
   @IsOptional()
@@ -92,9 +92,10 @@ export class CreateDirectorDto {
   @IsNotEmpty()
   email: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'Formato E.164: +[código país][número], sin espacios ni guiones' })
   @IsOptional()
   @IsString()
+  @Matches(/^\+[1-9]\d{6,14}$/, { message: 'El teléfono debe estar en formato E.164 (ej: +525512345678)' })
   phone?: string;
 
   @ApiProperty()
@@ -176,15 +177,14 @@ export class CreateUboDto {
   @Length(2, 3)
   country_of_residence?: string;
 
-  @ApiPropertyOptional()
-  @IsOptional()
+  @ApiProperty({ enum: ['passport', 'drivers_license', 'national_id'] })
   @IsEnum(['passport', 'drivers_license', 'national_id'])
-  id_type?: string;
+  id_type: string;
 
-  @ApiPropertyOptional()
-  @IsOptional()
+  @ApiProperty({ example: 'G98765432' })
   @IsString()
-  id_number?: string;
+  @IsNotEmpty()
+  id_number: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -205,9 +205,10 @@ export class CreateUboDto {
   @IsNotEmpty()
   email: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'Formato E.164: +[código país][número], sin espacios ni guiones' })
   @IsOptional()
   @IsString()
+  @Matches(/^\+[1-9]\d{6,14}$/, { message: 'El teléfono debe estar en formato E.164 (ej: +525512345678)' })
   phone?: string;
 
   @ApiProperty()
@@ -249,6 +250,14 @@ export class CreateUboDto {
   @ApiProperty({ example: false })
   @IsBoolean()
   is_pep: boolean;
+
+  @ApiPropertyOptional({
+    example: false,
+    description: 'Indica si el UBO también firma documentos corporativos en nombre de la empresa.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  is_signer?: boolean;
 
   /**
    * Fuga A — Control prong: indicates whether the UBO also exerts operational

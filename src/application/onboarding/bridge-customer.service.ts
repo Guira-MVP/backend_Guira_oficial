@@ -2,6 +2,7 @@ import {
   Injectable,
   Inject,
   BadGatewayException,
+  BadRequestException,
   NotFoundException,
   Logger,
 } from '@nestjs/common';
@@ -297,6 +298,7 @@ export class BridgeCustomerService {
     source_of_funds: 'proof_of_source_of_funds',
     tax_certificate: 'proof_of_tax_identification',
     business_formation: 'business_formation',
+    incorporation_certificate: 'business_formation',
     ownership_information: 'ownership_information',
     operating_agreement: 'operating_agreement',
     other: 'other',
@@ -707,11 +709,12 @@ export class BridgeCustomerService {
     if (business.conducts_money_services !== undefined) {
       payload.conducts_money_services = business.conducts_money_services;
 
-      // Bridge requiere conducts_money_services_description cuando conducts_money_services=true
-      if (
-        business.conducts_money_services &&
-        business.conducts_money_services_description
-      ) {
+      if (business.conducts_money_services) {
+        if (!business.conducts_money_services_description) {
+          throw new BadRequestException(
+            'conducts_money_services_description es requerido cuando conducts_money_services=true',
+          );
+        }
         payload.conducts_money_services_description =
           business.conducts_money_services_description;
       }
@@ -737,12 +740,15 @@ export class BridgeCustomerService {
       (business.high_risk_activities as unknown[]).length > 0
     ) {
       payload.high_risk_activities = business.high_risk_activities;
-      // FIX N-06: high_risk_activities_explanation is REQUIRED when high_risk_activities
-      // contains entries other than 'none_of_the_above'.
       const hasRealRisk = (business.high_risk_activities as string[]).some(
         (a) => a !== 'none_of_the_above',
       );
-      if (hasRealRisk && business.high_risk_activities_explanation) {
+      if (hasRealRisk) {
+        if (!business.high_risk_activities_explanation) {
+          throw new BadRequestException(
+            'high_risk_activities_explanation es requerido cuando se declaran actividades de alto riesgo distintas de none_of_the_above',
+          );
+        }
         payload.high_risk_activities_explanation =
           business.high_risk_activities_explanation;
       }
@@ -1161,12 +1167,9 @@ export class BridgeCustomerService {
           country: business.country as string,
         });
       }
-      // Last resort: dirección mínima para evitar rechazo de Bridge (street_line_1 mínimo 4 chars)
-      return this.buildAddress({
-        address1: 'N/A.',
-        city: 'N/A.',
-        country: 'BOL',
-      });
+      throw new BadRequestException(
+        `La persona (${(entity as Record<string, unknown>).first_name ?? ''} ${(entity as Record<string, unknown>).last_name ?? ''}) no tiene dirección residencial y el negocio tampoco tiene dirección registrada. Bridge requiere residential_address para cada associated_person.`,
+      );
     };
 
     // Directores
@@ -1197,7 +1200,7 @@ export class BridgeCustomerService {
         if (dir.position) person.title = dir.position; // position → title
 
         if (dir.nationality) {
-          person.nationality = this.toAlpha3(dir.nationality as string);
+          person.nationalities = [this.toAlpha3(dir.nationality as string)];
         }
 
         // Identifying information
@@ -1240,14 +1243,19 @@ export class BridgeCustomerService {
         if (ubo.date_of_birth) person.birth_date = ubo.date_of_birth;
 
         if (ubo.nationality) {
-          person.nationality = this.toAlpha3(ubo.nationality as string);
+          person.nationalities = [this.toAlpha3(ubo.nationality as string)];
         }
 
         // P0-E: residential_address always present
         person.residential_address = buildPersonAddress(ubo);
 
-        // P2-A: Bridge requires `title` when has_control is true
-        if (person.has_control && ubo.position) {
+        // Bridge requires `title` when has_control is true (FinCEN Control Prong)
+        if (person.has_control) {
+          if (!ubo.position) {
+            throw new BadRequestException(
+              `El UBO ${ubo.first_name} ${ubo.last_name} tiene has_control=true pero no tiene cargo (position). Bridge requiere el campo title para UBOs con control.`,
+            );
+          }
           person.title = ubo.position;
         }
 
