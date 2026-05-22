@@ -1276,7 +1276,57 @@ export class BridgeService {
       .order('created_at', { ascending: false });
 
     if (error) throw new Error(error.message);
-    return data ?? [];
+
+    const liquidationAddresses = data ?? [];
+    const destinationExternalAccountIds = Array.from(
+      new Set(
+        liquidationAddresses
+          .map((address) => address.destination_external_account_id)
+          .filter((id): id is string => typeof id === 'string' && id.length > 0),
+      ),
+    );
+
+    if (destinationExternalAccountIds.length === 0) {
+      return liquidationAddresses.map((address) => ({
+        ...address,
+        destination_external_account: null,
+      }));
+    }
+
+    const { data: externalAccounts, error: externalAccountsError } =
+      await this.supabase
+        .from('bridge_external_accounts')
+        .select(
+          'bridge_external_account_id, bank_name, account_name, account_last_4, currency, payment_rail, account_type, routing_number, country, is_active',
+        )
+        .eq('user_id', userId)
+        .in('bridge_external_account_id', destinationExternalAccountIds);
+
+    if (externalAccountsError) {
+      this.logger.warn(
+        `No se pudieron cargar cuentas externas destino para liquidation addresses del usuario ${userId}: ${externalAccountsError.message}`,
+      );
+
+      return liquidationAddresses.map((address) => ({
+        ...address,
+        destination_external_account: null,
+      }));
+    }
+
+    const externalAccountByBridgeId = new Map(
+      (externalAccounts ?? []).map((account) => [
+        account.bridge_external_account_id,
+        account,
+      ]),
+    );
+
+    return liquidationAddresses.map((address) => ({
+      ...address,
+      destination_external_account: address.destination_external_account_id
+        ? (externalAccountByBridgeId.get(address.destination_external_account_id) ??
+          null)
+        : null,
+    }));
   }
 
   /**
