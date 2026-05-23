@@ -311,6 +311,7 @@ export class BridgeCustomerService {
   /** Tipos de documento que son de identidad y NO deben ir en documents[]. */
   private static readonly IDENTITY_DOC_TYPES = new Set([
     'passport',
+    'national_id',
     'national_id_front',
     'national_id_back',
     'drivers_license',
@@ -1020,6 +1021,15 @@ export class BridgeCustomerService {
             }
           }
         }
+      }
+
+      // BUG4-FIX: Bridge requires image_front for government ID types
+      if (!item.image_front) {
+        this.logger.warn(
+          `[buildIdentifyingInformation] image_front ausente para ${entity.id_type as string} ` +
+          `(subject_type=${subjectType}, subject_id=${subjectId ?? 'none'}). ` +
+          `Bridge puede rechazar el payload sin imagen del documento.`,
+        );
       }
 
       result.push(item);
