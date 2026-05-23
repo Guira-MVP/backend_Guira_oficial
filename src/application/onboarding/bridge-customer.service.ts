@@ -1210,7 +1210,6 @@ export class BridgeCustomerService {
           has_ownership: false,
           is_signer: dir.is_signer ?? false,
           is_director: true,
-          is_pep: dir.is_pep ?? false,
           // P0-E: residential_address always present
           residential_address: buildPersonAddress(dir),
         };
@@ -1256,9 +1255,8 @@ export class BridgeCustomerService {
           first_name: ubo.first_name,
           last_name: ubo.last_name,
           has_ownership: true, // H12: UBO implica ownership
-          has_control: ubo.has_control ?? false, // Usar el valor persistido dinámicamente
+          has_control: ubo.has_control ?? false,
           is_signer: ubo.is_signer ?? false,
-          is_pep: ubo.is_pep ?? false,
         };
 
         if (ubo.ownership_percent !== undefined) {
