@@ -297,11 +297,12 @@ export class BridgeCustomerService {
     utility_bill: 'proof_of_address',
     bank_statement: 'proof_of_address',
     source_of_funds: 'proof_of_source_of_funds',
+    flow_of_funds: 'flow_of_funds', // Required by Bridge when conducts_money_services_using_bridge=true
     tax_certificate: 'proof_of_tax_identification',
     business_formation: 'business_formation',
     incorporation_certificate: 'business_formation',
     ownership_information: 'ownership_information',
-    operating_agreement: 'operating_agreement',
+    operating_agreement: 'ownership_information', // Bridge enum has no 'operating_agreement'; closest is ownership_information
     proof_of_nature_of_business: 'proof_of_nature_of_business',
     other: 'other',
   };
