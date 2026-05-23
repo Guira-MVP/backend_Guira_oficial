@@ -128,6 +128,15 @@ export class CreateBusinessDto {
   @IsString()
   website?: string;
 
+  @ApiPropertyOptional({
+    example: ['https://twitter.com/guirapay', 'https://instagram.com/guirapay'],
+    description: 'Otros sitios web y redes sociales del negocio',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  other_websites?: string[];
+
   @ApiProperty({ example: 'contacto@guirapay.com' })
   @IsEmail()
   email: string;

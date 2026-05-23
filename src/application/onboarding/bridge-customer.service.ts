@@ -290,6 +290,7 @@ export class BridgeCustomerService {
    *  Actualizado P0-A: solo propósitos válidos del enum Bridge.
    *  Documentos de identidad (passport, national_id, drivers_license, selfie) NO van en documents[],
    *  van dentro de identifying_information[].
+   *  FIX-W1: añadido proof_of_nature_of_business — requerido por Bridge cuando no hay primary_website.
    */
   private static readonly DOC_TYPE_TO_BRIDGE_PURPOSE: Record<string, string> = {
     proof_of_address: 'proof_of_address',
@@ -301,6 +302,7 @@ export class BridgeCustomerService {
     incorporation_certificate: 'business_formation',
     ownership_information: 'ownership_information',
     operating_agreement: 'operating_agreement',
+    proof_of_nature_of_business: 'proof_of_nature_of_business',
     other: 'other',
   };
 
@@ -674,6 +676,15 @@ export class BridgeCustomerService {
 
     if (business.website) {
       payload.primary_website = business.website;
+    } else {
+      // FIX-W1: Bridge rejects KYB without primary_website unless a proof_of_nature_of_business document is provided.
+      this.logger.warn(
+        `Negocio ${business.id} no tiene website. Bridge requerirá un documento proof_of_nature_of_business.`,
+      );
+    }
+
+    if (business.other_websites && (business.other_websites as string[]).length > 0) {
+      payload.other_websites = business.other_websites;
     }
 
     if (business.phone) {
@@ -1213,6 +1224,10 @@ export class BridgeCustomerService {
         );
         if (idInfo.length > 0) person.identifying_information = idInfo;
 
+        // FIX-AP: Documents for each associated person (IndividualDocuments)
+        const dirDocs = await this.buildDocumentsArray(userId, 'director', dir.id as string);
+        if (dirDocs.length > 0) person.documents = dirDocs;
+
         persons.push(person);
       }
     }
@@ -1268,6 +1283,10 @@ export class BridgeCustomerService {
           ubo.id as string,
         );
         if (idInfo.length > 0) person.identifying_information = idInfo;
+
+        // FIX-AP: Documents for each associated person (IndividualDocuments)
+        const uboDocs = await this.buildDocumentsArray(userId, 'ubo', ubo.id as string);
+        if (uboDocs.length > 0) person.documents = uboDocs;
 
         persons.push(person);
       }
