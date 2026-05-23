@@ -299,6 +299,7 @@ export class BridgeCustomerService {
     source_of_funds: 'proof_of_source_of_funds',
     flow_of_funds: 'flow_of_funds', // Required by Bridge when conducts_money_services_using_bridge=true
     tax_certificate: 'proof_of_tax_identification',
+    tax_registration: 'proof_of_tax_identification', // NIT/RUT/RFC document uploaded in KYB step 5
     business_formation: 'business_formation',
     incorporation_certificate: 'business_formation',
     ownership_information: 'ownership_information',
