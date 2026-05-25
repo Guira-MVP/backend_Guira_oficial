@@ -571,6 +571,91 @@ export class ComplianceActionsService {
   }
 
   /**
+   * Llamado por el webhook handler cuando Bridge devuelve status = 'incomplete'.
+   * Registra el evento en el historial del compliance review, notifica al staff
+   * (con motivos específicos) y deja el review ABIERTO para que el staff actúe.
+   */
+  async handleBridgeIncomplete(
+    userId: string,
+    bridgeCustomerId: string,
+    issues: string[],
+    additionalRequirements: string[],
+  ): Promise<void> {
+    this.logger.warn(
+      `Bridge marcó cuenta como incomplete para user ${userId} — issues: ${issues.join(', ')}`,
+    );
+
+    const { data: profile } = await this.supabase
+      .from('profiles')
+      .select('full_name, email')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (!profile) return;
+
+    const clientName = profile.full_name ?? profile.email ?? userId;
+
+    // 1. Registrar evento inmutable en el historial del compliance review
+    const review = await this.findOpenReviewForUser(userId);
+    if (review) {
+      await this.supabase.from('compliance_review_events').insert({
+        review_id: review.id,
+        actor_id: userId,
+        decision: 'BRIDGE_INCOMPLETE',
+        reason: `Bridge devolvió status=incomplete — Issues: ${issues.join(', ')}${additionalRequirements.length ? `. Req adicionales: ${additionalRequirements.join(', ')}` : ''}`,
+        metadata: {
+          bridge_issues: issues,
+          additional_requirements: additionalRequirements,
+          bridge_customer_id: bridgeCustomerId,
+        },
+      });
+      // El review se mantiene ABIERTO para que el staff tome acción
+    }
+
+    // 2. Notificar a cada miembro del staff con el detalle de los issues
+    const { data: staffUsers } = await this.supabase
+      .from('profiles')
+      .select('id')
+      .in('role', ['staff', 'admin', 'super_admin'])
+      .eq('is_active', true);
+
+    for (const staff of staffUsers ?? []) {
+      await this.supabase.from('notifications').insert({
+        user_id: staff.id,
+        type: 'compliance_alert',
+        title: 'KYC incompleto en Bridge — acción requerida',
+        message: `Bridge marcó la verificación de ${clientName} como incompleta. Issues: ${issues.join(', ')}${additionalRequirements.length ? `. Req adicionales: ${additionalRequirements.join(', ')}` : ''}.`,
+        reference_type: 'kyc_application',
+      });
+    }
+
+    // 3. Notificar al cliente con mensaje genérico (sin exponer detalles técnicos)
+    await this.supabase.from('notifications').insert({
+      user_id: userId,
+      type: 'alert',
+      title: 'Tu verificación requiere información adicional',
+      message:
+        'Tu verificación está siendo revisada y se necesita información adicional. Nuestro equipo de soporte se pondrá en contacto contigo pronto.',
+    });
+
+    // 4. Audit log — registro permanente de lo que Bridge reportó
+    await this.supabase.from('audit_logs').insert({
+      performed_by: userId,
+      role: 'system',
+      action: 'BRIDGE_INCOMPLETE',
+      table_name: 'profiles',
+      record_id: userId,
+      reason: `Bridge webhook reportó status=incomplete — Issues: ${issues.join(', ')}`,
+      new_values: {
+        bridge_issues: issues,
+        additional_requirements: additionalRequirements,
+        bridge_customer_id: bridgeCustomerId,
+      },
+      source: 'webhook',
+    });
+  }
+
+  /**
    * Busca el compliance_review abierto más reciente para un usuario.
    */
   private async findOpenReviewForUser(

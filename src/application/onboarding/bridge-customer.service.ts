@@ -495,6 +495,16 @@ export class BridgeCustomerService {
       })
       .eq('id', userId);
 
+    // 4b. Guardar el payload enviado a Bridge para diagnóstico futuro
+    await this.supabase
+      .from('kyc_applications')
+      .update({
+        bridge_request_payload: customerPayload,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', userId)
+      .in('status', ['sent_to_bridge', 'submitted', 'under_review', 'pending']);
+
     // 5. Log de éxito (registro enviado, no aprobación)
     await this.logActivity(
       userId,
