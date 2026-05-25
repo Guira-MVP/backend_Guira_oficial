@@ -402,9 +402,9 @@ export class BridgeCustomerService {
       throw new NotFoundException(`Perfil ${userId} no encontrado`);
     }
 
-    // Idempotente: si ya tiene bridge_customer_id, retornar
+    // Si ya tiene bridge_customer_id, actualizar en Bridge en lugar de crear uno nuevo
     if (profile.bridge_customer_id) {
-      return profile.bridge_customer_id;
+      return this.updateCustomerInBridge(userId, profile.bridge_customer_id as string);
     }
 
     // 2. Determinar tipo de cliente (persona o empresa)
@@ -519,6 +519,107 @@ export class BridgeCustomerService {
     return customerId;
   }
 
+  /**
+   * Actualiza un Customer existente en Bridge API via PUT.
+   * Usado cuando el cliente ya tiene bridge_customer_id (segunda revisión, correcciones, etc.).
+   */
+  async updateCustomerInBridge(userId: string, bridgeCustomerId: string): Promise<string> {
+    const { data: profile, error: profileErr } = await this.supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', userId)
+      .single();
+
+    if (profileErr || !profile) {
+      throw new NotFoundException(`Perfil ${userId} no encontrado`);
+    }
+
+    const { data: person } = await this.supabase
+      .from('people')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    const { data: business } = await this.supabase
+      .from('businesses')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    let customerPayload: Record<string, unknown>;
+
+    if (person) {
+      const { data: kycApp } = await this.supabase
+        .from('kyc_applications')
+        .select('tos_contract_id, id')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      customerPayload = await this.buildIndividualPayload(
+        person,
+        profile,
+        userId,
+        kycApp?.tos_contract_id ?? null,
+      );
+    } else if (business) {
+      const { data: kybApp } = await this.supabase
+        .from('kyb_applications')
+        .select('tos_contract_id, id')
+        .eq('business_id', business.id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      customerPayload = await this.buildBusinessPayload(
+        business,
+        profile,
+        userId,
+        kybApp?.tos_contract_id ?? null,
+      );
+    } else {
+      throw new NotFoundException(
+        'No se encontraron datos personales ni de empresa para este usuario',
+      );
+    }
+
+    try {
+      await this.bridgeApiClient.put(
+        `/v0/customers/${bridgeCustomerId}`,
+        customerPayload,
+      );
+    } catch (err) {
+      await this.logActivity(
+        userId,
+        'BRIDGE_CUSTOMER_UPDATE_FAILED',
+        `Bridge rechazó actualización: ${(err as Error).message}`,
+      );
+      throw err;
+    }
+
+    await this.supabase
+      .from('kyc_applications')
+      .update({
+        bridge_request_payload: customerPayload,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', userId)
+      .in('status', ['sent_to_bridge', 'submitted', 'under_review', 'pending']);
+
+    await this.logActivity(
+      userId,
+      'BRIDGE_CUSTOMER_UPDATED',
+      `Customer actualizado en Bridge: ${bridgeCustomerId}`,
+    );
+
+    this.logger.log(
+      `Bridge customer ${bridgeCustomerId} actualizado para usuario ${userId}`,
+    );
+
+    return bridgeCustomerId;
+  }
+
   // ───────────────────────────────────────
   //  Payload Builders — alineados con Bridge API
   // ───────────────────────────────────────
@@ -622,6 +723,9 @@ export class BridgeCustomerService {
     // AUDIT FIX — most_recent_occupation: alphanumeric code required for high-risk/restricted countries
     if (person.most_recent_occupation) {
       payload.most_recent_occupation = person.most_recent_occupation;
+    }
+    if (person.acting_as_intermediary !== undefined) {
+      payload.acting_as_intermediary = person.acting_as_intermediary;
     }
     payload.client_reference_id = userId;
 

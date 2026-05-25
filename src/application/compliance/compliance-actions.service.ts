@@ -409,6 +409,80 @@ export class ComplianceActionsService {
     };
   }
 
+  /**
+   * Re-envía los datos del cliente a Bridge via PUT cuando el estado quedó atascado en pending_bridge.
+   * Requiere que el cliente ya tenga bridge_customer_id asignado.
+   */
+  async resendToBridge(reviewId: string, actorId: string): Promise<{ message: string }> {
+    const { data: review } = await this.supabase
+      .from('compliance_reviews')
+      .select('subject_type, subject_id, status')
+      .eq('id', reviewId)
+      .single();
+
+    if (!review) throw new NotFoundException('Review no encontrado');
+
+    let userId: string | null = null;
+
+    if (review.subject_type === 'kyc_applications') {
+      const { data: kyc } = await this.supabase
+        .from('kyc_applications')
+        .select('user_id')
+        .eq('id', review.subject_id)
+        .single();
+      userId = kyc?.user_id ?? null;
+    } else if (review.subject_type === 'kyb_applications') {
+      const { data: kyb } = await this.supabase
+        .from('kyb_applications')
+        .select('requester_user_id')
+        .eq('id', review.subject_id)
+        .single();
+      userId = kyb?.requester_user_id ?? null;
+    }
+
+    if (!userId) throw new NotFoundException('No se encontró el usuario del expediente');
+
+    const { data: profile } = await this.supabase
+      .from('profiles')
+      .select('bridge_customer_id')
+      .eq('id', userId)
+      .single();
+
+    if (!profile?.bridge_customer_id) {
+      throw new BadRequestException(
+        'El cliente no tiene bridge_customer_id. Use "Aprobar" para el primer envío.',
+      );
+    }
+
+    await this.bridgeCustomerService.updateCustomerInBridge(userId, profile.bridge_customer_id);
+
+    if (review.subject_type === 'kyc_applications') {
+      await this.supabase
+        .from('kyc_applications')
+        .update({ status: 'sent_to_bridge' })
+        .eq('id', review.subject_id);
+    } else if (review.subject_type === 'kyb_applications') {
+      await this.supabase
+        .from('kyb_applications')
+        .update({ status: 'sent_to_bridge' })
+        .eq('id', review.subject_id);
+    }
+
+    await this.supabase
+      .from('profiles')
+      .update({ onboarding_status: 'pending_bridge' })
+      .eq('id', userId);
+
+    await this.supabase.from('compliance_review_events').insert({
+      review_id: reviewId,
+      actor_id: actorId,
+      decision: 'RESENT_TO_BRIDGE',
+      reason: 'Re-envío manual a Bridge por staff',
+    });
+
+    return { message: 'Datos re-enviados a Bridge correctamente.' };
+  }
+
   // ── BRIDGE WEBHOOK CALLBACKS ──────────────────────────────────────
 
   /**

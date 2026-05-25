@@ -192,6 +192,18 @@ export class AdminComplianceController {
     return this.actionsService.approveReview(id, actor.id, dto.reason, actor.profile.role);
   }
 
+  @Post('reviews/:id/resend-to-bridge')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({
+    summary: 'Re-enviar datos a Bridge via PUT cuando el estado está atascado en pending_bridge',
+  })
+  resendToBridge(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ) {
+    return this.actionsService.resendToBridge(id, actor.id);
+  }
+
   @Post('reviews/:id/reject')
   @Roles('staff', 'admin', 'super_admin')
   @ApiOperation({
