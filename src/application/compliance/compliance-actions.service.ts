@@ -1011,7 +1011,7 @@ export class ComplianceActionsService {
           .single();
 
         if (kyc?.user_id) {
-          // Sincronizar full_name desde la tabla `people`
+          // Construir profileUpdate antes del intento a Bridge (sin aplicarlo aún)
           const profileUpdate: Record<string, any> = {
             onboarding_status: 'pending_bridge',
           };
@@ -1029,32 +1029,28 @@ export class ComplianceActionsService {
             }
           }
 
-          await this.supabase
-            .from('profiles')
-            .update(profileUpdate)
-            .eq('id', kyc.user_id);
-
-          // Registra en Bridge (crea bridge_customer + bridge_kyc_link)
-          // La aprobación real vendrá del webhook — aquí solo mandamos los datos.
+          // Registra en Bridge PRIMERO — solo si tiene éxito se escribe pending_bridge.
+          // Así el perfil nunca queda en pending_bridge con bridge_customer_id = null.
           try {
             await this.bridgeCustomerService.registerCustomerInBridge(
               kyc.user_id,
             );
           } catch (err) {
             this.logger.error(`Error registrando cliente en Bridge: ${err}`);
-            // Revertir a needs_review para que el staff pueda reintentar
             await this.supabase
               .from('kyc_applications')
               .update({ status: 'needs_review' })
               .eq('id', subjectId);
-            await this.supabase
-              .from('profiles')
-              .update({ onboarding_status: 'kyc_started' })
-              .eq('id', kyc.user_id);
             throw new BadRequestException(
               `Error enviando a Bridge: ${(err as Error).message}. El expediente ha sido devuelto para revisión.`,
             );
           }
+
+          // Bridge aceptó la solicitud — ahora es seguro marcar pending_bridge.
+          await this.supabase
+            .from('profiles')
+            .update(profileUpdate)
+            .eq('id', kyc.user_id);
         }
         break;
       }
@@ -1067,7 +1063,6 @@ export class ComplianceActionsService {
           .single();
 
         if (kyb?.requester_user_id) {
-          // Sincronizar full_name desde la tabla `businesses`
           const profileUpdate: Record<string, any> = {
             onboarding_status: 'pending_bridge',
           };
@@ -1082,11 +1077,6 @@ export class ComplianceActionsService {
             }
           }
 
-          await this.supabase
-            .from('profiles')
-            .update(profileUpdate)
-            .eq('id', kyb.requester_user_id);
-
           try {
             await this.bridgeCustomerService.registerCustomerInBridge(
               kyb.requester_user_id,
@@ -1097,14 +1087,15 @@ export class ComplianceActionsService {
               .from('kyb_applications')
               .update({ status: 'needs_review' })
               .eq('id', subjectId);
-            await this.supabase
-              .from('profiles')
-              .update({ onboarding_status: 'kyb_started' })
-              .eq('id', kyb.requester_user_id);
             throw new BadRequestException(
               `Error enviando a Bridge: ${(err as Error).message}. El expediente ha sido devuelto para revisión.`,
             );
           }
+
+          await this.supabase
+            .from('profiles')
+            .update(profileUpdate)
+            .eq('id', kyb.requester_user_id);
         }
         break;
       }

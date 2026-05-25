@@ -524,6 +524,12 @@ export class BridgeCustomerService {
    * Usado cuando el cliente ya tiene bridge_customer_id (segunda revisión, correcciones, etc.).
    */
   async updateCustomerInBridge(userId: string, bridgeCustomerId: string): Promise<string> {
+    if (!bridgeCustomerId) {
+      throw new BadRequestException(
+        `No se puede actualizar en Bridge: bridgeCustomerId es nulo para usuario ${userId}. Use el flujo de aprobación para el primer envío.`,
+      );
+    }
+
     const { data: profile, error: profileErr } = await this.supabase
       .from('profiles')
       .select('*')
