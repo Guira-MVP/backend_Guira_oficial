@@ -76,6 +76,14 @@ export class WalletsController {
 export class AdminWalletsController {
   constructor(private readonly walletsService: WalletsService) {}
 
+  @Get('users/:userId')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({ summary: 'Resumen de wallets y balances de un usuario' })
+  @ApiResponse({ status: 200, description: 'Wallets y balances consolidados' })
+  getUserWalletOverview(@Param('userId', new ParseUUIDPipe()) userId: string) {
+    return this.walletsService.findAllByUserForAdmin(userId);
+  }
+
   @Post('balances/adjust')
   @Roles('admin', 'super_admin')
   @ApiOperation({ summary: 'Ajuste manual de balance (con audit log)' })

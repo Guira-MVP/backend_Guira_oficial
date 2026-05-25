@@ -131,6 +131,60 @@ export class WalletsService {
     return data ?? [];
   }
 
+  /** Resumen admin de wallets y balances de un usuario. */
+  async findAllByUserForAdmin(userId: string) {
+    const { data: wallets, error: walletsError } = await this.supabase
+      .from('wallets')
+      .select(
+        'id, address, network, provider_key, provider_wallet_id, label, is_active, created_at',
+      )
+      .eq('user_id', userId)
+      .order('created_at', { ascending: true });
+
+    if (walletsError) throw new BadRequestException(walletsError.message);
+
+    const { data: balances, error: balancesError } = await this.supabase
+      .from('balances')
+      .select(
+        'id, currency, amount, available_amount, pending_amount, reserved_amount, updated_at',
+      )
+      .eq('user_id', userId)
+      .order('currency', { ascending: true });
+
+    if (balancesError) throw new BadRequestException(balancesError.message);
+
+    const normalizedBalances = (balances ?? []).map((balance) => ({
+      id: balance.id,
+      currency: balance.currency?.toUpperCase(),
+      amount: this.toNumber(balance.amount),
+      available_amount: this.toNumber(balance.available_amount),
+      pending_amount: this.toNumber(balance.pending_amount),
+      reserved_amount: this.toNumber(balance.reserved_amount),
+      updated_at: balance.updated_at,
+    }));
+
+    const totals = normalizedBalances.reduce(
+      (acc, balance) => ({
+        amount: acc.amount + balance.amount,
+        available_amount: acc.available_amount + balance.available_amount,
+        pending_amount: acc.pending_amount + balance.pending_amount,
+        reserved_amount: acc.reserved_amount + balance.reserved_amount,
+      }),
+      {
+        amount: 0,
+        available_amount: 0,
+        pending_amount: 0,
+        reserved_amount: 0,
+      },
+    );
+
+    return {
+      wallets: wallets ?? [],
+      balances: normalizedBalances,
+      totals,
+    };
+  }
+
   /** Balance de una divisa específica. */
   async getBalanceByCurrency(userId: string, currency: string) {
     const { data, error } = await this.supabase
@@ -463,5 +517,11 @@ export class WalletsService {
       address: response.address,
       chain: response.chain,
     };
+  }
+
+  private toNumber(value: unknown): number {
+    const numeric =
+      typeof value === 'number' ? value : parseFloat(String(value ?? '0'));
+    return Number.isFinite(numeric) ? numeric : 0;
   }
 }
