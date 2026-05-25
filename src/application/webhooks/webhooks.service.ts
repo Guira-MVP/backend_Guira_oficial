@@ -106,17 +106,15 @@ export class WebhooksService {
         );
     }
 
-    // ── 2. Procesar eventos pendientes ───────────────────────────────────────────
+    // ── 2. Reclamar y procesar eventos pendientes de forma atómica ───────────────
+    // La RPC usa SELECT ... FOR UPDATE SKIP LOCKED: dos ticks del CRON que se
+    // solapen nunca obtendrán el mismo evento, eliminando la race condition que
+    // podría duplicar wallets u otras operaciones idempotentes.
     const { data: events, error } = await this.supabase
-      .from('webhook_events')
-      .select('*')
-      .eq('status', 'pending')
-      .lt('retry_count', 5)
-      .order('received_at', { ascending: true })
-      .limit(50);
+      .rpc('claim_pending_webhooks', { batch_size: 50 });
 
     if (error) {
-      this.logger.error(`CRON error: ${error.message}`);
+      this.logger.error(`CRON error al reclamar webhooks: ${error.message}`);
       return;
     }
     if (!events || events.length === 0) return;

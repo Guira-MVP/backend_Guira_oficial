@@ -284,7 +284,7 @@ export class WalletsService {
         // - network: fuente de verdad = Bridge response.chain (D-4)
         // - currency: currency principal/legacy — el desglose real vive en tabla balances (D-5)
         const chainFromBridge = bridgeWallet.chain ?? wc.network;
-        await this.supabase.from('wallets').insert({
+        const { error: insertError } = await this.supabase.from('wallets').insert({
           user_id: userId,
           address: bridgeWallet.address,
           network: chainFromBridge,
@@ -294,7 +294,19 @@ export class WalletsService {
           is_active: true,
         });
 
-        initialized++;
+        if (insertError) {
+          if (insertError.code === '23505') {
+            // Race condition: otro webhook creó la wallet entre nuestro check y este insert.
+            // El unique index wallets_user_network_active_unique protegió la integridad.
+            this.logger.warn(
+              `Race condition en wallet ${chainFromBridge} para user ${userId} — wallet ya creada por proceso concurrente, omitiendo`,
+            );
+          } else {
+            throw new Error(`Error insertando wallet: ${insertError.message}`);
+          }
+        } else {
+          initialized++;
+        }
       }
 
       // Inicializar balances para TODAS las currencies de este network
@@ -335,7 +347,7 @@ export class WalletsService {
 
       if (existing) continue;
 
-      await this.supabase.from('balances').insert({
+      const { error: insertError } = await this.supabase.from('balances').insert({
         user_id: userId,
         currency,
         amount: 0,
@@ -343,6 +355,12 @@ export class WalletsService {
         pending_amount: 0,
         reserved_amount: 0,
       });
+
+      if (insertError && insertError.code !== '23505') {
+        this.logger.error(
+          `Error insertando balance ${currency} para user ${userId}: ${insertError.message}`,
+        );
+      }
     }
   }
 

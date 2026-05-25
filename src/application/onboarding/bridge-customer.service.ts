@@ -584,10 +584,12 @@ export class BridgeCustomerService {
       );
     }
 
+    const idempotencyKey = `update-customer-${userId}-${Date.now()}`;
     try {
       await this.bridgeApiClient.put(
         `/v0/customers/${bridgeCustomerId}`,
         customerPayload,
+        idempotencyKey,
       );
     } catch (err) {
       await this.logActivity(

@@ -669,7 +669,33 @@ export class ComplianceActionsService {
 
     const clientName = profile.full_name ?? profile.email ?? userId;
 
-    // 1. Registrar evento inmutable en el historial del compliance review
+    // 1. Actualizar estado de la aplicación a needs_review para que el staff pueda actuar
+    const { data: kycApp } = await this.supabase
+      .from('kyc_applications')
+      .select('id')
+      .eq('user_id', userId)
+      .in('status', ['sent_to_bridge', 'submitted', 'under_review'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (kycApp) {
+      await this.supabase
+        .from('kyc_applications')
+        .update({
+          status: 'needs_review',
+          observations: JSON.stringify({ bridge_issues: issues, additional_requirements: additionalRequirements }),
+        })
+        .eq('id', kycApp.id);
+    } else {
+      await this.supabase
+        .from('kyb_applications')
+        .update({ status: 'needs_review' })
+        .eq('user_id', userId)
+        .in('status', ['sent_to_bridge', 'submitted', 'under_review']);
+    }
+
+    // 2. Registrar evento inmutable en el historial del compliance review
     const review = await this.findOpenReviewForUser(userId);
     if (review) {
       await this.supabase.from('compliance_review_events').insert({

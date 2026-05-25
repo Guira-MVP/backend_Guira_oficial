@@ -75,12 +75,16 @@ export class BridgeApiClient {
   async put<T = Record<string, unknown>>(
     path: string,
     body: unknown,
+    idempotencyKey?: string,
   ): Promise<T> {
     this.ensureConfigured();
 
     const res = await fetch(`${this.baseUrl}${path}`, {
       method: 'PUT',
-      headers: this.headers,
+      headers: {
+        ...this.headers,
+        ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+      },
       body: JSON.stringify(body),
     });
 
