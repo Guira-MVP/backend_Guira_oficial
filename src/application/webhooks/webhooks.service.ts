@@ -494,6 +494,7 @@ export class WebhooksService {
           'submitted',
           'under_review',
           'pending',
+          'needs_review',
         ])
         .maybeSingle();
 
