@@ -231,9 +231,7 @@ export class AdminService {
     const offset = (page - 1) * limit;
     let query = this.supabase
       .from('audit_logs')
-      .select('*, profiles!audit_logs_performed_by_fkey(email, full_name)', {
-        count: 'exact',
-      })
+      .select('*, profiles!audit_logs_performed_by_fkey(email, full_name)')
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
@@ -242,12 +240,10 @@ export class AdminService {
     if (filters.action) query = query.eq('action', filters.action);
     if (filters.table_name) query = query.eq('table_name', filters.table_name);
 
-    // from_date / to_date could be added manually via query options
-
-    const { data, count, error } = await query;
+    const { data, error } = await query;
     if (error) throw new BadRequestException(error.message);
 
-    return { data, total: count, page, limit };
+    return { data, total: null, page, limit };
   }
 
   async getUserAuditLogs(userId: string) {
