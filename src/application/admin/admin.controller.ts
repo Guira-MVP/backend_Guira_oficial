@@ -160,17 +160,19 @@ export class AdminController {
   @ApiQuery({ name: 'action', required: false })
   @ApiQuery({ name: 'table_name', required: false })
   @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'limit', required: false })
   getAuditLogs(
     @Query('performed_by') performedBy?: string,
     @Query('action') action?: string,
     @Query('table_name') tableName?: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page?: number,
+    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit?: number,
   ) {
     const filters: Record<string, string> = {};
     if (performedBy) filters.performed_by = performedBy;
     if (action) filters.action = action;
     if (tableName) filters.table_name = tableName;
-    return this.adminService.getAuditLogs(filters, page ?? 1);
+    return this.adminService.getAuditLogs(filters, page ?? 1, Math.min(limit ?? 50, 200));
   }
 
   @Get('audit-logs/user/:userId')
