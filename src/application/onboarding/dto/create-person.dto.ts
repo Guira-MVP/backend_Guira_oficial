@@ -8,7 +8,11 @@ import {
   IsEnum,
   Length,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+const trimString = ({ value }: { value: unknown }) =>
+  typeof value === 'string' ? value.trim() : value;
 
 /**
  * Bridge-accepted values for source_of_funds (individual).
@@ -49,12 +53,14 @@ export enum AccountPurposeEnum {
 
 export class CreatePersonDto {
   @ApiProperty({ example: 'María' })
+  @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   @Length(1, 100)
   first_name: string;
 
   @ApiProperty({ example: 'González' })
+  @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   @Length(1, 100)
@@ -62,6 +68,7 @@ export class CreatePersonDto {
 
   /** Bridge optional: middle_name */
   @ApiPropertyOptional({ example: 'Elena' })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   @Length(1, 100)
@@ -81,6 +88,7 @@ export class CreatePersonDto {
     example: 'MEX',
     description: 'ISO 3166-1 alpha-3 country code (3 characters)',
   })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   @Length(2, 3)
@@ -90,6 +98,7 @@ export class CreatePersonDto {
     example: 'MEX',
     description: 'ISO 3166-1 alpha-3 country code of residence (3 characters)',
   })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   @Length(2, 3)
@@ -100,6 +109,7 @@ export class CreatePersonDto {
   id_type: string;
 
   @ApiProperty({ example: 'G12345678' })
+  @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   id_number: string;
@@ -110,35 +120,42 @@ export class CreatePersonDto {
   id_expiry_date?: string;
 
   @ApiProperty({ example: 'maria@ejemplo.com' })
+  @Transform(trimString)
   @IsEmail()
   email: string;
 
   @ApiProperty({ example: '+52 55 1234 5678' })
+  @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   phone: string;
 
   @ApiProperty({ example: 'Av. Reforma 123' })
+  @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   address1: string;
 
   @ApiPropertyOptional({ example: 'Piso 4' })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   address2?: string;
 
   @ApiProperty({ example: 'Ciudad de México' })
+  @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   city: string;
 
   @ApiPropertyOptional({ example: 'CDMX' })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   state?: string;
 
   @ApiPropertyOptional({ example: '06600' })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   postal_code?: string;
@@ -151,11 +168,13 @@ export class CreatePersonDto {
     example: 'MEX',
     description: 'ISO 3166-1 alpha-3 country code (3 characters preferred)',
   })
+  @Transform(trimString)
   @IsString()
   @Length(2, 3)
   country: string;
 
   @ApiPropertyOptional()
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   tax_id?: string;
@@ -174,6 +193,7 @@ export class CreatePersonDto {
 
   /** Required when account_purpose = 'other' */
   @ApiPropertyOptional({ example: 'Custom purpose description' })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   account_purpose_other?: string;
@@ -237,6 +257,7 @@ export class CreatePersonDto {
     example: '222111',
     description: 'Bridge occupation code (alphanumeric)',
   })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   most_recent_occupation?: string;
