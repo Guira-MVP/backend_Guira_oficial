@@ -213,9 +213,17 @@ export class AdminBridgeController {
   @Get('transfers')
   @Roles('staff', 'admin', 'super_admin')
   @ApiOperation({ summary: 'Listar todas las transferencias Bridge (admin)' })
-  @ApiResponse({ status: 200, description: 'Lista de bridge_transfers' })
-  listAllTransfers(@Query('status') status?: string) {
-    return this.bridgeService.listAllTransfers({ status });
+  @ApiResponse({ status: 200, description: 'Lista paginada de bridge_transfers' })
+  listAllTransfers(
+    @Query('status') status?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.bridgeService.listAllTransfers({
+      status,
+      limit: limit ? parseInt(limit, 10) : undefined,
+      offset: offset ? parseInt(offset, 10) : undefined,
+    });
   }
 
   // ── Payouts (payout_requests) ────────────

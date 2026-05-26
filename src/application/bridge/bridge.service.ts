@@ -1120,27 +1120,48 @@ export class BridgeService {
   }
 
   /** Admin: lista TODAS las transferencias Bridge (sin filtro de usuario). */
-  async listAllTransfers(filters?: { status?: string }) {
-    let query = this.supabase
+  async listAllTransfers(filters?: { status?: string; limit?: number; offset?: number }) {
+    const pageSize = Math.min(filters?.limit ?? 100, 200);
+    const pageOffset = filters?.offset ?? 0;
+
+    // Query de datos (con JOIN de perfiles)
+    let dataQuery = this.supabase
       .from('bridge_transfers')
       .select('*, profiles!bridge_transfers_user_id_fkey(email, full_name)')
       .order('created_at', { ascending: false })
-      .limit(200);
+      .range(pageOffset, pageOffset + pageSize - 1);
+
+    // Query de count separada (sin JOIN para mayor compatibilidad)
+    let countQuery = this.supabase
+      .from('bridge_transfers')
+      .select('*', { count: 'exact', head: true });
 
     if (filters?.status && filters.status !== 'all') {
-      query = query.eq('status', filters.status);
+      dataQuery = dataQuery.eq('status', filters.status);
+      countQuery = countQuery.eq('status', filters.status);
     }
 
-    const { data, error } = await query;
-    if (error) throw new BadRequestException(error.message);
+    const [{ data, error }, { count, error: countError }] = await Promise.all([
+      dataQuery,
+      countQuery,
+    ]);
 
-    // Aplanar el join de profiles para comodidad del frontend
-    return (data ?? []).map((t: any) => ({
+    if (error) throw new BadRequestException(error.message);
+    if (countError) throw new BadRequestException(countError.message);
+
+    const items = (data ?? []).map((t: any) => ({
       ...t,
       user_email: t.profiles?.email ?? null,
       user_full_name: t.profiles?.full_name ?? null,
       profiles: undefined,
     }));
+
+    return {
+      items,
+      total: count ?? items.length,
+      limit: pageSize,
+      offset: pageOffset,
+    };
   }
 
   async getTransfer(transferId: string, userId: string) {

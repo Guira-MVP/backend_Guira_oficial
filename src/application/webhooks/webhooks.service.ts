@@ -522,6 +522,7 @@ export class WebhooksService {
             'submitted',
             'under_review',
             'pending',
+            'needs_review',
           ]);
       }
 
@@ -743,6 +744,7 @@ export class WebhooksService {
             'submitted',
             'under_review',
             'pending',
+            'needs_review',
           ]);
       } else {
         await this.supabase
@@ -758,6 +760,7 @@ export class WebhooksService {
             'submitted',
             'under_review',
             'pending',
+            'needs_review',
           ]);
       }
 
@@ -2009,16 +2012,20 @@ export class WebhooksService {
       })
       .eq('bridge_transfer_id', bridgeTransferId)
       .select('id, user_id, payout_request_id, amount, destination_currency')
-      .single();
+      .maybeSingle();
 
-    if (!transfer)
-      throw new Error(`Bridge transfer no encontrada: ${bridgeTransferId}`);
+    if (!transfer) {
+      this.logger.warn(
+        `⚠️ handleTransferFailed: bridge_transfer no encontrada para ID: ${bridgeTransferId}. ` +
+          `Continuando con actualización de payment_order si existe.`,
+      );
+    }
 
-    // 2. UPDATE payout_requests
-    let payoutAmount = parseFloat(transfer.amount ?? '0');
-    let currency = transfer.destination_currency ?? 'USD';
+    // 2. UPDATE payout_requests (solo si tenemos el registro local)
+    let payoutAmount = parseFloat(transfer?.amount ?? '0');
+    let currency = transfer?.destination_currency ?? 'USD';
 
-    if (transfer.payout_request_id) {
+    if (transfer?.payout_request_id) {
       const { data: payout } = await this.supabase
         .from('payout_requests')
         .update({
@@ -2036,20 +2043,23 @@ export class WebhooksService {
       }
     }
 
-    // 3. UPDATE ledger_entry: pending → failed (NO dispara trigger de balance)
-    await this.supabase
-      .from('ledger_entries')
-      .update({ status: 'failed' })
-      .eq('bridge_transfer_id', transfer.id)
-      .eq('status', 'pending');
+    // 3. UPDATE ledger_entry: pending → failed (solo si tenemos el registro local)
+    if (transfer) {
+      await this.supabase
+        .from('ledger_entries')
+        .update({ status: 'failed' })
+        .eq('bridge_transfer_id', transfer.id)
+        .eq('status', 'pending');
+    }
 
     // 4b. UPDATE payment_orders — consultado ANTES del release para conocer flow_type y
     // moneda de origen (la moneda reservada puede diferir de destination_currency).
+    // 'pending' incluido por paridad con handleTransferComplete (FIX #3 equivalente).
     const { data: failedOrder } = await this.supabase
       .from('payment_orders')
       .select('id, user_id, wallet_id, amount, fee_amount, currency, flow_type')
       .eq('bridge_transfer_id', bridgeTransferId)
-      .in('status', ['processing', 'created', 'waiting_deposit'])
+      .in('status', ['pending', 'processing', 'created', 'waiting_deposit'])
       .maybeSingle();
 
     // Flujos off-ramp de wallet reservan en source_currency (USDC), no en destination_currency.
@@ -2064,7 +2074,7 @@ export class WebhooksService {
       failedOrder != null && offRampWalletFlows.includes(failedOrder.flow_type);
 
     // 4. Liberar saldo reservado (solo para flujos que no tienen liberación propia)
-    if (!isOffRampWalletFlow) {
+    if (transfer && !isOffRampWalletFlow) {
       await this.supabase.rpc('release_reserved_balance', {
         p_user_id: transfer.user_id,
         p_currency: currency.toUpperCase(),
@@ -2108,22 +2118,27 @@ export class WebhooksService {
       );
     }
 
-    // 5. Notificación
-    await this.supabase.from('notifications').insert({
-      user_id: transfer.user_id,
-      type: 'alert',
-      title: 'Pago Fallido',
-      message: `Tu pago de $${transfer.amount} falló. El saldo ha sido devuelto a tu cuenta.`,
-      reference_type: 'bridge_transfer',
-      reference_id: transfer.id,
-    });
+    // 5. Notificación y activity log (solo si tenemos el registro local)
+    if (transfer) {
+      await this.supabase.from('notifications').insert({
+        user_id: transfer.user_id,
+        type: 'alert',
+        title: 'Pago Fallido',
+        message: `Tu pago de $${transfer.amount} falló. El saldo ha sido devuelto a tu cuenta.`,
+        reference_type: 'bridge_transfer',
+        reference_id: transfer.id,
+      });
 
-    // 6. Activity log
-    await this.supabase.from('activity_logs').insert({
-      user_id: transfer.user_id,
-      action: 'TRANSFER_FAILED',
-      description: `Transfer ${bridgeTransferId} falló — saldo liberado`,
-    });
+      await this.supabase.from('activity_logs').insert({
+        user_id: transfer.user_id,
+        action: 'TRANSFER_FAILED',
+        description: `Transfer ${bridgeTransferId} falló — saldo liberado`,
+      });
+    } else {
+      this.logger.warn(
+        `⚠️ handleTransferFailed: notificación omitida para ${bridgeTransferId} — bridge_transfer no encontrada en DB.`,
+      );
+    }
   }
 
   // ═══════════════════════════════════════════════
