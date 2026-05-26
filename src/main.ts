@@ -7,9 +7,25 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { IoAdapter } from '@nestjs/platform-socket.io';
 import type { Request, Response, NextFunction } from 'express';
+import type { ServerOptions } from 'socket.io';
 
 import helmet from 'helmet';
+
+class CorsIoAdapter extends IoAdapter {
+  private allowedOrigins: string[];
+  constructor(app: Parameters<typeof IoAdapter.prototype.create>[0], origins: string[]) {
+    super(app as any);
+    this.allowedOrigins = origins;
+  }
+  createIOServer(port: number, options?: ServerOptions) {
+    return super.createIOServer(port, {
+      ...options,
+      cors: { origin: this.allowedOrigins, credentials: true },
+    });
+  }
+}
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -39,6 +55,9 @@ async function bootstrap() {
   }
 
   logger.log(`CORS allowed origins: ${allowedOrigins.join(', ')}`);
+
+  // Adaptar Socket.IO con los mismos orígenes CORS que el REST
+  app.useWebSocketAdapter(new CorsIoAdapter(app as any, allowedOrigins));
 
   // IMPORTANTE: enableCors ANTES de helmet para que las respuestas preflight (OPTIONS)
   // se envíen correctamente sin ser bloqueadas por helmet

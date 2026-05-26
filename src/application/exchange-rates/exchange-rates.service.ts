@@ -8,6 +8,7 @@ import {
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { ExchangeRatesGateway } from './exchange-rates.gateway';
 
 @Injectable()
 export class ExchangeRatesService {
@@ -26,12 +27,13 @@ export class ExchangeRatesService {
 
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
+    private readonly gateway: ExchangeRatesGateway,
   ) {}
 
   /**
    * Tarea automática para sincronizar las tasas de cambio diariamente (a medianoche).
    */
-  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  @Cron(CronExpression.EVERY_HOUR)
   async handleCronSyncRates() {
     this.logger.log(
       'Iniciando cron job: Sincronización automática de exchange rates...',
@@ -116,13 +118,17 @@ export class ExchangeRatesService {
         .eq('pair', pair.toUpperCase());
 
       await this.supabase.from('audit_logs').insert({
-        performed_by: actorId === 'system_cron' ? null : actorId, // system actions might not have UUID
+        performed_by: actorId === 'system_cron' ? null : actorId,
         action: 'DB_SYNC_EXCHANGE_RATE',
         table_name: 'exchange_rates_config',
         previous_values: { rate: old.base_rate },
         new_values: { rate: rate, pair },
         source: actorId.includes('system') ? 'system' : 'admin_panel',
       });
+
+      // Notificar en tiempo real a todos los clientes conectados
+      const updated = await this.getRate(pair);
+      this.gateway.emitRateUpdated(updated);
     } catch (e) {
       this.logger.warn(
         `El par ${pair} no está inicializado en la base de datos o hubo un error: ${(e as Error).message}`,
@@ -279,6 +285,10 @@ export class ExchangeRatesService {
     this.logger.log(
       `✅ Exchange rate ${pair} actualizado por ${actorId}: ${old.base_rate} → ${dto.rate}`,
     );
+
+    // Notificar en tiempo real a todos los clientes conectados
+    const updated = await this.getRate(resolvedPair);
+    this.gateway.emitRateUpdated(updated);
 
     return data;
   }

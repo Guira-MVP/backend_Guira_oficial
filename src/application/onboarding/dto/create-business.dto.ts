@@ -11,7 +11,11 @@ import {
   IsNumber,
   Matches,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+const trimString = ({ value }: { value: unknown }) =>
+  typeof value === 'string' ? value.trim() : value;
 
 /**
  * Bridge-accepted values for business_type.
@@ -69,21 +73,25 @@ export enum BusinessSourceOfFundsEnum {
 
 export class CreateBusinessDto {
   @ApiProperty({ example: 'Guira Payments S.A. de C.V.' })
+  @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   legal_name: string;
 
   @ApiPropertyOptional({ example: 'Guira Pay' })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   trade_name?: string;
 
   @ApiPropertyOptional({ example: 'REG-123456' })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   registration_number?: string;
 
   @ApiProperty({ example: 'GPY1234567A0' })
+  @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   tax_id: string;
@@ -108,11 +116,13 @@ export class CreateBusinessDto {
     example: 'MEX',
     description: 'ISO 3166-1 alpha-3 country code (3 characters preferred)',
   })
+  @Transform(trimString)
   @IsString()
   @Length(2, 3)
   country_of_incorporation: string;
 
   @ApiPropertyOptional({ example: 'Jalisco' })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   state_of_incorporation?: string;
@@ -124,6 +134,7 @@ export class CreateBusinessDto {
   operating_countries?: string[];
 
   @ApiPropertyOptional({ example: 'https://guirapay.com' })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   website?: string;
@@ -138,35 +149,42 @@ export class CreateBusinessDto {
   other_websites?: string[];
 
   @ApiProperty({ example: 'contacto@guirapay.com' })
+  @Transform(trimString)
   @IsEmail()
   email: string;
 
   @ApiPropertyOptional({ example: '+525512345678', description: 'Formato E.164: +[código país][número], sin espacios ni guiones' })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   @Matches(/^\+[1-9]\d{6,14}$/, { message: 'El teléfono debe estar en formato E.164 (ej: +525512345678)' })
   phone?: string;
 
   @ApiProperty({ example: 'Av. Vallarta 3000' })
+  @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   address1: string;
 
   @ApiPropertyOptional()
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   address2?: string;
 
   @ApiProperty({ example: 'Guadalajara' })
+  @Transform(trimString)
   @IsString()
   city: string;
 
   @ApiPropertyOptional({ example: 'Jalisco' })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   state?: string;
 
   @ApiPropertyOptional({ example: '44100' })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   postal_code?: string;
@@ -178,11 +196,13 @@ export class CreateBusinessDto {
     example: 'MEX',
     description: 'ISO 3166-1 alpha-3 country code (3 characters preferred)',
   })
+  @Transform(trimString)
   @IsString()
   @Length(2, 3)
   country: string;
 
   @ApiPropertyOptional({ example: 'Plataforma de pagos internacionales' })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   business_description?: string;
@@ -222,11 +242,13 @@ export class CreateBusinessDto {
   source_of_funds?: BusinessSourceOfFundsEnum;
 
   @ApiPropertyOptional({ example: 'Custom purpose description' })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   account_purpose_other?: string;
 
   @ApiPropertyOptional({ example: 'Description of funds' })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   source_of_funds_description?: string;
@@ -252,6 +274,7 @@ export class CreateBusinessDto {
   operates_in_prohibited_countries?: boolean;
 
   @ApiPropertyOptional()
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   compliance_explanation?: string;
@@ -260,11 +283,13 @@ export class CreateBusinessDto {
     description:
       'Descripción de los servicios de dinero ofrecidos. Requerido por Bridge cuando conducts_money_services=true.',
   })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   conducts_money_services_description?: string;
 
   @ApiPropertyOptional()
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   high_risk_activities_explanation?: string;
@@ -326,26 +351,31 @@ export class CreateBusinessDto {
   // ── P2: Physical / Operational Address ─────────────────────────────
 
   @ApiPropertyOptional({ example: 'Calle Industria 55' })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   physical_address1?: string;
 
   @ApiPropertyOptional({ example: 'Piso 2' })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   physical_address2?: string;
 
   @ApiPropertyOptional({ example: 'Monterrey' })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   physical_city?: string;
 
   @ApiPropertyOptional({ example: 'Nuevo León' })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   physical_state?: string;
 
   @ApiPropertyOptional({ example: '64000' })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   physical_postal_code?: string;
@@ -354,6 +384,7 @@ export class CreateBusinessDto {
     example: 'MEX',
     description: 'ISO 3166-1 alpha-3 country code for physical location',
   })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   @Length(2, 3)

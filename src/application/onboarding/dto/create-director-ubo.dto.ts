@@ -12,15 +12,21 @@ import {
   Min,
   Max,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+const trimString = ({ value }: { value: unknown }) =>
+  typeof value === 'string' ? value.trim() : value;
 
 export class CreateDirectorDto {
   @ApiProperty({ example: 'Carlos' })
+  @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   first_name: string;
 
   @ApiProperty({ example: 'Slim' })
+  @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   @Length(2, 1024)
@@ -31,6 +37,7 @@ export class CreateDirectorDto {
    * H03 — bridge associated_person uses `title`; stored as `position` in DB.
    */
   @ApiProperty({ example: 'CEO' })
+  @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   position: string;
@@ -55,6 +62,7 @@ export class CreateDirectorDto {
     example: 'MEX',
     description: 'ISO 3166-1 alpha-3 nationality code',
   })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   @Length(2, 3)
@@ -64,6 +72,7 @@ export class CreateDirectorDto {
     example: 'MEX',
     description: 'ISO 3166-1 alpha-3 country of residence',
   })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   @Length(2, 3)
@@ -74,6 +83,7 @@ export class CreateDirectorDto {
   id_type: string;
 
   @ApiProperty({ example: 'G98765432' })
+  @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   id_number: string;
@@ -88,22 +98,26 @@ export class CreateDirectorDto {
    * Changed from @IsOptional() to required.
    */
   @ApiProperty({ example: 'carlos@empresa.com' })
+  @Transform(trimString)
   @IsEmail()
   @IsNotEmpty()
   email: string;
 
   @ApiPropertyOptional({ description: 'Formato E.164: +[código país][número], sin espacios ni guiones' })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   @Matches(/^\+[1-9]\d{6,14}$/, { message: 'El teléfono debe estar en formato E.164 (ej: +525512345678)' })
   phone?: string;
 
   @ApiProperty()
+  @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   address1: string;
 
   @ApiProperty()
+  @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   city: string;
@@ -115,6 +129,7 @@ export class CreateDirectorDto {
     example: 'MEX',
     description: 'ISO 3166-1 alpha-3 country code',
   })
+  @Transform(trimString)
   @IsString()
   @Length(2, 3)
   country: string;
@@ -133,11 +148,13 @@ export class CreateDirectorDto {
 
 export class CreateUboDto {
   @ApiProperty({ example: 'Ana' })
+  @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   first_name: string;
 
   @ApiProperty({ example: 'Martínez' })
+  @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   @Length(2, 1024)
@@ -163,6 +180,7 @@ export class CreateUboDto {
     example: 'MEX',
     description: 'ISO 3166-1 alpha-3 nationality code',
   })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   @Length(2, 3)
@@ -172,6 +190,7 @@ export class CreateUboDto {
     example: 'MEX',
     description: 'ISO 3166-1 alpha-3 country of residence',
   })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   @Length(2, 3)
@@ -182,6 +201,7 @@ export class CreateUboDto {
   id_type: string;
 
   @ApiProperty({ example: 'G98765432' })
+  @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   id_number: string;
@@ -192,6 +212,7 @@ export class CreateUboDto {
   id_expiry_date?: string;
 
   @ApiPropertyOptional()
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   tax_id?: string;
@@ -201,37 +222,44 @@ export class CreateUboDto {
    * Changed from @IsOptional() to required.
    */
   @ApiProperty({ example: 'ana@empresa.com' })
+  @Transform(trimString)
   @IsEmail()
   @IsNotEmpty()
   email: string;
 
   @ApiPropertyOptional({ description: 'Formato E.164: +[código país][número], sin espacios ni guiones' })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   @Matches(/^\+[1-9]\d{6,14}$/, { message: 'El teléfono debe estar en formato E.164 (ej: +525512345678)' })
   phone?: string;
 
   @ApiProperty()
+  @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   address1: string;
 
   @ApiPropertyOptional()
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   address2?: string;
 
   @ApiProperty()
+  @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   city: string;
 
   @ApiPropertyOptional()
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   state?: string;
 
   @ApiPropertyOptional()
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   postal_code?: string;
@@ -243,6 +271,7 @@ export class CreateUboDto {
     example: 'MEX',
     description: 'ISO 3166-1 alpha-3 country code',
   })
+  @Transform(trimString)
   @IsString()
   @Length(2, 3)
   country: string;
@@ -282,6 +311,7 @@ export class CreateUboDto {
     description:
       'Cargo del UBO en la empresa. Requerido por Bridge cuando has_control=true.',
   })
+  @Transform(trimString)
   @IsOptional()
   @IsString()
   @Length(1, 1024)
