@@ -15,8 +15,8 @@ import helmet from 'helmet';
 
 class CorsIoAdapter extends IoAdapter {
   private allowedOrigins: string[];
-  constructor(app: Parameters<typeof IoAdapter.prototype.create>[0], origins: string[]) {
-    super(app as any);
+  constructor(origins: string[]) {
+    super();
     this.allowedOrigins = origins;
   }
   createIOServer(port: number, options?: ServerOptions) {
@@ -57,7 +57,7 @@ async function bootstrap() {
   logger.log(`CORS allowed origins: ${allowedOrigins.join(', ')}`);
 
   // Adaptar Socket.IO con los mismos orígenes CORS que el REST
-  app.useWebSocketAdapter(new CorsIoAdapter(app as any, allowedOrigins));
+  app.useWebSocketAdapter(new CorsIoAdapter(allowedOrigins));
 
   // IMPORTANTE: enableCors ANTES de helmet para que las respuestas preflight (OPTIONS)
   // se envíen correctamente sin ser bloqueadas por helmet
