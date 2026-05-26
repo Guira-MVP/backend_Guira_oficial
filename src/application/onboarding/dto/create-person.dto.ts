@@ -240,4 +240,16 @@ export class CreatePersonDto {
   @IsOptional()
   @IsString()
   most_recent_occupation?: string;
+
+  /**
+   * Required for high-risk customers (Bridge policy).
+   * Indicates whether the customer acts as an intermediary for a third party.
+   */
+  @ApiPropertyOptional({
+    example: false,
+    description: 'True if the customer acts as an intermediary for a third party',
+  })
+  @IsOptional()
+  @IsBoolean()
+  acting_as_intermediary?: boolean;
 }

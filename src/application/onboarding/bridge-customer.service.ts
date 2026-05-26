@@ -26,7 +26,7 @@ import { BridgeApiClient } from '../bridge/bridge-api.client';
  *  H06 – campo renombrado: address → residential_address (KYC), registered_address (KYB)
  *  H07 – business_name → business_legal_name
  *  H08 – doing_business_as_name → business_trade_name
- *  H09 – nationality también convertido a alpha-3
+ *  H09 – nationalities[] (array) en lugar de nationality singular (deprecated)
  *  H14 – state → subdivision en objetos address
  */
 @Injectable()
@@ -640,7 +640,7 @@ export class BridgeCustomerService {
    *  H04 – documents[] construido como array con base64
    *  H05 – country convertido a ISO alpha-3
    *  H06 – residential_address (no address)
-   *  H09 – nationality convertido a ISO alpha-3
+   *  H09 – nationalities[] (array) en lugar de nationality singular (deprecated)
    *  H14 – subdivision (no state)
    *  P1  – employment_status y expected_monthly_payments_usd incluidos
    */
@@ -679,9 +679,9 @@ export class BridgeCustomerService {
     //   payload.tax_identification_number = person.tax_id;
     // }
 
-    // Nationality — H05/H09: convert to alpha-3
+    // Nationalities — H05/H09: convert to alpha-3, send as array (Bridge prefers nationalities over deprecated nationality)
     if (person.nationality) {
-      payload.nationality = this.toAlpha3(person.nationality as string);
+      payload.nationalities = [this.toAlpha3(person.nationality as string)];
     }
 
     // Signed Agreement (ToS) — H01
