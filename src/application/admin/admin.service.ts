@@ -227,11 +227,31 @@ export class AdminService {
 
   // ── AUDIT LOGS ────────────────────────────────────────────────────
 
-  async getAuditLogs(filters: Record<string, string>, page = 1, limit = 50) {
+  async getAuditLogs(
+    filters: Record<string, string>,
+    page = 1,
+    limit = 50,
+  ) {
     const offset = (page - 1) * limit;
+
+    // Columnas ligeras: omitimos previous_values, new_values, details,
+    // affected_fields y otros JSONB pesados que no se muestran en la tabla.
+    const selectColumns = [
+      'id',
+      'performed_by',
+      'role',
+      'action',
+      'table_name',
+      'record_id',
+      'reason',
+      'source',
+      'created_at',
+      'profiles!audit_logs_performed_by_fkey(email,full_name)',
+    ].join(',');
+
     let query = this.supabase
       .from('audit_logs')
-      .select('*, profiles!audit_logs_performed_by_fkey(email, full_name)')
+      .select(selectColumns)
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
@@ -239,17 +259,37 @@ export class AdminService {
       query = query.eq('performed_by', filters.performed_by);
     if (filters.action) query = query.eq('action', filters.action);
     if (filters.table_name) query = query.eq('table_name', filters.table_name);
+    if (filters.from) query = query.gte('created_at', filters.from);
+    if (filters.to) query = query.lte('created_at', filters.to);
 
-    const { data, error } = await query;
+    // Count en paralelo — consulta ligera sin JOIN ni JSONB.
+    let countQuery = this.supabase
+      .from('audit_logs')
+      .select('id', { count: 'exact', head: true });
+
+    if (filters.performed_by)
+      countQuery = countQuery.eq('performed_by', filters.performed_by);
+    if (filters.action) countQuery = countQuery.eq('action', filters.action);
+    if (filters.table_name)
+      countQuery = countQuery.eq('table_name', filters.table_name);
+    if (filters.from) countQuery = countQuery.gte('created_at', filters.from);
+    if (filters.to) countQuery = countQuery.lte('created_at', filters.to);
+
+    const [{ data, error }, { count, error: countErr }] =
+      await Promise.all([query, countQuery]);
+
     if (error) throw new BadRequestException(error.message);
+    if (countErr) throw new BadRequestException(countErr.message);
 
-    return { data, total: null, page, limit };
+    return { data, total: count ?? 0, page, limit };
   }
 
   async getUserAuditLogs(userId: string) {
     const { data, error } = await this.supabase
       .from('audit_logs')
-      .select('*')
+      .select(
+        'id, performed_by, role, action, table_name, record_id, reason, source, created_at',
+      )
       .eq('performed_by', userId)
       .order('created_at', { ascending: false })
       .limit(100);
