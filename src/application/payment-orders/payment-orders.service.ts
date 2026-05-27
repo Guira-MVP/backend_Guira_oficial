@@ -16,6 +16,7 @@ import { ClientBankAccountsService } from '../client-bank-accounts/client-bank-a
 import { OrderReviewService } from './order-review.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/dto/notifications.dto';
+import { OrdersGateway } from '../orders/orders.gateway';
 import {
   CreateInterbankOrderDto,
   InterbankFlowType,
@@ -60,6 +61,7 @@ export class PaymentOrdersService {
     private readonly bankAccountsService: ClientBankAccountsService,
     private readonly orderReviewService: OrderReviewService,
     private readonly notificationsService: NotificationsService,
+    private readonly ordersGateway: OrdersGateway,
   ) {}
 
   // ═══════════════════════════════════════════════
@@ -314,20 +316,40 @@ export class PaymentOrdersService {
       return { _type: 'review_request' as const, review };
     }
 
+    let interbankOrder: any;
     switch (dto.flow_type) {
       case InterbankFlowType.BOLIVIA_TO_WORLD:
-        return this.createBoliviaToWorld(userId, dto);
+        interbankOrder = await this.createBoliviaToWorld(userId, dto);
+        break;
       case InterbankFlowType.WALLET_TO_WALLET:
-        return this.createWalletToWallet(userId, dto);
+        interbankOrder = await this.createWalletToWallet(userId, dto);
+        break;
       case InterbankFlowType.BOLIVIA_TO_WALLET:
-        return this.createBoliviaToWallet(userId, dto);
+        interbankOrder = await this.createBoliviaToWallet(userId, dto);
+        break;
       case InterbankFlowType.WORLD_TO_BOLIVIA:
-        return this.createWorldToBolivia(userId, dto);
+        interbankOrder = await this.createWorldToBolivia(userId, dto);
+        break;
       case InterbankFlowType.WORLD_TO_WALLET:
-        return this.createWorldToWallet(userId, dto);
+        interbankOrder = await this.createWorldToWallet(userId, dto);
+        break;
       default:
         throw new BadRequestException(`Flujo no soportado: ${dto.flow_type}`);
     }
+
+    // Notificar al staff que hay una nueva orden
+    this.ordersGateway.emitOrderCreated({
+      id: interbankOrder.id,
+      user_id: interbankOrder.user_id,
+      flow_type: interbankOrder.flow_type,
+      flow_category: interbankOrder.flow_category ?? 'interbank',
+      amount: parseFloat(interbankOrder.amount),
+      currency: interbankOrder.currency,
+      status: interbankOrder.status,
+      created_at: interbankOrder.created_at,
+    });
+
+    return interbankOrder;
   }
 
   /**
@@ -1215,22 +1237,43 @@ export class PaymentOrdersService {
       return { _type: 'review_request' as const, review };
     }
 
+    let walletRampOrder: any;
     switch (dto.flow_type) {
       case WalletRampFlowType.FIAT_BO_TO_BRIDGE_WALLET:
-        return this.createFiatBoToBridgeWallet(userId, dto);
+        walletRampOrder = await this.createFiatBoToBridgeWallet(userId, dto);
+        break;
       case WalletRampFlowType.CRYPTO_TO_BRIDGE_WALLET:
-        return this.createCryptoToBridgeWallet(userId, dto);
+        walletRampOrder = await this.createCryptoToBridgeWallet(userId, dto);
+        break;
       case WalletRampFlowType.BRIDGE_WALLET_TO_FIAT_BO:
-        return this.createBridgeWalletToFiatBo(userId, dto);
+        walletRampOrder = await this.createBridgeWalletToFiatBo(userId, dto);
+        break;
       case WalletRampFlowType.BRIDGE_WALLET_TO_CRYPTO:
-        return this.createBridgeWalletToCrypto(userId, dto);
+        walletRampOrder = await this.createBridgeWalletToCrypto(userId, dto);
+        break;
       case WalletRampFlowType.BRIDGE_WALLET_TO_FIAT_US:
-        return this.createBridgeWalletToFiatUs(userId, dto);
+        walletRampOrder = await this.createBridgeWalletToFiatUs(userId, dto);
+        break;
       case WalletRampFlowType.WALLET_TO_FIAT:
-        return this.createWalletToFiat(userId, dto);
+        walletRampOrder = await this.createWalletToFiat(userId, dto);
+        break;
       default:
         throw new BadRequestException(`Flujo no soportado: ${dto.flow_type}`);
     }
+
+    // Notificar al staff que hay una nueva orden
+    this.ordersGateway.emitOrderCreated({
+      id: walletRampOrder.id,
+      user_id: walletRampOrder.user_id,
+      flow_type: walletRampOrder.flow_type,
+      flow_category: walletRampOrder.flow_category ?? 'wallet_ramp',
+      amount: parseFloat(walletRampOrder.amount),
+      currency: walletRampOrder.currency,
+      status: walletRampOrder.status,
+      created_at: walletRampOrder.created_at,
+    });
+
+    return walletRampOrder;
   }
 
   /**
@@ -2809,6 +2852,15 @@ export class PaymentOrdersService {
       await this.supabase.from('notifications').insert(notifications);
     }
 
+    // Notificar al usuario y al staff del cambio de estado
+    this.ordersGateway.emitOrderUpdated(updated.user_id, {
+      id: updated.id,
+      user_id: updated.user_id,
+      status: updated.status,
+      flow_type: updated.flow_type,
+      updated_at: new Date().toISOString(),
+    });
+
     return updated;
   }
 
@@ -2928,6 +2980,16 @@ export class PaymentOrdersService {
       .single();
 
     if (error) throw new BadRequestException(error.message);
+
+    // Notificar al usuario y al staff del cambio de estado
+    this.ordersGateway.emitOrderUpdated(updated.user_id, {
+      id: updated.id,
+      user_id: updated.user_id,
+      status: updated.status,
+      flow_type: updated.flow_type,
+      updated_at: new Date().toISOString(),
+    });
+
     return updated;
   }
 
@@ -3411,6 +3473,15 @@ export class PaymentOrdersService {
       );
     }
 
+    // Notificar al usuario y al staff del cambio de estado
+    this.ordersGateway.emitOrderUpdated(updated.user_id, {
+      id: updated.id,
+      user_id: updated.user_id,
+      status: updated.status,
+      flow_type: updated.flow_type,
+      updated_at: new Date().toISOString(),
+    });
+
     return updated;
   }
 
@@ -3474,6 +3545,15 @@ export class PaymentOrdersService {
       reference_id: orderId,
     });
 
+    // Notificar al usuario y al staff del cambio de estado
+    this.ordersGateway.emitOrderUpdated(updated.user_id, {
+      id: updated.id,
+      user_id: updated.user_id,
+      status: updated.status,
+      flow_type: updated.flow_type,
+      updated_at: new Date().toISOString(),
+    });
+
     return updated;
   }
 
@@ -3533,6 +3613,15 @@ export class PaymentOrdersService {
       user_id: order.user_id,
       action: 'PAYMENT_ORDER_COMPLETED',
       description: `Orden ${orderId} (${order.flow_type}) completada por admin`,
+    });
+
+    // Notificar al usuario y al staff del cambio de estado
+    this.ordersGateway.emitOrderUpdated(updated.user_id, {
+      id: updated.id,
+      user_id: updated.user_id,
+      status: updated.status,
+      flow_type: updated.flow_type,
+      updated_at: new Date().toISOString(),
     });
 
     return updated;
@@ -3645,6 +3734,15 @@ export class PaymentOrdersService {
         reference_id: orderId,
       });
     }
+
+    // Notificar al usuario y al staff del cambio de estado
+    this.ordersGateway.emitOrderUpdated(updated.user_id, {
+      id: updated.id,
+      user_id: updated.user_id,
+      status: updated.status,
+      flow_type: updated.flow_type,
+      updated_at: new Date().toISOString(),
+    });
 
     return updated;
   }

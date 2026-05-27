@@ -14,6 +14,7 @@ import { SuppliersModule } from '../suppliers/suppliers.module';
 import { ExportModule } from '../../core/export/export.module';
 import { ProfilesModule } from '../profiles/profiles.module';
 import { WalletsModule } from '../wallets/wallets.module';
+import { OrdersModule } from '../orders/orders.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { WalletsModule } from '../wallets/wallets.module';
     ExportModule,
     ProfilesModule,
     WalletsModule,
+    OrdersModule,
   ],
   controllers: [PaymentOrdersController, AdminPaymentOrdersController],
   providers: [PaymentOrdersService, OrderReviewService],

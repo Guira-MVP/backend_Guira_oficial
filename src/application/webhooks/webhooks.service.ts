@@ -7,6 +7,7 @@ import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
 import { BridgeApiClient } from '../bridge/bridge-api.client';
 import { WalletsService } from '../wallets/wallets.service';
 import { ComplianceActionsService } from '../compliance/compliance-actions.service';
+import { OrdersGateway } from '../orders/orders.gateway';
 
 interface SinkEventDto {
   provider: string;
@@ -34,6 +35,7 @@ export class WebhooksService {
     private readonly bridgeApi: BridgeApiClient,
     private readonly walletsService: WalletsService,
     private readonly complianceActions: ComplianceActionsService,
+    private readonly ordersGateway: OrdersGateway,
   ) {}
 
   // ═══════════════════════════════════════════════
@@ -985,6 +987,20 @@ export class WebhooksService {
       .select('id')
       .single();
 
+    // WS: notificar a staff sobre nueva orden VA deposit pending
+    if (order?.id) {
+      this.ordersGateway.emitOrderCreated({
+        id: order.id,
+        user_id: userId,
+        flow_type: 'va_deposit',
+        flow_category: 'inbound',
+        amount,
+        currency: ((va.source_currency as string) ?? currency).toUpperCase(),
+        status: 'pending',
+        created_at: new Date().toISOString(),
+      });
+    }
+
     // Notificar al usuario que el deposito esta en proceso (no acreditado aun)
     await this.supabase.from('notifications').insert({
       user_id: userId,
@@ -1065,6 +1081,20 @@ export class WebhooksService {
       .single();
 
     const orderId = order?.id ?? null;
+
+    // WS: notificar a staff sobre nueva orden swept_external
+    if (order?.id) {
+      this.ordersGateway.emitOrderCreated({
+        id: order.id,
+        user_id: userId,
+        flow_type: 'va_deposit',
+        flow_category: 'inbound',
+        amount,
+        currency: ((va.source_currency as string) ?? currency).toUpperCase(),
+        status: 'swept_external',
+        created_at: new Date().toISOString(),
+      });
+    }
 
     // 2. DOBLE ASIENTO CONTABLE (Credit + Debit instantáneo)
     //    Ambos con status 'settled' para que los triggers se procesen y se cancelen mutuamente.
@@ -1266,6 +1296,15 @@ export class WebhooksService {
         receipt_url: receiptUrl,
       })
       .eq('id', order.id);
+
+    // WS: notificar al usuario y staff que el VA deposit fue completado
+    this.ordersGateway.emitOrderUpdated(order.user_id, {
+      id: order.id,
+      user_id: order.user_id,
+      status: 'completed',
+      flow_type: 'va_deposit',
+      updated_at: new Date().toISOString(),
+    });
 
     // Notificacion de credito exitoso
     await this.supabase.from('notifications').insert({
@@ -1497,6 +1536,15 @@ export class WebhooksService {
       .from('payment_orders')
       .update({ status: 'refunded', va_deposit_status: 'refunded' })
       .eq('id', order.id);
+
+    // WS: notificar al usuario y staff que el VA deposit fue reembolsado
+    this.ordersGateway.emitOrderUpdated(order.user_id, {
+      id: order.id,
+      user_id: order.user_id,
+      status: 'refunded',
+      flow_type: 'va_deposit',
+      updated_at: new Date().toISOString(),
+    });
 
     await this.supabase.from('notifications').insert({
       user_id: order.user_id,
@@ -1833,6 +1881,15 @@ export class WebhooksService {
           })
           .eq('id', paymentOrder.id);
 
+        // WS: notificar al usuario y staff que la transferencia fue completada
+        this.ordersGateway.emitOrderUpdated(paymentOrder.user_id, {
+          id: paymentOrder.id,
+          user_id: paymentOrder.user_id,
+          status: 'completed',
+          flow_type: paymentOrder.flow_type,
+          updated_at: new Date().toISOString(),
+        });
+
         // Asentar ledger entries vinculadas a la payment_order
         // Si tenemos receipt.final_amount de Bridge, actualizar el monto real recibido
         const { data: settledEntries } = await this.supabase
@@ -2090,6 +2147,15 @@ export class WebhooksService {
           failure_reason: `Bridge transfer ${bridgeTransferId} falló`,
         })
         .eq('id', failedOrder.id);
+
+      // WS: notificar al usuario y staff que la orden falló
+      this.ordersGateway.emitOrderUpdated(failedOrder.user_id, {
+        id: failedOrder.id,
+        user_id: failedOrder.user_id,
+        status: 'failed',
+        flow_type: failedOrder.flow_type,
+        updated_at: new Date().toISOString(),
+      });
 
       // Liberar balance reservado con la moneda de origen correcta (source_currency).
       // Solo aplica a flujos off-ramp wallet donde se hizo reserve_balance al inicio.
@@ -2594,6 +2660,15 @@ export class WebhooksService {
           : {}),
       })
       .eq('id', order.id);
+
+    // WS: notificar al usuario y staff que la orden via drain fue completada
+    this.ordersGateway.emitOrderUpdated(order.user_id, {
+      id: order.id,
+      user_id: order.user_id,
+      status: 'completed',
+      flow_type: order.flow_type,
+      updated_at: new Date().toISOString(),
+    });
 
     // 2. Audit log
     await this.supabase.from('audit_logs').insert({

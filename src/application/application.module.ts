@@ -16,6 +16,7 @@ import { PaymentOrdersModule } from './payment-orders/payment-orders.module';
 import { PsavModule } from './psav/psav.module';
 import { ExchangeRatesModule } from './exchange-rates/exchange-rates.module';
 import { ClientBankAccountsModule } from './client-bank-accounts/client-bank-accounts.module';
+import { OrdersModule } from './orders/orders.module';
 
 /**
  * ApplicationModule agrupa todos los módulos de negocio de Guira.
@@ -40,6 +41,7 @@ import { ClientBankAccountsModule } from './client-bank-accounts/client-bank-acc
     PsavModule,
     ExchangeRatesModule,
     ClientBankAccountsModule,
+    OrdersModule,
   ],
 })
 export class ApplicationModule {}
