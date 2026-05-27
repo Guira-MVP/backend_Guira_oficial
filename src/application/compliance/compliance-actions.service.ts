@@ -25,131 +25,54 @@ export class ComplianceActionsService {
 
   async listOpenReviews(filters: Record<string, string>) {
     let query = this.supabase
-      .from('compliance_reviews')
+      .from('compliance_reviews_enriched')
       .select('*')
       .eq('status', 'open')
       .order('priority', { ascending: false })
       .order('opened_at', { ascending: true });
 
     if (filters.priority) query = query.eq('priority', filters.priority);
-    if (filters.assigned_to)
-      query = query.eq('assigned_to', filters.assigned_to);
+    if (filters.assigned_to) query = query.eq('assigned_to', filters.assigned_to);
 
     const { data, error } = await query;
     if (error) throw new BadRequestException(error.message);
     if (!data || data.length === 0) return [];
 
-    const enrichedData = await Promise.all(
-      data.map(async (review) => {
-        let userId: string | null = null;
+    return data.map((row) => {
+      let firstName = '';
+      let lastName = '';
+      if (row.profile_full_name) {
+        const parts = (row.profile_full_name as string).split(' ');
+        firstName = parts[0] || '';
+        lastName = parts.slice(1).join(' ') || '';
+      }
 
-        try {
-          if (review.subject_type === 'kyc_applications') {
-            const { data: kyc } = await this.supabase
-              .from('kyc_applications')
-              .select('user_id')
-              .eq('id', review.subject_id)
-              .single();
-            userId = kyc?.user_id || null;
-          } else if (review.subject_type === 'kyb_applications') {
-            const { data: kyb } = await this.supabase
-              .from('kyb_applications')
-              .select('requester_user_id')
-              .eq('id', review.subject_id)
-              .single();
-            userId = kyb?.requester_user_id || null;
-          } else if (review.subject_type === 'payout_request') {
-            const { data: pay } = await this.supabase
-              .from('payout_requests')
-              .select('user_id')
-              .eq('id', review.subject_id)
-              .single();
-            userId = pay?.user_id || null;
-          }
-        } catch (err) {
-          // Ignore relations error if subject was deleted
-        }
-
-        let profileData: Record<string, any> | null = null;
-        if (userId) {
-          const { data: prof } = await this.supabase
-            .from('profiles')
-            .select('email, full_name, role')
-            .eq('id', userId)
-            .maybeSingle();
-          if (prof) {
-            let businessName = null;
-            if (review.subject_type === 'kyb_applications') {
-              const { data: biz } = await this.supabase
-                .from('businesses')
-                .select('legal_name')
-                .eq('user_id', userId)
-                .maybeSingle();
-              businessName = biz?.legal_name;
-            }
-
-            let firstName = '';
-            let lastName = '';
-            if (prof.full_name) {
-              const parts = prof.full_name.split(' ');
-              firstName = parts[0] || '';
-              lastName = parts.slice(1).join(' ') || '';
-            }
-
-            profileData = {
-              email: prof.email,
+      return {
+        id: row.id,
+        subject_type: row.subject_type,
+        subject_id: row.subject_id,
+        assigned_to: row.assigned_to,
+        status: row.status,
+        priority: row.priority,
+        due_date: row.due_date,
+        opened_at: row.opened_at,
+        closed_at: row.closed_at,
+        user_id: row.user_id ?? null,
+        type: row.type as 'personal' | 'company',
+        application_status: row.application_status,
+        updated_at: row.updated_at,
+        observations: row.observations ?? null,
+        profiles: (row.profile_email || row.profile_full_name)
+          ? {
+              email: row.profile_email,
               first_name: firstName,
               last_name: lastName,
-              full_name: prof.full_name,
-              business_name: businessName || '',
-            };
-          }
-        }
-
-        // Determinar status de la aplicación si es necesario para el UI
-        let appStatus = review.status; // fallback a review status ('open')
-        let appUpdatedAt = review.opened_at;
-        let appObservations: string | null = null;
-        try {
-          if (review.subject_type === 'kyc_applications') {
-            const { data: kyc } = await this.supabase
-              .from('kyc_applications')
-              .select('status, updated_at, observations')
-              .eq('id', review.subject_id)
-              .single();
-            if (kyc) {
-              appStatus = kyc.status;
-              appUpdatedAt = kyc.updated_at;
-              appObservations = kyc.observations ?? null;
+              full_name: row.profile_full_name,
+              business_name: row.profile_business_name || '',
             }
-          } else if (review.subject_type === 'kyb_applications') {
-            const { data: kyb } = await this.supabase
-              .from('kyb_applications')
-              .select('status, updated_at, observations')
-              .eq('id', review.subject_id)
-              .single();
-            if (kyb) {
-              appStatus = kyb.status;
-              appUpdatedAt = kyb.updated_at;
-              appObservations = kyb.observations ?? null;
-            }
-          }
-        } catch (e) {}
-
-        return {
-          ...review,
-          user_id: userId,
-          type:
-            review.subject_type === 'kyb_applications' ? 'company' : 'personal',
-          application_status: appStatus,
-          updated_at: appUpdatedAt,
-          observations: appObservations,
-          profiles: profileData,
-        };
-      }),
-    );
-
-    return enrichedData;
+          : null,
+      };
+    });
   }
 
   async getReviewDetail(reviewId: string) {
