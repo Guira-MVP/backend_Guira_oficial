@@ -16,23 +16,35 @@ import helmet from 'helmet';
 import { Server } from 'socket.io';
 
 class CorsIoAdapter extends IoAdapter {
-  protected httpServer: any;
-  private allowedOrigins: string[];
+  private readonly app: INestApplication;
+  private readonly allowedOrigins: string[];
+  private ioServer: Server | null = null;
 
   constructor(app: INestApplication, origins: string[]) {
-    super();
-    this.httpServer = app.getHttpServer();
+    super(app);
+    this.app = app;
     this.allowedOrigins = origins;
   }
 
   createIOServer(port: number, options?: ServerOptions) {
-    // Adjuntar Socket.IO explícitamente al servidor HTTP de Express.
-    // Si no, el IoAdapter por defecto crea un nuevo servidor HTTP en el mismo
-    // puerto, falla con EADDRINUSE, y Express termina respondiendo 404 a /socket.io/
-    return new Server(this.httpServer, {
+    if (this.ioServer) {
+      return this.ioServer;
+    }
+
+    // getHttpServer() only returns the live http.Server after listen(),
+    // not during construction — so we access it lazily here.
+    // Creating multiple engine.io Server instances on the same HTTP server
+    // tears down prior request/upgrade listeners, so we cache a single one.
+    this.ioServer = new Server(this.app.getHttpServer(), {
       ...options,
-      cors: { origin: this.allowedOrigins, credentials: true },
+      cors: {
+        ...(options?.cors || {}),
+        origin: this.allowedOrigins,
+        credentials: true,
+      },
     });
+
+    return this.ioServer;
   }
 }
 
