@@ -3,6 +3,7 @@ import { NestFactory, Reflector } from '@nestjs/core';
 import { AppModule } from './app.module';
 import {
   ClassSerializerInterceptor,
+  INestApplication,
   Logger,
   ValidationPipe,
 } from '@nestjs/common';
@@ -12,15 +13,23 @@ import type { Request, Response, NextFunction } from 'express';
 import type { ServerOptions } from 'socket.io';
 
 import helmet from 'helmet';
+import { Server } from 'socket.io';
 
 class CorsIoAdapter extends IoAdapter {
+  private httpServer: any;
   private allowedOrigins: string[];
-  constructor(origins: string[]) {
+
+  constructor(app: INestApplication, origins: string[]) {
     super();
+    this.httpServer = app.getHttpServer();
     this.allowedOrigins = origins;
   }
+
   createIOServer(port: number, options?: ServerOptions) {
-    return super.createIOServer(port, {
+    // Adjuntar Socket.IO explícitamente al servidor HTTP de Express.
+    // Si no, el IoAdapter por defecto crea un nuevo servidor HTTP en el mismo
+    // puerto, falla con EADDRINUSE, y Express termina respondiendo 404 a /socket.io/
+    return new Server(this.httpServer, {
       ...options,
       cors: { origin: this.allowedOrigins, credentials: true },
     });
@@ -57,7 +66,7 @@ async function bootstrap() {
   logger.log(`CORS allowed origins: ${allowedOrigins.join(', ')}`);
 
   // Adaptar Socket.IO con los mismos orígenes CORS que el REST
-  app.useWebSocketAdapter(new CorsIoAdapter(allowedOrigins));
+  app.useWebSocketAdapter(new CorsIoAdapter(app, allowedOrigins));
 
   // IMPORTANTE: enableCors ANTES de helmet para que las respuestas preflight (OPTIONS)
   // se envíen correctamente sin ser bloqueadas por helmet
