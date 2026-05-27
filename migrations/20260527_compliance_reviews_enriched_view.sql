@@ -55,7 +55,8 @@ LEFT JOIN kyb_applications kyb
 LEFT JOIN profiles p
   ON p.id = COALESCE(kyc.user_id, kyb.requester_user_id)
 
--- Solo hace el JOIN a businesses cuando es un review KYB
+-- JOIN preciso por business_id (1:1 con la aplicación KYB) — evita duplicados
+-- si un usuario tiene más de una empresa en la tabla businesses
 LEFT JOIN businesses b
-  ON b.user_id       = COALESCE(kyc.user_id, kyb.requester_user_id)
+  ON b.id            = kyb.business_id
  AND cr.subject_type = 'kyb_applications';

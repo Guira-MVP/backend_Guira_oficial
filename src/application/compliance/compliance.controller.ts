@@ -115,14 +115,20 @@ export class AdminComplianceController {
   @ApiOperation({ summary: 'Listar reviews pendientes / abiertos' })
   @ApiQuery({ name: 'priority', required: false })
   @ApiQuery({ name: 'assigned_to', required: false })
+  @ApiQuery({ name: 'limit', required: false, description: 'Máx 200, default 200' })
+  @ApiQuery({ name: 'offset', required: false, description: 'Para paginación server-side' })
   listOpenReviews(
     @Query('priority') priority?: string,
     @Query('assigned_to') assignedTo?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
   ) {
     const filters: Record<string, string> = {};
     if (priority) filters.priority = priority;
     if (assignedTo) filters.assigned_to = assignedTo;
-    return this.actionsService.listOpenReviews(filters);
+    const parsedLimit = limit ? Math.min(parseInt(limit, 10) || 200, 200) : 200;
+    const parsedOffset = offset ? Math.max(parseInt(offset, 10) || 0, 0) : 0;
+    return this.actionsService.listOpenReviews(filters, parsedLimit, parsedOffset);
   }
 
   @Get('reviews/:id')

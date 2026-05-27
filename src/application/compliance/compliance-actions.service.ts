@@ -23,13 +23,14 @@ export class ComplianceActionsService {
 
   // ── REVIEWS (Lectura) ─────────────────────────────────────────────
 
-  async listOpenReviews(filters: Record<string, string>) {
+  async listOpenReviews(filters: Record<string, string>, limit = 200, offset = 0) {
     let query = this.supabase
       .from('compliance_reviews_enriched')
       .select('*')
       .eq('status', 'open')
       .order('priority', { ascending: false })
-      .order('opened_at', { ascending: true });
+      .order('opened_at', { ascending: true })
+      .range(offset, offset + limit - 1);
 
     if (filters.priority) query = query.eq('priority', filters.priority);
     if (filters.assigned_to) query = query.eq('assigned_to', filters.assigned_to);
