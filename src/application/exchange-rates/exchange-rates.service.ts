@@ -61,7 +61,7 @@ export class ExchangeRatesService {
     this.logger.log(
       'Iniciando cron job: Sincronización automática de exchange rates...',
     );
-    await this.syncExternalRates('system-cron');
+    await this.syncExternalRates('system_cron');
   }
 
   /**
@@ -140,6 +140,11 @@ export class ExchangeRatesService {
         })
         .eq('pair', pair.toUpperCase());
 
+      // Emitir con datos locales — sin consulta extra que pueda fallar tras el UPDATE
+      this.gateway.emitRateUpdated(
+        this.buildRateUpdatedPayload(pair, rate, old.spread_percent),
+      );
+
       await this.supabase.from('audit_logs').insert({
         performed_by: actorId === 'system_cron' ? null : actorId,
         action: 'DB_SYNC_EXCHANGE_RATE',
@@ -148,11 +153,6 @@ export class ExchangeRatesService {
         new_values: { rate: rate, pair },
         source: actorId.includes('system') ? 'system' : 'admin_panel',
       });
-
-      // Emitir con datos locales — sin consulta extra que pueda fallar tras el UPDATE
-      this.gateway.emitRateUpdated(
-        this.buildRateUpdatedPayload(pair, rate, old.spread_percent),
-      );
     } catch (e) {
       this.logger.warn(
         `El par ${pair} no está inicializado en la base de datos o hubo un error: ${(e as Error).message}`,
