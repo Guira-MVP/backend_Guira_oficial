@@ -9,6 +9,7 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ExchangeRatesGateway } from './exchange-rates.gateway';
+import type { RateUpdatedPayload } from './exchange-rates.gateway';
 
 @Injectable()
 export class ExchangeRatesService {
@@ -29,6 +30,28 @@ export class ExchangeRatesService {
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly gateway: ExchangeRatesGateway,
   ) {}
+
+  /** Construye el payload para la notificación WS sin consultar DB nuevamente. */
+  private buildRateUpdatedPayload(
+    pair: string,
+    baseRate: number,
+    spreadPercent: number,
+  ): RateUpdatedPayload {
+    const isBobPair = pair.toUpperCase().startsWith('BOB_');
+    const spreadMultiplier = isBobPair
+      ? 1 + spreadPercent / 100
+      : 1 - spreadPercent / 100;
+    const effectiveRate =
+      Math.round(baseRate * spreadMultiplier * 100) / 100;
+
+    return {
+      pair,
+      base_rate: baseRate,
+      spread_percent: spreadPercent,
+      effective_rate: effectiveRate,
+      updated_at: new Date().toISOString(),
+    };
+  }
 
   /**
    * Tarea automática para sincronizar las tasas de cambio diariamente (a medianoche).
@@ -126,9 +149,10 @@ export class ExchangeRatesService {
         source: actorId.includes('system') ? 'system' : 'admin_panel',
       });
 
-      // Notificar en tiempo real a todos los clientes conectados
-      const updated = await this.getRate(pair);
-      this.gateway.emitRateUpdated(updated);
+      // Emitir con datos locales — sin consulta extra que pueda fallar tras el UPDATE
+      this.gateway.emitRateUpdated(
+        this.buildRateUpdatedPayload(pair, rate, old.spread_percent),
+      );
     } catch (e) {
       this.logger.warn(
         `El par ${pair} no está inicializado en la base de datos o hubo un error: ${(e as Error).message}`,
@@ -286,9 +310,11 @@ export class ExchangeRatesService {
       `✅ Exchange rate ${pair} actualizado por ${actorId}: ${old.base_rate} → ${dto.rate}`,
     );
 
-    // Notificar en tiempo real a todos los clientes conectados
-    const updated = await this.getRate(resolvedPair);
-    this.gateway.emitRateUpdated(updated);
+    // Emitir con datos locales — sin consulta extra que pueda fallar tras el UPDATE
+    const spread = dto.spread_percent ?? old.spread_percent;
+    this.gateway.emitRateUpdated(
+      this.buildRateUpdatedPayload(resolvedPair, dto.rate, spread),
+    );
 
     return data;
   }
