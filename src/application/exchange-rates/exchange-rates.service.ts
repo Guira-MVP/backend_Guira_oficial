@@ -56,7 +56,7 @@ export class ExchangeRatesService {
   /**
    * Tarea automática para sincronizar las tasas de cambio diariamente (a medianoche).
    */
-  @Cron(CronExpression.EVERY_HOUR)
+  @Cron(CronExpression.EVERY_10_MINUTES)
   async handleCronSyncRates() {
     this.logger.log(
       'Iniciando cron job: Sincronización automática de exchange rates...',
