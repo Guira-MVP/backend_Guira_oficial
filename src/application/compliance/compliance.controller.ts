@@ -153,6 +153,16 @@ export class AdminComplianceController {
     return this.actionsService.assignReview(id, dto.staff_user_id, actor.id, actor.profile.role);
   }
 
+  @Patch('reviews/:id/unassign')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({ summary: 'Desasignar review (vuelve a la cola sin asignar)' })
+  unassignReview(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ) {
+    return this.actionsService.unassignReview(id, actor.id, actor.profile.role);
+  }
+
   @Patch('reviews/:id/escalate')
   @Roles('staff', 'admin', 'super_admin')
   @ApiOperation({ summary: 'Escalar review a urgente' })

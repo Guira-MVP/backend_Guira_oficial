@@ -241,6 +241,25 @@ export class ComplianceActionsService {
     return { message: 'Review asignado' };
   }
 
+  async unassignReview(reviewId: string, actorId: string, actorRole: string) {
+    await this.supabase
+      .from('compliance_reviews')
+      .update({ assigned_to: null })
+      .eq('id', reviewId);
+
+    await this.supabase.from('audit_logs').insert({
+      performed_by: actorId,
+      role: actorRole,
+      action: 'UNASSIGN_COMPLIANCE_REVIEW',
+      table_name: 'compliance_reviews',
+      record_id: reviewId,
+      new_values: { assigned_to: null },
+      source: 'admin_panel',
+    });
+
+    return { message: 'Review desasignado' };
+  }
+
   async escalateReview(reviewId: string, actorId: string, actorRole: string) {
     await this.supabase
       .from('compliance_reviews')
