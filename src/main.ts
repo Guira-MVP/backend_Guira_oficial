@@ -16,7 +16,7 @@ import helmet from 'helmet';
 import { Server } from 'socket.io';
 
 class CorsIoAdapter extends IoAdapter {
-  private httpServer: any;
+  protected httpServer: any;
   private allowedOrigins: string[];
 
   constructor(app: INestApplication, origins: string[]) {
