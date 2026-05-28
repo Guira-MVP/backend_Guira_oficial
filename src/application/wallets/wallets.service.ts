@@ -376,6 +376,7 @@ export class WalletsService {
     adjustmentAmount: number,
     reason: string,
     actorId: string,
+    actorRole: string,
   ) {
     const upperCurrency = currency.toUpperCase();
 
@@ -419,18 +420,21 @@ export class WalletsService {
 
     // Audit log
     await this.supabase.from('audit_logs').insert({
-      actor_id: actorId,
-      action: 'balance_manual_adjustment',
-      entity_type: 'balance',
-      entity_id: balance.id,
-      details: {
-        user_id: targetUserId,
-        currency: upperCurrency,
-        adjustment: adjustmentAmount,
-        previous_amount: balance.amount,
-        new_amount: newAmount,
-        reason,
+      performed_by:    actorId,
+      role:            actorRole,
+      action:          'BALANCE_MANUAL_ADJUSTMENT',
+      table_name:      'balances',
+      record_id:       balance.id,
+      reason:          reason,
+      previous_values: {
+        amount:            parseFloat(balance.amount),
+        available_amount:  parseFloat(balance.available_amount),
       },
+      new_values: {
+        amount:            newAmount,
+        available_amount:  newAvailable,
+      },
+      source: 'admin_panel',
     });
 
     // WS: notificar al cliente que su balance fue ajustado

@@ -144,6 +144,7 @@ export class AdminProfilesController {
       dto.freeze,
       dto.reason,
       actor.id,
+      actor.profile.role,
     );
   }
 
@@ -156,7 +157,7 @@ export class AdminProfilesController {
     @Body() dto: ActivateAccountDto,
     @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.profilesService.toggleActive(id, dto.is_active, actor.id);
+    return this.profilesService.toggleActive(id, dto.is_active, actor.id, actor.profile.role);
   }
 
   @Patch(':id/role')

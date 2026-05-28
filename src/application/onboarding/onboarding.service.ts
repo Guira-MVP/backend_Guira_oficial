@@ -14,6 +14,7 @@ import { CreateBusinessDto } from './dto/create-business.dto';
 import { CreateDirectorDto, CreateUboDto } from './dto/create-director-ubo.dto';
 import { BridgeApiClient } from '../bridge/bridge-api.client';
 import { OrdersGateway } from '../orders/orders.gateway';
+import { AdminGateway } from '../admin/admin.gateway';
 import * as crypto from 'crypto';
 
 const ALLOWED_MIME_TYPES = [
@@ -33,6 +34,7 @@ export class OnboardingService {
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly bridgeApiClient: BridgeApiClient,
     private readonly ordersGateway: OrdersGateway,
+    private readonly adminGateway: AdminGateway,
   ) {}
 
   // ───────────────────────────────────────────────
@@ -124,10 +126,12 @@ export class OnboardingService {
     if (error) throw new BadRequestException(error.message);
 
     // Actualizar onboarding_status del perfil
-    await this.supabase
+    const { data: kycStartedProfile } = await this.supabase
       .from('profiles')
       .update({ onboarding_status: 'kyc_started' })
-      .eq('id', userId);
+      .eq('id', userId)
+      .select('id, role, is_active, is_frozen, frozen_reason, onboarding_status, bridge_customer_id, updated_at')
+      .single();
 
     // WS: notificar al cliente que su estado de onboarding cambió
     this.ordersGateway.emitProfileStatusUpdated(userId, {
@@ -135,6 +139,20 @@ export class OnboardingService {
       onboarding_status: 'kyc_started',
       updated_at: new Date().toISOString(),
     });
+
+    // WS: notificar al staff que el perfil del usuario cambió
+    if (kycStartedProfile) {
+      this.adminGateway.emitUserUpdated({
+        id: kycStartedProfile.id,
+        role: kycStartedProfile.role,
+        is_active: kycStartedProfile.is_active,
+        is_frozen: kycStartedProfile.is_frozen,
+        frozen_reason: kycStartedProfile.frozen_reason ?? null,
+        onboarding_status: kycStartedProfile.onboarding_status,
+        bridge_customer_id: kycStartedProfile.bridge_customer_id ?? null,
+        updated_at: kycStartedProfile.updated_at ?? new Date().toISOString(),
+      });
+    }
 
     return data;
   }
@@ -252,10 +270,12 @@ export class OnboardingService {
     if (error) throw new BadRequestException(error.message);
 
     // Actualizar perfil
-    await this.supabase
+    const { data: kycInReviewProfile } = await this.supabase
       .from('profiles')
       .update({ onboarding_status: 'in_review' })
-      .eq('id', userId);
+      .eq('id', userId)
+      .select('id, role, is_active, is_frozen, frozen_reason, onboarding_status, bridge_customer_id, updated_at')
+      .single();
 
     // WS: notificar al cliente que su solicitud KYC está en revisión
     this.ordersGateway.emitProfileStatusUpdated(userId, {
@@ -263,6 +283,20 @@ export class OnboardingService {
       onboarding_status: 'in_review',
       updated_at: new Date().toISOString(),
     });
+
+    // WS: notificar al staff que el perfil del usuario cambió
+    if (kycInReviewProfile) {
+      this.adminGateway.emitUserUpdated({
+        id: kycInReviewProfile.id,
+        role: kycInReviewProfile.role,
+        is_active: kycInReviewProfile.is_active,
+        is_frozen: kycInReviewProfile.is_frozen,
+        frozen_reason: kycInReviewProfile.frozen_reason ?? null,
+        onboarding_status: kycInReviewProfile.onboarding_status,
+        bridge_customer_id: kycInReviewProfile.bridge_customer_id ?? null,
+        updated_at: kycInReviewProfile.updated_at ?? new Date().toISOString(),
+      });
+    }
 
     // La creación del compliance_review es manejada por el trigger de base de datos 'on_kyc_submitted'.
     // Solo actualizamos la prioridad si es necesario (el trigger la crea como 'normal' por defecto).
@@ -409,10 +443,12 @@ export class OnboardingService {
 
     if (error) throw new BadRequestException(error.message);
 
-    await this.supabase
+    const { data: kybStartedProfile } = await this.supabase
       .from('profiles')
       .update({ onboarding_status: 'kyb_started' })
-      .eq('id', userId);
+      .eq('id', userId)
+      .select('id, role, is_active, is_frozen, frozen_reason, onboarding_status, bridge_customer_id, updated_at')
+      .single();
 
     // WS: notificar al cliente que su proceso KYB inició
     this.ordersGateway.emitProfileStatusUpdated(userId, {
@@ -420,6 +456,20 @@ export class OnboardingService {
       onboarding_status: 'kyb_started',
       updated_at: new Date().toISOString(),
     });
+
+    // WS: notificar al staff que el perfil del usuario cambió
+    if (kybStartedProfile) {
+      this.adminGateway.emitUserUpdated({
+        id: kybStartedProfile.id,
+        role: kybStartedProfile.role,
+        is_active: kybStartedProfile.is_active,
+        is_frozen: kybStartedProfile.is_frozen,
+        frozen_reason: kybStartedProfile.frozen_reason ?? null,
+        onboarding_status: kybStartedProfile.onboarding_status,
+        bridge_customer_id: kybStartedProfile.bridge_customer_id ?? null,
+        updated_at: kybStartedProfile.updated_at ?? new Date().toISOString(),
+      });
+    }
 
     return data;
   }
@@ -505,10 +555,12 @@ export class OnboardingService {
 
     if (error) throw new BadRequestException(error.message);
 
-    await this.supabase
+    const { data: kybInReviewProfile } = await this.supabase
       .from('profiles')
       .update({ onboarding_status: 'in_review' })
-      .eq('id', userId);
+      .eq('id', userId)
+      .select('id, role, is_active, is_frozen, frozen_reason, onboarding_status, bridge_customer_id, updated_at')
+      .single();
 
     // WS: notificar al cliente que su solicitud KYB está en revisión
     this.ordersGateway.emitProfileStatusUpdated(userId, {
@@ -516,6 +568,20 @@ export class OnboardingService {
       onboarding_status: 'in_review',
       updated_at: new Date().toISOString(),
     });
+
+    // WS: notificar al staff que el perfil del usuario cambió
+    if (kybInReviewProfile) {
+      this.adminGateway.emitUserUpdated({
+        id: kybInReviewProfile.id,
+        role: kybInReviewProfile.role,
+        is_active: kybInReviewProfile.is_active,
+        is_frozen: kybInReviewProfile.is_frozen,
+        frozen_reason: kybInReviewProfile.frozen_reason ?? null,
+        onboarding_status: kybInReviewProfile.onboarding_status,
+        bridge_customer_id: kybInReviewProfile.bridge_customer_id ?? null,
+        updated_at: kybInReviewProfile.updated_at ?? new Date().toISOString(),
+      });
+    }
 
     // La creación del compliance_review es manejada por el trigger de base de datos 'on_kyb_submitted'.
 

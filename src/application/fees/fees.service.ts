@@ -167,6 +167,7 @@ export class FeesService {
       notes?: string;
     },
     actorId: string,
+    actorRole: string,
   ) {
     // D3 Fix: Validar que no exista un override activo duplicado
     const conflictQuery = this.supabase
@@ -210,17 +211,20 @@ export class FeesService {
 
     // Audit log
     await this.supabase.from('audit_logs').insert({
-      actor_id: actorId,
-      action: 'fee_override_created',
-      entity_type: 'customer_fee_override',
-      entity_id: data.id,
-      details: {
-        user_id: dto.user_id,
+      performed_by:    actorId,
+      role:            actorRole,
+      action:          'FEE_OVERRIDE_CREATED',
+      table_name:      'customer_fee_overrides',
+      record_id:       data.id,
+      reason:          `Override creado para ${dto.operation_type}/${dto.payment_rail ?? 'any'}`,
+      new_values: {
+        user_id:        dto.user_id,
         operation_type: dto.operation_type,
-        payment_rail: dto.payment_rail,
-        fee_type: dto.fee_type,
-        valid_from: dto.valid_from ?? today,
+        payment_rail:   dto.payment_rail,
+        fee_type:       dto.fee_type,
+        valid_from:     dto.valid_from ?? today,
       },
+      source: 'admin_panel',
     });
 
     return data;
@@ -239,6 +243,7 @@ export class FeesService {
       notes?: string;
     },
     actorId: string,
+    actorRole: string,
   ) {
     // 1. Obtener override actual para auditoría
     const { data: current, error: findError } = await this.supabase
@@ -283,26 +288,26 @@ export class FeesService {
 
     // 4. Audit log
     await this.supabase.from('audit_logs').insert({
-      actor_id: actorId,
-      action: 'fee_override_updated',
-      entity_type: 'customer_fee_override',
-      entity_id: overrideId,
-      details: {
-        user_id: current.user_id,
-        previous: {
-          fee_percent: current.fee_percent,
-          fee_fixed: current.fee_fixed,
-          is_active: current.is_active,
-        },
-        updated: dto,
+      performed_by:    actorId,
+      role:            actorRole,
+      action:          'FEE_OVERRIDE_UPDATED',
+      table_name:      'customer_fee_overrides',
+      record_id:       overrideId,
+      reason:          `Override actualizado para usuario ${current.user_id}`,
+      previous_values: {
+        fee_percent: current.fee_percent,
+        fee_fixed:   current.fee_fixed,
+        is_active:   current.is_active,
       },
+      new_values: dto,
+      source: 'admin_panel',
     });
 
     return data;
   }
 
   /** Elimina permanentemente un override. */
-  async deleteOverride(overrideId: string, actorId: string) {
+  async deleteOverride(overrideId: string, actorId: string, actorRole: string) {
     // 1. Obtener override para auditoría
     const { data: current, error: findError } = await this.supabase
       .from('customer_fee_overrides')
@@ -323,16 +328,19 @@ export class FeesService {
 
     // 3. Audit log
     await this.supabase.from('audit_logs').insert({
-      actor_id: actorId,
-      action: 'fee_override_deleted',
-      entity_type: 'customer_fee_override',
-      entity_id: overrideId,
-      details: {
-        user_id: current.user_id,
+      performed_by:    actorId,
+      role:            actorRole,
+      action:          'FEE_OVERRIDE_DELETED',
+      table_name:      'customer_fee_overrides',
+      record_id:       overrideId,
+      reason:          `Override ${current.operation_type}/${current.payment_rail ?? 'any'} eliminado permanentemente`,
+      previous_values: {
+        user_id:        current.user_id,
         operation_type: current.operation_type,
-        payment_rail: current.payment_rail,
-        fee_type: current.fee_type,
+        payment_rail:   current.payment_rail,
+        fee_type:       current.fee_type,
       },
+      source: 'admin_panel',
     });
 
     return { message: 'Override eliminado permanentemente' };

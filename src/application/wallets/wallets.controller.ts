@@ -99,6 +99,7 @@ export class AdminWalletsController {
       dto.amount,
       dto.reason,
       actor.id,
+      actor.profile.role,
     );
   }
 

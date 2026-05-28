@@ -4,6 +4,6 @@ import { ExchangeRatesGateway } from './exchange-rates.gateway';
 
 @Module({
   providers: [ExchangeRatesService, ExchangeRatesGateway],
-  exports: [ExchangeRatesService],
+  exports: [ExchangeRatesService, ExchangeRatesGateway],
 })
 export class ExchangeRatesModule {}

@@ -13,6 +13,7 @@ describe('PaymentOrdersService bridge deposit collision guard', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any, // ordersGateway
     );
 
   const createCollisionQuery = (conflicting: unknown) => {
@@ -100,6 +101,7 @@ describe('PaymentOrdersService bridge deposit collision guard', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any, // ordersGateway
     ) as any;
     const guard = jest
       .spyOn(service, 'assertNoConflictingBridgeDepositOrder')

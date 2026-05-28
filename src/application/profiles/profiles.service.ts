@@ -213,6 +213,7 @@ export class ProfilesService {
     freeze: boolean,
     reason: string | undefined,
     actorId: string,
+    actorRole: string,
   ): Promise<ProfileResponseDto> {
     if (freeze && !reason) {
       throw new BadRequestException(
@@ -239,11 +240,15 @@ export class ProfilesService {
 
     // Registrar en audit_logs
     await this.supabase.from('audit_logs').insert({
-      actor_id: actorId,
-      action: freeze ? 'account_frozen' : 'account_unfrozen',
-      entity_type: 'profile',
-      entity_id: targetId,
-      details: { reason: reason ?? null },
+      performed_by:    actorId,
+      role:            actorRole,
+      action:          freeze ? 'ACCOUNT_FROZEN' : 'ACCOUNT_UNFROZEN',
+      table_name:      'profiles',
+      record_id:       targetId,
+      reason:          reason ?? null,
+      previous_values: { is_frozen: !freeze },
+      new_values:      { is_frozen: freeze },
+      source:          'admin_panel',
     });
 
     // WS: notificar al staff que la cuenta fue congelada/descongelada
@@ -273,6 +278,7 @@ export class ProfilesService {
     targetId: string,
     isActive: boolean,
     actorId: string,
+    actorRole: string,
   ): Promise<ProfileResponseDto> {
     const { data, error } = await this.supabase
       .from('profiles')
@@ -289,11 +295,14 @@ export class ProfilesService {
 
     // Registrar en audit_logs
     await this.supabase.from('audit_logs').insert({
-      actor_id: actorId,
-      action: isActive ? 'account_activated' : 'account_deactivated',
-      entity_type: 'profile',
-      entity_id: targetId,
-      details: {},
+      performed_by:    actorId,
+      role:            actorRole,
+      action:          isActive ? 'ACCOUNT_ACTIVATED' : 'ACCOUNT_DEACTIVATED',
+      table_name:      'profiles',
+      record_id:       targetId,
+      previous_values: { is_active: !isActive },
+      new_values:      { is_active: isActive },
+      source:          'admin_panel',
     });
 
     // WS: notificar al staff que la cuenta fue activada/desactivada

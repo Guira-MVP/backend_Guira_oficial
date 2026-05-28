@@ -123,7 +123,7 @@ export class AdminFeesController {
     @Body() dto: CreateFeeOverrideDto,
     @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.feesService.createOverride(dto, actor.id);
+    return this.feesService.createOverride(dto, actor.id, actor.profile.role);
   }
 
   @Patch('overrides/:id')
@@ -135,7 +135,7 @@ export class AdminFeesController {
     @Body() dto: UpdateFeeOverrideDto,
     @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.feesService.updateOverride(id, dto, actor.id);
+    return this.feesService.updateOverride(id, dto, actor.id, actor.profile.role);
   }
 
   @Delete('overrides/:id')
@@ -146,6 +146,6 @@ export class AdminFeesController {
     @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.feesService.deleteOverride(id, actor.id);
+    return this.feesService.deleteOverride(id, actor.id, actor.profile.role);
   }
 }
