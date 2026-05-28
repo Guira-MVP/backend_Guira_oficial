@@ -42,6 +42,9 @@ export interface OrderUpdatedPayload {
   status: string;
   flow_type: string;
   updated_at: string;
+  exchange_rate_applied?: number | null;
+  amount_destination?: number | null;
+  bridge_source_deposit_instructions?: Record<string, unknown> | null;
 }
 
 const STAFF_ROLES = ['staff', 'admin', 'super_admin'];

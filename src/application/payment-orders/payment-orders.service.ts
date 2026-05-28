@@ -64,6 +64,15 @@ export class PaymentOrdersService {
     private readonly ordersGateway: OrdersGateway,
   ) {}
 
+  private async getActorRole(actorId: string): Promise<string> {
+    const { data } = await this.supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', actorId)
+      .single();
+    return data?.role ?? 'unknown';
+  }
+
   // ═══════════════════════════════════════════════
   //  RATE LIMITS & VALIDATION
   // ═══════════════════════════════════════════════
@@ -3304,8 +3313,10 @@ export class PaymentOrdersService {
     if (error) throw new BadRequestException(error.message);
 
     // Audit log
+    const approveActorRole = await this.getActorRole(actorId);
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
+      role: approveActorRole,
       action: 'APPROVE_PAYMENT_ORDER',
       table_name: 'payment_orders',
       record_id: orderId,
@@ -3315,7 +3326,14 @@ export class PaymentOrdersService {
         exchange_rate_applied: exchangeRate,
         amount_destination: amountDestination,
       },
+      reason: dto.notes ?? '',
       source: 'admin_panel',
+    });
+
+    await this.supabase.from('activity_logs').insert({
+      user_id: order.user_id,
+      action: 'PAYMENT_ORDER_APPROVED',
+      description: `Orden ${orderId} (${order.flow_type}) aprobada por admin`,
     });
 
     // Notificación al usuario
@@ -3473,13 +3491,16 @@ export class PaymentOrdersService {
       );
     }
 
-    // Notificar al usuario y al staff del cambio de estado
+    // Notificar al usuario y al staff del cambio de estado (con campos extra para staff)
     this.ordersGateway.emitOrderUpdated(updated.user_id, {
       id: updated.id,
       user_id: updated.user_id,
       status: updated.status,
       flow_type: updated.flow_type,
       updated_at: new Date().toISOString(),
+      exchange_rate_applied: updated.exchange_rate_applied,
+      amount_destination: updated.amount_destination,
+      bridge_source_deposit_instructions: updated.bridge_source_deposit_instructions,
     });
 
     return updated;
@@ -3527,13 +3548,22 @@ export class PaymentOrdersService {
 
     if (error) throw new BadRequestException(error.message);
 
+    const markSentActorRole = await this.getActorRole(actorId);
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
+      role: markSentActorRole,
       action: 'MARK_SENT_PAYMENT_ORDER',
       table_name: 'payment_orders',
       record_id: orderId,
       new_values: { status: 'sent', tx_hash: dto.tx_hash },
+      reason: dto.notes ?? '',
       source: 'admin_panel',
+    });
+
+    await this.supabase.from('activity_logs').insert({
+      user_id: order.user_id,
+      action: 'PAYMENT_ORDER_SENT',
+      description: `Orden ${orderId} (${order.flow_type}) marcada como enviada por admin`,
     });
 
     await this.supabase.from('notifications').insert({
@@ -3591,12 +3621,15 @@ export class PaymentOrdersService {
     // ahora se manejan automáticamente en el webhook transfer.complete (Tramo 1).
     // El completeOrder solo finaliza el estado de la orden tras el payout BOB (Tramo 2).
 
+    const completeActorRole = await this.getActorRole(actorId);
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
+      role: completeActorRole,
       action: 'COMPLETE_PAYMENT_ORDER',
       table_name: 'payment_orders',
       record_id: orderId,
       new_values: { status: 'completed', receipt_url: dto.receipt_url },
+      reason: dto.notes ?? '',
       source: 'admin_panel',
     });
 
@@ -3715,12 +3748,15 @@ export class PaymentOrdersService {
       }
     }
 
+    const failActorRole = await this.getActorRole(actorId);
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
+      role: failActorRole,
       action: 'FAIL_PAYMENT_ORDER',
       table_name: 'payment_orders',
       record_id: orderId,
       new_values: { status: 'failed', failure_reason: dto.reason },
+      reason: dto.reason,
       source: 'admin_panel',
     });
 
@@ -3734,6 +3770,12 @@ export class PaymentOrdersService {
         reference_id: orderId,
       });
     }
+
+    await this.supabase.from('activity_logs').insert({
+      user_id: order.user_id,
+      action: 'PAYMENT_ORDER_FAILED',
+      description: `Orden ${orderId} (${order.flow_type}) marcada como fallida por admin. Motivo: ${dto.reason}`,
+    });
 
     // Notificar al usuario y al staff del cambio de estado
     this.ordersGateway.emitOrderUpdated(updated.user_id, {
