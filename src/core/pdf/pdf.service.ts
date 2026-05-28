@@ -250,26 +250,11 @@ export class PdfService {
 
     // ── world_to_bolivia ─────────────────────────────────
     else if (ft === 'world_to_bolivia') {
-      rows.push(this.row('Proveedor', this.toDisplay(supplier?.name ?? 'No asignado')));
-      const ext = supplier?.external_accounts?.find((a: any) => a.id === order.external_account_id);
-      if (ext) {
-        rows.push(
-          this.row('Banco Destino', this.toDisplay(ext.bank_name)),
-          this.row('Cuenta Destino', this.toDisplay(ext.account_number)),
-          this.row('Titular', this.toDisplay(ext.account_holder_name)),
-        );
-      } else {
-        const bankName = supplier?.bank_details?.bank_name ?? this.readMeta(metadata, 'destination_bank');
-        const acctNum = supplier?.bank_details?.account_number ?? this.readMeta(metadata, 'destination_account');
-        if (bankName || acctNum) {
-          rows.push(
-            this.row('Banco Destino', this.toDisplay(bankName)),
-            this.row('Cuenta Destino', this.toDisplay(acctNum)),
-          );
-        } else {
-          rows.push(this.row('Dirección Destino', this.toDisplay(order.destination_address ?? this.readMeta(metadata, 'destination_address'))));
-        }
-      }
+      rows.push(
+        this.row('Banco Destino', this.toDisplay(order.destination_bank_name)),
+        this.row('Cuenta Destino', this.toDisplay(order.destination_account_number)),
+        this.row('Titular', this.toDisplay(order.destination_account_holder)),
+      );
     }
 
     // ── bolivia_to_wallet / wallet_to_wallet ─────────────
