@@ -1,6 +1,7 @@
 import { Injectable, Inject, NotFoundException, Logger } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
+import { AdminGateway } from '../admin/admin.gateway';
 
 export enum PsavAccountType {
   BANK_BO = 'bank_bo',
@@ -14,6 +15,7 @@ export class PsavService {
 
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
+    private readonly adminGateway: AdminGateway,
   ) {}
 
   /**
@@ -121,6 +123,18 @@ export class PsavService {
       .single();
 
     if (error) throw error;
+
+    // WS: notificar al staff que se creó una cuenta PSAV
+    this.adminGateway.emitPsavConfigUpdated({
+      id: data.id,
+      name: data.name,
+      type: data.type,
+      currency: data.currency,
+      is_active: data.is_active,
+      updated_at: data.updated_at ?? new Date().toISOString(),
+      action: 'created',
+    });
+
     return data;
   }
 
@@ -142,7 +156,7 @@ export class PsavService {
   ) {
     const { data, error } = await this.supabase
       .from('psav_accounts')
-      .update(dto)
+      .update({ ...dto, updated_at: new Date().toISOString() })
       .eq('id', id)
       .select()
       .single();
@@ -150,6 +164,17 @@ export class PsavService {
     if (error || !data) {
       throw new NotFoundException('Cuenta PSAV no encontrada');
     }
+
+    // WS: notificar al staff que se actualizó una cuenta PSAV
+    this.adminGateway.emitPsavConfigUpdated({
+      id: data.id,
+      name: data.name,
+      type: data.type,
+      currency: data.currency,
+      is_active: data.is_active,
+      updated_at: data.updated_at ?? new Date().toISOString(),
+      action: 'updated',
+    });
 
     return data;
   }

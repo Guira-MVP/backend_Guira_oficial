@@ -7,11 +7,13 @@ import {
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
 import { UpdateSettingDto, CreateSettingDto, UpdateCurrencySettingDto, UpdateVaSourceCurrencySettingDto } from './dto/admin.dto';
+import { AdminGateway } from './admin.gateway';
 
 @Injectable()
 export class AdminService {
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
+    private readonly adminGateway: AdminGateway,
   ) {}
 
   // ── APP SETTINGS ──────────────────────────────────────────────────
@@ -74,6 +76,14 @@ export class AdminService {
       source: 'admin_panel',
     });
 
+    // WS: notificar al staff que se actualizó un setting
+    this.adminGateway.emitAppSettingUpdated({
+      key: data.key,
+      value: data.value ?? null,
+      updated_at: data.updated_at ?? new Date().toISOString(),
+      action: 'updated',
+    });
+
     return data;
   }
 
@@ -94,6 +104,14 @@ export class AdminService {
       record_id: null,
       new_values: dto,
       source: 'admin_panel',
+    });
+
+    // WS: notificar al staff que se creó un nuevo setting
+    this.adminGateway.emitAppSettingUpdated({
+      key: data.key,
+      value: data.value ?? null,
+      updated_at: data.updated_at ?? new Date().toISOString(),
+      action: 'created',
     });
 
     return data;

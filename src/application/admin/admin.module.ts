@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AdminService } from './admin.service';
+import { AdminGateway } from './admin.gateway';
 import { ReconciliationService } from './reconciliation.service';
 import {
   AdminController,
@@ -9,7 +10,7 @@ import {
 
 @Module({
   controllers: [AdminController, PublicSettingsController, ActivityController],
-  providers: [AdminService, ReconciliationService],
-  exports: [AdminService, ReconciliationService],
+  providers: [AdminService, AdminGateway, ReconciliationService],
+  exports: [AdminService, AdminGateway, ReconciliationService],
 })
 export class AdminModule {}

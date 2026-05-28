@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
+import { AdminGateway } from '../admin/admin.gateway';
 
 @Injectable()
 export class FeesService {
@@ -14,6 +15,7 @@ export class FeesService {
 
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
+    private readonly adminGateway: AdminGateway,
   ) {}
 
   // ───────────────────────────────────────────────
@@ -71,6 +73,23 @@ export class FeesService {
       .single();
 
     if (error) throw new BadRequestException(error.message);
+
+    // WS: notificar al staff que se creó una nueva tarifa
+    this.adminGateway.emitFeeConfigUpdated({
+      id: data.id,
+      operation_type: data.operation_type ?? null,
+      payment_rail: data.payment_rail ?? null,
+      currency: data.currency ?? null,
+      fee_type: data.fee_type ?? null,
+      fee_percent: data.fee_percent ?? null,
+      fee_fixed: data.fee_fixed ?? null,
+      min_fee: data.min_fee ?? null,
+      max_fee: data.max_fee ?? null,
+      is_active: data.is_active ?? true,
+      updated_at: data.updated_at ?? new Date().toISOString(),
+      action: 'created',
+    });
+
     return data;
   }
 
@@ -95,6 +114,23 @@ export class FeesService {
       .single();
 
     if (error || !data) throw new NotFoundException('Tarifa no encontrada');
+
+    // WS: notificar al staff que se actualizó una tarifa
+    this.adminGateway.emitFeeConfigUpdated({
+      id: data.id,
+      operation_type: data.operation_type ?? null,
+      payment_rail: data.payment_rail ?? null,
+      currency: data.currency ?? null,
+      fee_type: data.fee_type ?? null,
+      fee_percent: data.fee_percent ?? null,
+      fee_fixed: data.fee_fixed ?? null,
+      min_fee: data.min_fee ?? null,
+      max_fee: data.max_fee ?? null,
+      is_active: data.is_active ?? true,
+      updated_at: data.updated_at ?? new Date().toISOString(),
+      action: 'updated',
+    });
+
     return data;
   }
 

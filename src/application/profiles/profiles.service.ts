@@ -9,6 +9,7 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ProfileResponseDto } from './dto/profile-response.dto';
+import { AdminGateway } from '../admin/admin.gateway';
 
 @Injectable()
 export class ProfilesService {
@@ -16,6 +17,7 @@ export class ProfilesService {
 
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
+    private readonly adminGateway: AdminGateway,
   ) {}
 
   // ───────────────────────────────────────────────
@@ -54,6 +56,19 @@ export class ProfilesService {
       .single();
 
     if (error) throw new BadRequestException(error.message);
+
+    // WS: notificar al staff que el perfil fue actualizado
+    this.adminGateway.emitUserUpdated({
+      id: data.id,
+      role: data.role,
+      is_active: data.is_active,
+      is_frozen: data.is_frozen,
+      frozen_reason: data.frozen_reason ?? null,
+      onboarding_status: data.onboarding_status,
+      bridge_customer_id: data.bridge_customer_id ?? null,
+      updated_at: data.updated_at ?? new Date().toISOString(),
+    });
+
     return data as ProfileResponseDto;
   }
 
@@ -231,6 +246,18 @@ export class ProfilesService {
       details: { reason: reason ?? null },
     });
 
+    // WS: notificar al staff que la cuenta fue congelada/descongelada
+    this.adminGateway.emitUserUpdated({
+      id: data.id,
+      role: data.role,
+      is_active: data.is_active,
+      is_frozen: data.is_frozen,
+      frozen_reason: data.frozen_reason ?? null,
+      onboarding_status: data.onboarding_status,
+      bridge_customer_id: data.bridge_customer_id ?? null,
+      updated_at: data.updated_at ?? new Date().toISOString(),
+    });
+
     this.logger.log(
       `Cuenta ${targetId} ${freeze ? 'congelada' : 'descongelada'} por ${actorId}`,
     );
@@ -267,6 +294,18 @@ export class ProfilesService {
       entity_type: 'profile',
       entity_id: targetId,
       details: {},
+    });
+
+    // WS: notificar al staff que la cuenta fue activada/desactivada
+    this.adminGateway.emitUserUpdated({
+      id: data.id,
+      role: data.role,
+      is_active: data.is_active,
+      is_frozen: data.is_frozen,
+      frozen_reason: data.frozen_reason ?? null,
+      onboarding_status: data.onboarding_status,
+      bridge_customer_id: data.bridge_customer_id ?? null,
+      updated_at: data.updated_at ?? new Date().toISOString(),
     });
 
     this.logger.log(
@@ -339,6 +378,18 @@ export class ProfilesService {
       new_values: { role: newRole },
       reason,
       source: 'admin_panel',
+    });
+
+    // WS: notificar al staff que el rol fue cambiado
+    this.adminGateway.emitUserUpdated({
+      id: data.id,
+      role: data.role,
+      is_active: data.is_active,
+      is_frozen: data.is_frozen,
+      frozen_reason: data.frozen_reason ?? null,
+      onboarding_status: data.onboarding_status,
+      bridge_customer_id: data.bridge_customer_id ?? null,
+      updated_at: data.updated_at ?? new Date().toISOString(),
     });
 
     this.logger.log(
