@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Server, Socket } from 'socket.io';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
+import { STAFF_ROLES } from '../../common/constants/roles.constants';
 
 export interface ProfileStatusUpdatedPayload {
   user_id: string;
@@ -46,8 +47,6 @@ export interface OrderUpdatedPayload {
   amount_destination?: number | null;
   bridge_source_deposit_instructions?: Record<string, unknown> | null;
 }
-
-const STAFF_ROLES = ['staff', 'admin', 'super_admin'];
 
 @WebSocketGateway({
   namespace: '/orders',

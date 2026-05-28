@@ -8,6 +8,7 @@ import { BridgeApiClient } from '../bridge/bridge-api.client';
 import { WalletsService } from '../wallets/wallets.service';
 import { ComplianceActionsService } from '../compliance/compliance-actions.service';
 import { OrdersGateway } from '../orders/orders.gateway';
+import { AdminGateway } from '../admin/admin.gateway';
 
 interface SinkEventDto {
   provider: string;
@@ -36,7 +37,57 @@ export class WebhooksService {
     private readonly walletsService: WalletsService,
     private readonly complianceActions: ComplianceActionsService,
     private readonly ordersGateway: OrdersGateway,
+    private readonly adminGateway: AdminGateway,
   ) {}
+
+  // ═══════════════════════════════════════════════
+  //  WS HELPER — Emite hacia usuario Y staff
+  // ═══════════════════════════════════════════════
+
+  /**
+   * Emite en un único paso:
+   *   1. `profile_status_updated` al usuario afectado (namespace /orders)
+   *   2. `user_updated` al room `staff` (namespace /admin)
+   *
+   * Se consulta el perfil actualizado para garantizar que el payload de
+   * `user_updated` refleje el estado real persisitido en DB, no una
+   * estimación construida a mano.
+   */
+  private async emitProfileStatusAndUserUpdate(
+    userId: string,
+    onboardingStatus: string,
+  ): Promise<void> {
+    const now = new Date().toISOString();
+
+    // Notificación inmediata al usuario (no necesita la fila completa)
+    this.ordersGateway.emitProfileStatusUpdated(userId, {
+      user_id: userId,
+      onboarding_status: onboardingStatus,
+      updated_at: now,
+    });
+
+    // Notificación al staff con datos reales de la fila actualizada
+    const { data: profile } = await this.supabase
+      .from('profiles')
+      .select(
+        'id, role, is_active, is_frozen, frozen_reason, onboarding_status, bridge_customer_id, updated_at',
+      )
+      .eq('id', userId)
+      .single();
+
+    if (!profile) return;
+
+    this.adminGateway.emitUserUpdated({
+      id: profile.id,
+      role: profile.role,
+      is_active: profile.is_active,
+      is_frozen: profile.is_frozen,
+      frozen_reason: profile.frozen_reason ?? null,
+      onboarding_status: profile.onboarding_status,
+      bridge_customer_id: profile.bridge_customer_id ?? null,
+      updated_at: profile.updated_at ?? now,
+    });
+  }
 
   // ═══════════════════════════════════════════════
   //  WEBHOOK SINK — Persiste y responde 200
@@ -537,12 +588,8 @@ export class WebhooksService {
         })
         .eq('id', profile.id);
 
-      // WS: notificar al cliente que su cuenta fue aprobada
-      this.ordersGateway.emitProfileStatusUpdated(profile.id, {
-        user_id: profile.id,
-        onboarding_status: 'approved',
-        updated_at: new Date().toISOString(),
-      });
+      // WS: notificar al cliente y al staff que la cuenta fue aprobada
+      await this.emitProfileStatusAndUserUpdate(profile.id, 'approved');
 
       // Inicializar wallets
       await this.initializeWalletsForUser(profile.id, customerId);
@@ -640,12 +687,8 @@ export class WebhooksService {
             .update({ onboarding_status: 'kyc_issues' })
             .eq('id', profile.id);
 
-          // WS: notificar al cliente que hay issues en su verificación
-          this.ordersGateway.emitProfileStatusUpdated(profile.id, {
-            user_id: profile.id,
-            onboarding_status: 'kyc_issues',
-            updated_at: new Date().toISOString(),
-          });
+          // WS: notificar al cliente y al staff que hay issues en su verificación
+          await this.emitProfileStatusAndUserUpdate(profile.id, 'kyc_issues');
 
           // Guardar los issues en el KYC application
           await this.supabase
@@ -789,12 +832,8 @@ export class WebhooksService {
         })
         .eq('id', userId);
 
-      // WS: notificar al cliente que su verificación fue aprobada
-      this.ordersGateway.emitProfileStatusUpdated(userId, {
-        user_id: userId,
-        onboarding_status: 'approved',
-        updated_at: new Date().toISOString(),
-      });
+      // WS: notificar al cliente y al staff que su verificación fue aprobada
+      await this.emitProfileStatusAndUserUpdate(userId, 'approved');
 
       // Inicializar wallets
       await this.initializeWalletsForUser(userId, customerId);
@@ -2291,12 +2330,8 @@ export class WebhooksService {
       })
       .eq('id', userId);
 
-    // WS: notificar al cliente que su cuenta fue aprobada
-    this.ordersGateway.emitProfileStatusUpdated(userId, {
-      user_id: userId,
-      onboarding_status: 'approved',
-      updated_at: new Date().toISOString(),
-    });
+    // WS: notificar al cliente y al staff que su cuenta fue aprobada
+    await this.emitProfileStatusAndUserUpdate(userId, 'approved');
 
     // Inicializar wallets y balances vía Bridge API
     await this.initializeWalletsForUser(userId, bridgeCustomerId);

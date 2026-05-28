@@ -5,9 +5,10 @@ import { BridgeModule } from '../bridge/bridge.module';
 import { WalletsModule } from '../wallets/wallets.module';
 import { ComplianceModule } from '../compliance/compliance.module';
 import { OrdersModule } from '../orders/orders.module';
+import { AdminModule } from '../admin/admin.module';
 
 @Module({
-  imports: [BridgeModule, WalletsModule, forwardRef(() => ComplianceModule), OrdersModule],
+  imports: [BridgeModule, WalletsModule, forwardRef(() => ComplianceModule), OrdersModule, AdminModule],
   controllers: [WebhooksController],
   providers: [WebhooksService],
 })

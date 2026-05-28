@@ -44,6 +44,7 @@ import {
   CompleteOrderDto,
   FailOrderDto,
 } from './dto/admin-order-action.dto';
+import { UpsertPsavAccountDto } from './dto/upsert-psav-account.dto';
 import {
   BRIDGE_RAMP_ON_ROUTES,
   BRIDGE_RAMP_OFF_ROUTES,
@@ -553,12 +554,26 @@ export class AdminPaymentOrdersController {
   @Post('psav-accounts')
   @Roles('admin', 'super_admin')
   @ApiOperation({ summary: 'Crear o actualizar cuenta PSAV (upsert)' })
-  upsertPsavAccount(@Body() dto: Record<string, unknown>) {
+  upsertPsavAccount(@Body() dto: UpsertPsavAccountDto) {
     if (dto.id) {
       const { id, ...rest } = dto;
-      return this.psavService.updateAccount(id as string, rest as any);
+      return this.psavService.updateAccount(id, rest);
     }
-    return this.psavService.createAccount(dto as any);
+    if (!dto.name || !dto.type || !dto.currency) {
+      throw new BadRequestException('name, type y currency son requeridos para crear una cuenta PSAV');
+    }
+    return this.psavService.createAccount({
+      name: dto.name,
+      type: dto.type,
+      currency: dto.currency,
+      bank_name: dto.bank_name,
+      account_number: dto.account_number,
+      routing_number: dto.routing_number,
+      account_holder: dto.account_holder,
+      qr_url: dto.qr_url,
+      crypto_address: dto.crypto_address,
+      crypto_network: dto.crypto_network,
+    });
   }
 
   @Patch('psav-accounts/:id')

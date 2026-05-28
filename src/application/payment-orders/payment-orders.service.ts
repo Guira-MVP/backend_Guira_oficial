@@ -3668,9 +3668,9 @@ export class PaymentOrdersService {
       .single();
 
     if (!order) throw new NotFoundException('Orden no encontrada');
-    if (['completed', 'failed', 'cancelled'].includes(order.status)) {
+    if (['completed', 'failed', 'cancelled', 'swept_external', 'refunded'].includes(order.status)) {
       throw new BadRequestException(
-        `No se puede fallar una orden en estado "${order.status}"`,
+        `No se puede fallar una orden en estado terminal "${order.status}"`,
       );
     }
 
