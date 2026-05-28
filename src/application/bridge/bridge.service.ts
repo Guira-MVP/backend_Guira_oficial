@@ -1120,9 +1120,18 @@ export class BridgeService {
   }
 
   /** Admin: lista TODAS las transferencias Bridge (sin filtro de usuario). */
-  async listAllTransfers(filters?: { status?: string; limit?: number; offset?: number }) {
+  async listAllTransfers(filters?: {
+    status?: string;
+    limit?: number;
+    offset?: number;
+    dateFrom?: string;
+    dateTo?: string;
+    sourceRail?: string;
+    destRail?: string;
+    callerRole?: string;
+  }) {
     const pageSize = Math.min(filters?.limit ?? 100, 200);
-    const pageOffset = filters?.offset ?? 0;
+    const pageOffset = Math.max(filters?.offset ?? 0, 0);
 
     // Query de datos (con JOIN de perfiles)
     let dataQuery = this.supabase
@@ -1141,6 +1150,26 @@ export class BridgeService {
       countQuery = countQuery.eq('status', filters.status);
     }
 
+    if (filters?.dateFrom) {
+      dataQuery = dataQuery.gte('created_at', filters.dateFrom);
+      countQuery = countQuery.gte('created_at', filters.dateFrom);
+    }
+
+    if (filters?.dateTo) {
+      dataQuery = dataQuery.lt('created_at', filters.dateTo);
+      countQuery = countQuery.lt('created_at', filters.dateTo);
+    }
+
+    if (filters?.sourceRail && filters.sourceRail !== 'all') {
+      dataQuery = dataQuery.eq('source_payment_rail', filters.sourceRail);
+      countQuery = countQuery.eq('source_payment_rail', filters.sourceRail);
+    }
+
+    if (filters?.destRail && filters.destRail !== 'all') {
+      dataQuery = dataQuery.eq('destination_payment_rail', filters.destRail);
+      countQuery = countQuery.eq('destination_payment_rail', filters.destRail);
+    }
+
     const [{ data, error }, { count, error: countError }] = await Promise.all([
       dataQuery,
       countQuery,
@@ -1149,12 +1178,22 @@ export class BridgeService {
     if (error) throw new BadRequestException(error.message);
     if (countError) throw new BadRequestException(countError.message);
 
-    const items = (data ?? []).map((t: any) => ({
-      ...t,
-      user_email: t.profiles?.email ?? null,
-      user_full_name: t.profiles?.full_name ?? null,
-      profiles: undefined,
-    }));
+    // bridge_raw_response contiene datos sensibles de Bridge API (cuentas bancarias, hashes).
+    // Solo se incluye en la respuesta para super_admin.
+    const includeSensitive = filters?.callerRole === 'super_admin';
+
+    const items = (data ?? []).map((t: any) => {
+      const item = {
+        ...t,
+        user_email: t.profiles?.email ?? null,
+        user_full_name: t.profiles?.full_name ?? null,
+        profiles: undefined,
+      };
+      if (!includeSensitive) {
+        item.bridge_raw_response = undefined;
+      }
+      return item;
+    });
 
     return {
       items,

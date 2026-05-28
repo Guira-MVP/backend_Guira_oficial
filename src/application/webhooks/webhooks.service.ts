@@ -1993,7 +1993,9 @@ export class WebhooksService {
         }
 
         // Safety net: si no había ledger_entry pending para on-ramps,
-        // crear uno settled directamente para que el trigger actualice balances
+        // crear uno settled directamente para que el trigger actualice balances.
+        // IDEMPOTENCIA: verificar que no exista ya una settled entry antes de insertar
+        // — un webhook retry con settledCount=0 volvería a crear otra entrada sin este check.
         const onRampFlows = [
           'crypto_to_bridge_wallet',
           'fiat_bo_to_bridge_wallet',
@@ -2003,32 +2005,46 @@ export class WebhooksService {
           paymentOrder.wallet_id &&
           onRampFlows.includes(paymentOrder.flow_type)
         ) {
-          // Usar receipt.final_amount (monto real) como fuente primaria.
-          // Fallback: fiat_bo guarda `amount` en BOB — usar amount_destination (USDC) para no sobre-acreditar.
-          // Otros on-ramp guardan `amount` ya en la moneda destino.
-          const fallbackNet =
-            paymentOrder.flow_type === 'fiat_bo_to_bridge_wallet'
-              ? parseFloat(paymentOrder.amount_destination ?? '0')
-              : parseFloat(paymentOrder.amount) -
-                parseFloat(paymentOrder.fee_amount ?? '0');
-          const creditAmount = receiptFinalAmount ?? fallbackNet;
+          const { count: existingSettledCount } = await this.supabase
+            .from('ledger_entries')
+            .select('*', { count: 'exact', head: true })
+            .eq('reference_type', 'payment_order')
+            .eq('reference_id', paymentOrder.id)
+            .eq('type', 'credit')
+            .eq('status', 'settled');
 
-          const creditCurrency = (
-            paymentOrder.destination_currency ?? paymentOrder.currency
-          ).toUpperCase();
-          await this.supabase.from('ledger_entries').insert({
-            wallet_id: paymentOrder.wallet_id,
-            type: 'credit',
-            amount: creditAmount,
-            currency: creditCurrency,
-            status: 'settled',
-            reference_type: 'payment_order',
-            reference_id: paymentOrder.id,
-            description: `On-ramp completado (webhook): ${creditAmount} ${creditCurrency}`,
-          });
-          this.logger.warn(
-            `⚠️ Safety net: ledger_entry credit settled creado para order ${paymentOrder.id} — monto real: ${creditAmount}`,
-          );
+          if ((existingSettledCount ?? 0) > 0) {
+            this.logger.warn(
+              `⚠️ Safety net omitida (idempotente): ya existe ledger_entry credit settled para order ${paymentOrder.id}`,
+            );
+          } else {
+            // Usar receipt.final_amount (monto real) como fuente primaria.
+            // Fallback: fiat_bo guarda `amount` en BOB — usar amount_destination (USDC) para no sobre-acreditar.
+            // Otros on-ramp guardan `amount` ya en la moneda destino.
+            const fallbackNet =
+              paymentOrder.flow_type === 'fiat_bo_to_bridge_wallet'
+                ? parseFloat(paymentOrder.amount_destination ?? '0')
+                : parseFloat(paymentOrder.amount) -
+                  parseFloat(paymentOrder.fee_amount ?? '0');
+            const creditAmount = receiptFinalAmount ?? fallbackNet;
+
+            const creditCurrency = (
+              paymentOrder.destination_currency ?? paymentOrder.currency
+            ).toUpperCase();
+            await this.supabase.from('ledger_entries').insert({
+              wallet_id: paymentOrder.wallet_id,
+              type: 'credit',
+              amount: creditAmount,
+              currency: creditCurrency,
+              status: 'settled',
+              reference_type: 'payment_order',
+              reference_id: paymentOrder.id,
+              description: `On-ramp completado (webhook): ${creditAmount} ${creditCurrency}`,
+            });
+            this.logger.warn(
+              `⚠️ Safety net: ledger_entry credit settled creado para order ${paymentOrder.id} — monto real: ${creditAmount}`,
+            );
+          }
         }
 
         // Notificación específica para on-ramp fiat_bo (el canal genérico de bridge_transfers
@@ -2065,30 +2081,48 @@ export class WebhooksService {
         .eq('bridge_transfer_id', transfer.id)
         .eq('status', 'pending');
 
-      // 4. INSERT certificate
-      const certNumber = `CERT-${Date.now()}-${transfer.id.slice(0, 8)}`;
-      await this.supabase.from('certificates').insert({
-        user_id: transfer.user_id,
-        subject_type: 'bridge_transfer',
-        subject_id: transfer.id,
-        certificate_number: certNumber,
-        amount: transfer.amount,
-        currency: (data?.destination_currency as string) ?? 'usd',
-        issued_at: new Date().toISOString(),
-        metadata: receipt ?? {},
-      });
+      // 4. INSERT certificate — idempotente: verificar que no exista ya uno para este transfer.
+      //    Un webhook retry crearía un certificado duplicado sin este check.
+      const { count: existingCertCount } = await this.supabase
+        .from('certificates')
+        .select('*', { count: 'exact', head: true })
+        .eq('subject_type', 'bridge_transfer')
+        .eq('subject_id', transfer.id);
 
-      // 5. Notificación genérica — se omite para fiat_bo_to_bridge_wallet porque
-      // esa orden ya emite su propia notificación específica en el bloque de paymentOrder.
-      if (paymentOrder?.flow_type !== 'fiat_bo_to_bridge_wallet') {
-        await this.supabase.from('notifications').insert({
+      if ((existingCertCount ?? 0) === 0) {
+        const certNumber = `CERT-${Date.now()}-${transfer.id.slice(0, 8)}`;
+        await this.supabase.from('certificates').insert({
           user_id: transfer.user_id,
-          type: 'financial',
-          title: 'Pago Completado',
-          message: `Tu pago de $${transfer.amount} ha sido completado exitosamente`,
-          reference_type: 'bridge_transfer',
-          reference_id: transfer.id,
+          subject_type: 'bridge_transfer',
+          subject_id: transfer.id,
+          certificate_number: certNumber,
+          amount: transfer.amount,
+          currency: (data?.destination_currency as string) ?? 'usd',
+          issued_at: new Date().toISOString(),
+          metadata: receipt ?? {},
         });
+      }
+
+      // 5. Notificación genérica — idempotente: solo insertar si no existe ya una para este transfer.
+      //    Se omite también para fiat_bo_to_bridge_wallet (esa orden emite su propia notificación).
+      if (paymentOrder?.flow_type !== 'fiat_bo_to_bridge_wallet') {
+        const { count: existingNotifCount } = await this.supabase
+          .from('notifications')
+          .select('*', { count: 'exact', head: true })
+          .eq('reference_type', 'bridge_transfer')
+          .eq('reference_id', transfer.id)
+          .eq('type', 'financial');
+
+        if ((existingNotifCount ?? 0) === 0) {
+          await this.supabase.from('notifications').insert({
+            user_id: transfer.user_id,
+            type: 'financial',
+            title: 'Pago Completado',
+            message: `Tu pago de $${transfer.amount} ha sido completado exitosamente`,
+            reference_type: 'bridge_transfer',
+            reference_id: transfer.id,
+          });
+        }
       }
 
       // 6. Activity log
@@ -2119,7 +2153,28 @@ export class WebhooksService {
     const bridgeTransferId = data?.id as string;
     if (!bridgeTransferId) throw new Error('transfer.failed sin transfer ID');
 
-    // 1. UPDATE bridge_transfers
+    // 1. Leer estado actual ANTES del UPDATE para detectar procesamiento duplicado.
+    //    Si transfer.complete ya fue procesado, no liberar el saldo reservado de nuevo
+    //    (doble liberación produce reserved_amount negativo).
+    const { data: existingTransfer } = await this.supabase
+      .from('bridge_transfers')
+      .select('id, user_id, payout_request_id, amount, destination_currency, status')
+      .eq('bridge_transfer_id', bridgeTransferId)
+      .maybeSingle();
+
+    if (existingTransfer?.status === 'completed') {
+      this.logger.warn(
+        `⚠️ handleTransferFailed: transfer ${bridgeTransferId} ya tiene status='completed' — ` +
+          `omitiendo liberación de saldo para evitar double-release. Solo actualizando bridge_state.`,
+      );
+      await this.supabase
+        .from('bridge_transfers')
+        .update({ bridge_state: 'failed', bridge_raw_response: data, updated_at: new Date().toISOString() })
+        .eq('bridge_transfer_id', bridgeTransferId);
+      return;
+    }
+
+    // 1b. UPDATE bridge_transfers
     const { data: transfer } = await this.supabase
       .from('bridge_transfers')
       .update({

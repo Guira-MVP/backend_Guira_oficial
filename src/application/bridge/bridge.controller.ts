@@ -218,11 +218,23 @@ export class AdminBridgeController {
     @Query('status') status?: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('sourceRail') sourceRail?: string,
+    @Query('destRail') destRail?: string,
+    @CurrentUser() actor?: AuthenticatedUser,
   ) {
+    const parsedLimit = limit ? parseInt(limit, 10) : undefined;
+    const parsedOffset = offset ? parseInt(offset, 10) : undefined;
     return this.bridgeService.listAllTransfers({
       status,
-      limit: limit ? parseInt(limit, 10) : undefined,
-      offset: offset ? parseInt(offset, 10) : undefined,
+      limit: parsedLimit != null && !isNaN(parsedLimit) ? parsedLimit : undefined,
+      offset: parsedOffset != null && !isNaN(parsedOffset) ? parsedOffset : undefined,
+      dateFrom,
+      dateTo,
+      sourceRail,
+      destRail,
+      callerRole: actor?.profile?.role,
     });
   }
 
