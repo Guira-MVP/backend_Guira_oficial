@@ -5,9 +5,10 @@ import {
 } from './wallets.controller';
 import { WalletsService } from './wallets.service';
 import { BridgeModule } from '../bridge/bridge.module';
+import { OrdersModule } from '../orders/orders.module';
 
 @Module({
-  imports: [BridgeModule],
+  imports: [BridgeModule, OrdersModule],
   controllers: [WalletsController, AdminWalletsController],
   providers: [WalletsService],
   exports: [WalletsService],

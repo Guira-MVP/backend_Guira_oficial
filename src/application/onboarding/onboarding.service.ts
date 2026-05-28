@@ -13,6 +13,7 @@ import { CreatePersonDto } from './dto/create-person.dto';
 import { CreateBusinessDto } from './dto/create-business.dto';
 import { CreateDirectorDto, CreateUboDto } from './dto/create-director-ubo.dto';
 import { BridgeApiClient } from '../bridge/bridge-api.client';
+import { OrdersGateway } from '../orders/orders.gateway';
 import * as crypto from 'crypto';
 
 const ALLOWED_MIME_TYPES = [
@@ -31,6 +32,7 @@ export class OnboardingService {
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly bridgeApiClient: BridgeApiClient,
+    private readonly ordersGateway: OrdersGateway,
   ) {}
 
   // ───────────────────────────────────────────────
@@ -126,6 +128,13 @@ export class OnboardingService {
       .from('profiles')
       .update({ onboarding_status: 'kyc_started' })
       .eq('id', userId);
+
+    // WS: notificar al cliente que su estado de onboarding cambió
+    this.ordersGateway.emitProfileStatusUpdated(userId, {
+      user_id: userId,
+      onboarding_status: 'kyc_started',
+      updated_at: new Date().toISOString(),
+    });
 
     return data;
   }
@@ -247,6 +256,13 @@ export class OnboardingService {
       .from('profiles')
       .update({ onboarding_status: 'in_review' })
       .eq('id', userId);
+
+    // WS: notificar al cliente que su solicitud KYC está en revisión
+    this.ordersGateway.emitProfileStatusUpdated(userId, {
+      user_id: userId,
+      onboarding_status: 'in_review',
+      updated_at: new Date().toISOString(),
+    });
 
     // La creación del compliance_review es manejada por el trigger de base de datos 'on_kyc_submitted'.
     // Solo actualizamos la prioridad si es necesario (el trigger la crea como 'normal' por defecto).
@@ -398,6 +414,13 @@ export class OnboardingService {
       .update({ onboarding_status: 'kyb_started' })
       .eq('id', userId);
 
+    // WS: notificar al cliente que su proceso KYB inició
+    this.ordersGateway.emitProfileStatusUpdated(userId, {
+      user_id: userId,
+      onboarding_status: 'kyb_started',
+      updated_at: new Date().toISOString(),
+    });
+
     return data;
   }
 
@@ -486,6 +509,13 @@ export class OnboardingService {
       .from('profiles')
       .update({ onboarding_status: 'in_review' })
       .eq('id', userId);
+
+    // WS: notificar al cliente que su solicitud KYB está en revisión
+    this.ordersGateway.emitProfileStatusUpdated(userId, {
+      user_id: userId,
+      onboarding_status: 'in_review',
+      updated_at: new Date().toISOString(),
+    });
 
     // La creación del compliance_review es manejada por el trigger de base de datos 'on_kyb_submitted'.
 

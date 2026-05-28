@@ -11,6 +11,20 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Server, Socket } from 'socket.io';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
 
+export interface ProfileStatusUpdatedPayload {
+  user_id: string;
+  onboarding_status: string;
+  updated_at: string;
+}
+
+export interface WalletUpdatedPayload {
+  user_id: string;
+  currency: string;
+  amount: number;
+  available_amount: number;
+  updated_at: string;
+}
+
 export interface OrderCreatedPayload {
   id: string;
   user_id: string;
@@ -125,6 +139,22 @@ export class OrdersGateway
     this.server.to('staff').emit('order_updated', payload);
     this.logger.log(
       `WS emitido: order_updated para user:${userId} (id: ${payload.id}, status: ${payload.status})`,
+    );
+  }
+
+  /** Emite cambio de estado de onboarding → solo al usuario dueño. */
+  emitProfileStatusUpdated(userId: string, payload: ProfileStatusUpdatedPayload) {
+    this.server.to(`user:${userId}`).emit('profile_status_updated', payload);
+    this.logger.log(
+      `WS emitido: profile_status_updated para user:${userId} (status: ${payload.onboarding_status})`,
+    );
+  }
+
+  /** Emite actualización de balance → solo al usuario dueño. */
+  emitWalletUpdated(userId: string, payload: WalletUpdatedPayload) {
+    this.server.to(`user:${userId}`).emit('wallet_updated', payload);
+    this.logger.log(
+      `WS emitido: wallet_updated para user:${userId} (${payload.currency}: ${payload.amount})`,
     );
   }
 }

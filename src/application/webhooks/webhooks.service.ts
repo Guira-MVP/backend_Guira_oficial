@@ -537,6 +537,13 @@ export class WebhooksService {
         })
         .eq('id', profile.id);
 
+      // WS: notificar al cliente que su cuenta fue aprobada
+      this.ordersGateway.emitProfileStatusUpdated(profile.id, {
+        user_id: profile.id,
+        onboarding_status: 'approved',
+        updated_at: new Date().toISOString(),
+      });
+
       // Inicializar wallets
       await this.initializeWalletsForUser(profile.id, customerId);
 
@@ -632,6 +639,13 @@ export class WebhooksService {
             .from('profiles')
             .update({ onboarding_status: 'kyc_issues' })
             .eq('id', profile.id);
+
+          // WS: notificar al cliente que hay issues en su verificación
+          this.ordersGateway.emitProfileStatusUpdated(profile.id, {
+            user_id: profile.id,
+            onboarding_status: 'kyc_issues',
+            updated_at: new Date().toISOString(),
+          });
 
           // Guardar los issues en el KYC application
           await this.supabase
@@ -775,6 +789,13 @@ export class WebhooksService {
         })
         .eq('id', userId);
 
+      // WS: notificar al cliente que su verificación fue aprobada
+      this.ordersGateway.emitProfileStatusUpdated(userId, {
+        user_id: userId,
+        onboarding_status: 'approved',
+        updated_at: new Date().toISOString(),
+      });
+
       // Inicializar wallets
       await this.initializeWalletsForUser(userId, customerId);
 
@@ -876,7 +897,7 @@ export class WebhooksService {
     const { data: va, error: vaErr } = await this.supabase
       .from('bridge_virtual_accounts')
       .select(
-        'id, user_id, destination_wallet_id, source_currency, developer_fee_percent, is_external_sweep, destination_address, external_destination_label',
+        'id, user_id, destination_wallet_id, source_currency, destination_currency, developer_fee_percent, is_external_sweep, destination_address, external_destination_label',
       )
       .eq('bridge_virtual_account_id', vaId)
       .single();
@@ -977,7 +998,8 @@ export class WebhooksService {
         amount,
         fee_amount: feeAmount,
         net_amount: netAmount,
-        currency: ((va.source_currency as string) ?? currency).toUpperCase(),
+        currency: ((va.destination_currency as string) ?? 'USDC').toUpperCase(),
+        source_currency: ((va.source_currency as string) ?? currency).toUpperCase(),
         sender_name: senderName,
         bridge_event_id: bridgeEventId,
         deposit_id: depositId,
@@ -2268,6 +2290,13 @@ export class WebhooksService {
         bridge_customer_id: bridgeCustomerId,
       })
       .eq('id', userId);
+
+    // WS: notificar al cliente que su cuenta fue aprobada
+    this.ordersGateway.emitProfileStatusUpdated(userId, {
+      user_id: userId,
+      onboarding_status: 'approved',
+      updated_at: new Date().toISOString(),
+    });
 
     // Inicializar wallets y balances vía Bridge API
     await this.initializeWalletsForUser(userId, bridgeCustomerId);

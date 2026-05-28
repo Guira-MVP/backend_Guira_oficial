@@ -9,6 +9,7 @@ import { ConfigService } from '@nestjs/config';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
 import { BridgeApiClient } from '../bridge/bridge-api.client';
+import { OrdersGateway } from '../orders/orders.gateway';
 
 @Injectable()
 export class WalletsService {
@@ -18,6 +19,7 @@ export class WalletsService {
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly config: ConfigService,
     private readonly bridgeApi: BridgeApiClient,
+    private readonly ordersGateway: OrdersGateway,
   ) {}
 
   // ───────────────────────────────────────────────
@@ -328,13 +330,12 @@ export class WalletsService {
 
   /**
    * Inicializa filas de balance con valor 0 para las monedas indicadas.
-   * Siempre incluye USD (fiat base).
    */
   async initializeBalances(
     userId: string,
     currencies: string[],
   ): Promise<void> {
-    const uniqueCurrencies = [...new Set([...currencies, 'USD'])];
+    const uniqueCurrencies = [...new Set(currencies)];
 
     for (const currency of uniqueCurrencies) {
       // Verificar si ya existe
@@ -430,6 +431,15 @@ export class WalletsService {
         new_amount: newAmount,
         reason,
       },
+    });
+
+    // WS: notificar al cliente que su balance fue ajustado
+    this.ordersGateway.emitWalletUpdated(targetUserId, {
+      user_id: targetUserId,
+      currency: upperCurrency,
+      amount: newAmount,
+      available_amount: newAvailable,
+      updated_at: new Date().toISOString(),
     });
 
     this.logger.log(
