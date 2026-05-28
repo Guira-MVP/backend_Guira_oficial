@@ -82,6 +82,18 @@ export class OrderReviewService {
 
     if (data && data.length > 0) {
       this.logger.log(`⏰ ${data.length} solicitudes de revisión expiradas automáticamente`);
+
+      const auditRows = data.map((row: { id: string }) => ({
+        performed_by: null,
+        action: 'EXPIRE_REVIEW_REQUEST',
+        table_name: 'order_review_requests',
+        new_values: { id: row.id, status: 'expired' },
+        source: 'cron',
+      }));
+      const { error: auditError } = await this.supabase.from('audit_logs').insert(auditRows);
+      if (auditError) {
+        this.logger.error(`Error registrando expiración en audit_logs: ${auditError.message}`);
+      }
     }
   }
 
@@ -111,7 +123,8 @@ export class OrderReviewService {
       .eq('key', 'ORDER_REVIEW_EXPIRY_HOURS')
       .single();
 
-    const expiryHours = parseInt(setting?.value ?? '48', 10);
+    const parsedHours = parseInt(setting?.value ?? '48', 10);
+    const expiryHours = isNaN(parsedHours) || parsedHours <= 0 ? 48 : parsedHours;
     const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000).toISOString();
 
     const { data, error } = await this.supabase
@@ -312,10 +325,14 @@ export class OrderReviewService {
 
   // Vincula el payment_order_id generado tras aprobar
   async linkPaymentOrder(reviewId: string, paymentOrderId: string): Promise<void> {
-    await this.supabase
+    const { error } = await this.supabase
       .from('order_review_requests')
       .update({ payment_order_id: paymentOrderId })
       .eq('id', reviewId);
+
+    if (error) {
+      throw new BadRequestException(`Error vinculando expediente a la revisión: ${error.message}`);
+    }
   }
 
   // ── Rechazar (staff) ──────────────────────────────────────────
@@ -352,15 +369,19 @@ export class OrderReviewService {
       source: 'admin_panel',
     });
 
-    await this.notificationsService.sendNotification({
-      userId: updated.user_id,
-      type: NotificationType.FINANCIAL,
-      title: 'Expediente rechazado',
-      message: `Tu solicitud de ${updated.flow_type.replace(/_/g, ' ')} por ${updated.amount} ${updated.currency} fue rechazada. Motivo: ${staffNotes}`,
-      link: '/panel/pagos',
-      referenceType: 'order_review_request',
-      referenceId: reviewId,
-    });
+    try {
+      await this.notificationsService.sendNotification({
+        userId: updated.user_id,
+        type: NotificationType.FINANCIAL,
+        title: 'Expediente rechazado',
+        message: `Tu solicitud de ${updated.flow_type.replace(/_/g, ' ')} por ${updated.amount} ${updated.currency} fue rechazada. Motivo: ${staffNotes}`,
+        link: '/panel/pagos',
+        referenceType: 'order_review_request',
+        referenceId: reviewId,
+      });
+    } catch (notifErr) {
+      this.logger.error(`Error notificando rechazo al cliente (review ${reviewId}): ${(notifErr as Error)?.message}`);
+    }
 
     this.logger.log(`❌ Review request ${reviewId} rechazada por ${actorId}`);
     return updated as OrderReviewRequest;

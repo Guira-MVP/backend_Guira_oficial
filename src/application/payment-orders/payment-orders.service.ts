@@ -235,14 +235,18 @@ export class PaymentOrdersService {
     const { min_usd: min, max_usd: max } =
       await this.getPaymentLimits(flowType, userId);
 
-    // BOB se convierte con el tipo de cambio actual.
-    // Stablecoins (USDC, USDT, USDB, PYUSD, EURC) se tratan como ~1:1 USD.
+    // BOB y EURC se convierten con el tipo de cambio actual.
+    // Stablecoins USD (USDC, USDT, USDB, PYUSD) se tratan como 1:1 USD.
+    // EURC es 1:1 EUR, no USD — se convierte explícitamente.
     let amountUsd = amount;
     const upperCurrency = (currency ?? 'USD').toUpperCase();
 
     if (upperCurrency === 'BOB') {
       const rateData = await this.exchangeRatesService.getRate('BOB_USD');
       amountUsd = parseFloat((amount / rateData.effective_rate).toFixed(2));
+    } else if (upperCurrency === 'EURC') {
+      const rateData = await this.exchangeRatesService.getRate('EUR_USD');
+      amountUsd = parseFloat((amount * rateData.effective_rate).toFixed(2));
     }
 
     if (amountUsd < min) {
@@ -3994,11 +3998,18 @@ export class PaymentOrdersService {
         order = await this.createWalletRampOrderBypassLimit(review.user_id, payload as unknown as CreateWalletRampOrderDto);
       }
     } catch (err) {
-      // Si la creación falla, revertir la aprobación a pending_review para que pueda reintentarse
+      // Revertir la aprobación a pending_review para que pueda reintentarse
       await this.supabase
         .from('order_review_requests')
         .update({ status: 'pending_review', reviewed_by: null, reviewed_at: null })
         .eq('id', reviewId);
+      await this.supabase.from('audit_logs').insert({
+        performed_by: actorId,
+        action: 'APPROVE_REVIEW_ROLLBACK',
+        table_name: 'order_review_requests',
+        new_values: { id: reviewId, status: 'pending_review', error: (err as Error)?.message ?? String(err) },
+        source: 'admin_panel',
+      });
       throw err;
     }
 
@@ -4050,6 +4061,8 @@ export class PaymentOrdersService {
         return this.createBridgeWalletToCrypto(userId, dto);
       case WalletRampFlowType.BRIDGE_WALLET_TO_FIAT_US:
         return this.createBridgeWalletToFiatUs(userId, dto);
+      case WalletRampFlowType.WALLET_TO_FIAT:
+        return this.createWalletToFiat(userId, dto);
       default:
         throw new BadRequestException(`Flujo no soportado: ${dto.flow_type}`);
     }
