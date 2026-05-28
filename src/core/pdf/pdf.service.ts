@@ -35,7 +35,7 @@ const FLOW_LABELS: Record<string, string> = {
   bolivia_to_world: 'Bolivia - Exterior',
   bolivia_to_wallet: 'Bolivia - Wallet Crypto',
   wallet_to_wallet: 'Wallet - Wallet (Crypto)',
-  world_to_bolivia: 'Exterior - Bolivia',
+  world_to_bolivia: 'Exterior a Bolivia',
   va_deposit: 'Deposito Cuenta Virtual',
 };
 

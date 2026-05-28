@@ -69,7 +69,7 @@ const STATUS_LABELS: Record<string, string> = {
 const FLOW_LABELS: Record<string, string> = {
   bolivia_to_world: 'Bolivia → Mundo',
   bolivia_to_wallet: 'Bolivia → Wallet',
-  world_to_bolivia: 'Mundo → Bolivia',
+  world_to_bolivia: 'Exterior a Bolivia',
   world_to_wallet: 'Mundo → Wallet',
   wallet_to_wallet: 'Wallet → Wallet',
   wallet_to_fiat: 'Wallet → Fiat',
