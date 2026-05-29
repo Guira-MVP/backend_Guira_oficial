@@ -73,6 +73,40 @@ export class PaymentOrdersService {
     return data?.role ?? 'unknown';
   }
 
+  private parseLiquidationFeePercent(
+    value: unknown,
+    bridgeLiquidationAddressId: string,
+  ): number {
+    if (value === null || value === undefined || value === '') {
+      throw new BadRequestException(
+        `La liquidation address "${bridgeLiquidationAddressId}" no tiene developer_fee_percent explícito. Actualízala en Bridge antes de crear expedientes para evitar discrepancias contables.`,
+      );
+    }
+
+    const percent =
+      typeof value === 'number' ? value : parseFloat(String(value));
+
+    if (!Number.isFinite(percent) || percent < 0 || percent >= 100) {
+      throw new BadRequestException(
+        `La liquidation address "${bridgeLiquidationAddressId}" tiene developer_fee_percent inválido: ${String(value)}.`,
+      );
+    }
+
+    return percent;
+  }
+
+  private calculateFeeFromLiquidationAddress(
+    amount: number,
+    developerFeePercent: number,
+  ): { fee_amount: number; net_amount: number } {
+    const amountCents = Math.round(amount * 100);
+    const feeCents = Math.round((amountCents * developerFeePercent) / 100);
+    return {
+      fee_amount: feeCents / 100,
+      net_amount: (amountCents - feeCents) / 100,
+    };
+  }
+
   // ═══════════════════════════════════════════════
   //  RATE LIMITS & VALIDATION
   // ═══════════════════════════════════════════════
@@ -408,6 +442,27 @@ export class PaymentOrdersService {
       );
     }
 
+    const { data: liquidationAddressForFee } = await this.supabase
+      .from('bridge_liquidation_addresses')
+      .select('bridge_liquidation_address_id, developer_fee_percent')
+      .eq('user_id', userId)
+      .eq(
+        'bridge_liquidation_address_id',
+        supplier.bridge_liquidation_address_id,
+      )
+      .single();
+
+    if (!liquidationAddressForFee) {
+      throw new BadRequestException(
+        `Liquidation address "${supplier.bridge_liquidation_address_id}" no encontrada en la base de datos.`,
+      );
+    }
+
+    const liquidationFeePercent = this.parseLiquidationFeePercent(
+      liquidationAddressForFee.developer_fee_percent,
+      liquidationAddressForFee.bridge_liquidation_address_id,
+    );
+
     const fullAccountNumber =
       supplier?.bank_details?.account_number ??
       extAccount.account_last_4 ??
@@ -422,12 +477,11 @@ export class PaymentOrdersService {
     const depositInstructions =
       this.psavService.formatDepositInstructions(psavAccount);
 
-    // Calcular fee
-    const { fee_amount, net_amount } = await this.feesService.calculateFee(
-      userId,
-      'interbank_bo_out',
-      'psav',
+    // El fee de este flujo debe respetar el porcentaje congelado en la
+    // liquidation address, no el fees_config global actual.
+    const { fee_amount, net_amount } = this.calculateFeeFromLiquidationAddress(
       dto.amount,
+      liquidationFeePercent,
     );
 
     // Obtener tipo de cambio estimado
@@ -445,6 +499,10 @@ export class PaymentOrdersService {
         currency: 'BOB',
         fee_amount,
         net_amount,
+        fee_source: 'liquidation_address',
+        bridge_liquidation_address_id:
+          liquidationAddressForFee.bridge_liquidation_address_id,
+        bridge_liquidation_fee_percent: liquidationFeePercent,
         destination_type: 'external_account',
         destination_currency: destinationCurrency,
         external_account_id: dto.external_account_id,
@@ -517,6 +575,9 @@ export class PaymentOrdersService {
       );
     }
 
+    // ── 1b. Verificar que la moneda fuente esté habilitada en currency_settings ──
+    await this.assertCurrencyActive(dto.source_currency!);
+
     // ── 2. Validar ruta Bridge (src_net/src_cur → dst_net/dst_cur) ──
     if (
       !isValidTransferRoute(
@@ -582,6 +643,7 @@ export class PaymentOrdersService {
         net_amount,
         source_address: dto.source_address,
         source_network: dto.source_network,
+        source_currency: dto.source_currency?.toUpperCase(),
         destination_type: 'crypto_address',
         destination_address: destAddress,
         destination_network: destNetwork,
@@ -652,6 +714,8 @@ export class PaymentOrdersService {
         bridge_state: (bridgeResult?.state as string) ?? 'awaiting_funds',
         status: 'pending',
         source_payment_rail: dto.source_network,
+        source_currency: dto.source_currency?.toLowerCase(),
+        developer_fee_percent: feePercent,
         destination_payment_rail: destNetwork,
         destination_currency: destCurrency.toUpperCase(),
         bridge_raw_response: bridgeResult,
@@ -710,6 +774,27 @@ export class PaymentOrdersService {
       );
     }
 
+    const { data: liquidationAddressForFee } = await this.supabase
+      .from('bridge_liquidation_addresses')
+      .select('bridge_liquidation_address_id, developer_fee_percent')
+      .eq('user_id', userId)
+      .eq(
+        'bridge_liquidation_address_id',
+        supplier.bridge_liquidation_address_id,
+      )
+      .single();
+
+    if (!liquidationAddressForFee) {
+      throw new BadRequestException(
+        `Liquidation address "${supplier.bridge_liquidation_address_id}" no encontrada en la base de datos.`,
+      );
+    }
+
+    const liquidationFeePercent = this.parseLiquidationFeePercent(
+      liquidationAddressForFee.developer_fee_percent,
+      liquidationAddressForFee.bridge_liquidation_address_id,
+    );
+
     const psavAccount = await this.psavService.getDepositAccount(
       'bank_bo',
       'BOB',
@@ -717,11 +802,9 @@ export class PaymentOrdersService {
     const depositInstructions =
       this.psavService.formatDepositInstructions(psavAccount);
 
-    const { fee_amount, net_amount } = await this.feesService.calculateFee(
-      userId,
-      'interbank_bo_wallet',
-      'psav',
+    const { fee_amount, net_amount } = this.calculateFeeFromLiquidationAddress(
       dto.amount,
+      liquidationFeePercent,
     );
 
     const rateData = await this.exchangeRatesService.getRate('BOB_USD');
@@ -751,6 +834,10 @@ export class PaymentOrdersService {
         currency: 'BOB',
         fee_amount,
         net_amount,
+        fee_source: 'liquidation_address',
+        bridge_liquidation_address_id:
+          liquidationAddressForFee.bridge_liquidation_address_id,
+        bridge_liquidation_fee_percent: liquidationFeePercent,
         destination_type: 'crypto_address',
         destination_address: dto.destination_address,
         destination_network: dto.destination_network,
@@ -1525,6 +1612,11 @@ export class PaymentOrdersService {
       );
     }
 
+    // ── Validar que la moneda de ORIGEN esté habilitada en currency_settings ──
+    // createWalletRampOrder solo verifica destination_currency; para este flujo
+    // también bloqueamos el token fuente si está deshabilitado en la plataforma.
+    await this.assertCurrencyActive(resolvedSourceCurrency);
+
     // ── Validar compatibilidad de ruta contra catálogo Bridge ──
     if (
       !isValidOnRampSourceForDest(
@@ -1618,7 +1710,8 @@ export class PaymentOrdersService {
         net_amount: net_amount,
         bridge_state: (bridgeTransfer.state as string) ?? 'payment_submitted',
         status: 'pending',
-        source_payment_rail: dto.source_network,
+        source_payment_rail: resolvedSourceNetwork,
+        source_currency: resolvedSourceCurrency.toUpperCase(),
         destination_payment_rail: wallet.network,
         destination_currency: resolvedDestCurrency.toUpperCase(),
         bridge_raw_response: bridgeTransfer,
@@ -1661,6 +1754,8 @@ export class PaymentOrdersService {
     if (error) throw new BadRequestException(error.message);
 
     // 4. Crear ledger entry (credit, pending — se liquida con webhook)
+    // NOTA: amount arranca en 0 porque flexible_amount=true; se actualiza con
+    // receipt.final_amount cuando Bridge confirma la transferencia (handleTransferComplete).
     await this.supabase.from('ledger_entries').insert({
       wallet_id: wallet.id,
       type: 'credit',
@@ -1670,7 +1765,7 @@ export class PaymentOrdersService {
       reference_type: 'payment_order',
       reference_id: order.id,
       bridge_transfer_id: (bridgeTransfer.id as string) ?? null,
-      description: `On-ramp crypto: ${net_amount} ${resolvedDestCurrency.toUpperCase()} desde ${dto.source_address ?? 'cualquier dirección'} (${dto.source_network})`,
+      description: `On-ramp crypto (flexible): ${resolvedSourceCurrency.toUpperCase()} (${resolvedSourceNetwork}) → ${resolvedDestCurrency.toUpperCase()} · Bridge Wallet · monto real confirmado por webhook`,
     });
 
     this.logger.log(
@@ -1981,6 +2076,22 @@ export class PaymentOrdersService {
       );
     }
 
+    // Fix #5: Validar red y ruta off-ramp antes de reservar saldo ni tocar estado.
+    // Evita que redes en ALLOWED_NETWORKS pero sin rutas (ej: 'base') lleguen al try block,
+    // preveniendo órdenes 'failed' por validación y el ciclo innecesario reserve→release.
+    const destinationRailPre = (dto.destination_network ?? '').toLowerCase().trim();
+    if (!ALLOWED_NETWORKS.includes(destinationRailPre as any)) {
+      throw new BadRequestException(
+        `Red de destino inválida: "${dto.destination_network}". Redes permitidas: ${ALLOWED_NETWORKS.join(', ')}`,
+      );
+    }
+    const destCurrencyPre = (dto.destination_currency ?? sourceCurrency).toLowerCase();
+    if (!isValidOffRampRoute(sourceCurrency.toLowerCase(), destinationRailPre, destCurrencyPre)) {
+      throw new BadRequestException(
+        `Ruta off-ramp no soportada: ${sourceCurrency} → ${destinationRailPre} → ${destCurrencyPre.toUpperCase()}. Verifica las combinaciones válidas en el catálogo Bridge.`,
+      );
+    }
+
     // Bloquear si ya existe un off-ramp crypto activo hacia la misma red
     await this.assertNoConflictingCryptoOffRamp(
       userId,
@@ -2006,12 +2117,13 @@ export class PaymentOrdersService {
         requires_psav: false,
         amount: dto.amount,
         currency: sourceCurrency,
+        source_currency: sourceCurrency,        // Fix #1: requerido por idx_po_bw2c_active_per_src_dest y assertNoConflictingCryptoOffRamp
         fee_amount,
         net_amount,
         destination_type: 'crypto_address',
         destination_address: dto.destination_address,
         destination_network: dto.destination_network,
-        destination_currency: dto.destination_currency ?? sourceCurrency,
+        destination_currency: (dto.destination_currency ?? sourceCurrency).toUpperCase(), // Fix #4: siempre uppercase
         exchange_rate_applied: 1.0,
         business_purpose: dto.business_purpose,
         supporting_document_url: dto.supporting_document_url,
@@ -2924,9 +3036,11 @@ export class PaymentOrdersService {
     }
 
     // 1. Manejar ledger entries 'pending' de esta orden
+    // NOTA: el check constraint de ledger_entries solo acepta: pending | settled | failed | reversed
+    // 'reversed' es el estado correcto para entradas canceladas por el usuario (no error técnico).
     const { data: pendingLedgers } = await this.supabase
       .from('ledger_entries')
-      .update({ status: 'cancelled' })
+      .update({ status: 'reversed' })
       .eq('reference_type', 'payment_order')
       .eq('reference_id', orderId)
       .eq('status', 'pending')
@@ -3256,21 +3370,19 @@ export class PaymentOrdersService {
       throw new BadRequestException('Esta orden no requiere aprobación manual');
     }
 
-    // Obtener tipo de cambio si no se proporcionó
-    let exchangeRate = dto.exchange_rate_applied;
-    if (!exchangeRate && order.flow_type) {
-      const pairMap: Record<string, string> = {
-        bolivia_to_world: 'BOB_USD',
-        world_to_bolivia: 'USD_BOB',
-        bolivia_to_wallet: 'BOB_USD',
-        fiat_bo_to_bridge_wallet: 'BOB_USD',
-      };
-      const pair = pairMap[order.flow_type];
-      if (pair) {
-        const rateData = await this.exchangeRatesService.getRate(pair);
-        exchangeRate = rateData.effective_rate;
-      }
-    }
+    // ── Cotización CONGELADA al crear el expediente ──
+    // La aprobación es SOLO una transición de estado: no recalcula ni acepta
+    // cambios de tipo de cambio, fee o monto destino. El cliente creó el
+    // expediente con una cotización concreta y esa es la que se honra
+    // (transparencia). No se lee ningún valor financiero del DTO.
+    const exchangeRate = order.exchange_rate_applied
+      ? parseFloat(order.exchange_rate_applied)
+      : null;
+
+    const amountDestination =
+      order.amount_destination != null
+        ? parseFloat(order.amount_destination)
+        : null;
 
     const isBobOut = [
       'bolivia_to_world',
@@ -3278,23 +3390,12 @@ export class PaymentOrdersService {
       'fiat_bo_to_bridge_wallet',
     ].includes(order.flow_type ?? '');
 
-    const amountDestination = exchangeRate
-      ? parseFloat(
-          (isBobOut
-            ? parseFloat(order.net_amount ?? order.amount) / exchangeRate
-            : parseFloat(order.net_amount ?? order.amount) * exchangeRate
-          ).toFixed(2),
-        )
-      : null;
-
-    // Monto bruto que el PSAV debe depositar en la liquidation address (sin descontar fee).
-    // Bridge cobrará el fee como custom_developer_fee_percent configurado en la liquidation address,
-    // así el cobro se realiza una sola vez y no hay doble descuento.
+    // Monto bruto (USDC) que el staff debe depositar en la liquidation address,
+    // derivado de los valores congelados de la orden. Bridge cobra el fee como
+    // custom_developer_fee_percent de la LA, así que el depósito es el bruto.
     const amountToDeposit =
       exchangeRate && isBobOut
-        ? parseFloat(
-            (parseFloat(order.amount) / exchangeRate).toFixed(2),
-          )
+        ? parseFloat((parseFloat(order.amount) / exchangeRate).toFixed(2))
         : amountDestination;
 
     const { data: updated, error } = await this.supabase
@@ -3303,9 +3404,9 @@ export class PaymentOrdersService {
         status: 'processing',
         approved_by: actorId,
         approved_at: new Date().toISOString(),
-        exchange_rate_applied: exchangeRate,
-        amount_destination: amountDestination,
-        fee_amount: dto.fee_final ?? order.fee_amount,
+        // exchange_rate_applied, amount_destination y fee_amount NO se tocan:
+        // quedaron congelados al crear el expediente para garantizar que el
+        // cliente reciba exactamente lo cotizado.
         notes: dto.notes
           ? `${order.notes ?? ''}\n[ADMIN] ${dto.notes}`.trim()
           : order.notes,
@@ -3377,7 +3478,7 @@ export class PaymentOrdersService {
       const { data: liqAddr } = await this.supabase
         .from('bridge_liquidation_addresses')
         .select(
-          'id, bridge_liquidation_address_id, chain, currency, address, destination_payment_rail, destination_currency, destination_external_account_id, destination_address',
+          'id, bridge_liquidation_address_id, chain, currency, address, destination_payment_rail, destination_currency, destination_external_account_id, destination_address, developer_fee_percent',
         )
         .eq(
           'bridge_liquidation_address_id',
@@ -3404,10 +3505,15 @@ export class PaymentOrdersService {
         destination_external_account_id:
           liqAddr.destination_external_account_id,
         destination_address: liqAddr.destination_address,
+        developer_fee_percent: liqAddr.developer_fee_percent,
+        fee_source: 'liquidation_address',
         supplier_name: supplier.name,
         amount_to_deposit: amountToDeposit,
       };
 
+      // Solo se persisten las instrucciones operativas de depósito. El fee
+      // (bridge_liquidation_fee_percent, fee_source) y el bridge_liquidation_address_id
+      // quedaron fijados al crear el expediente y NO se reescriben aquí.
       await this.supabase
         .from('payment_orders')
         .update({
@@ -3420,7 +3526,7 @@ export class PaymentOrdersService {
 
       this.logger.log(
         `📋 Orden bolivia_to_world ${orderId} en processing — staff debe depositar ` +
-          `${amountDestination ?? 'N/A'} ${liqAddr.currency} en liquidation address ${liqAddr.address} ` +
+          `${amountToDeposit ?? 'N/A'} ${liqAddr.currency} en liquidation address ${liqAddr.address} ` +
           `(chain: ${liqAddr.chain}, proveedor: ${supplier.name})`,
       );
     }
@@ -3449,7 +3555,7 @@ export class PaymentOrdersService {
       const { data: walletLiqAddr } = await this.supabase
         .from('bridge_liquidation_addresses')
         .select(
-          'id, bridge_liquidation_address_id, chain, currency, address, destination_payment_rail, destination_currency, destination_address',
+          'id, bridge_liquidation_address_id, chain, currency, address, destination_payment_rail, destination_currency, destination_address, developer_fee_percent',
         )
         .eq(
           'bridge_liquidation_address_id',
@@ -3474,10 +3580,14 @@ export class PaymentOrdersService {
         destination_payment_rail: walletLiqAddr.destination_payment_rail,
         destination_currency: walletLiqAddr.destination_currency,
         destination_address: walletLiqAddr.destination_address,
+        developer_fee_percent: walletLiqAddr.developer_fee_percent,
+        fee_source: 'liquidation_address',
         supplier_name: walletSupplier.name,
         amount_to_deposit: amountToDeposit,
       };
 
+      // Solo se persisten las instrucciones operativas de depósito. El fee y el
+      // bridge_liquidation_address_id quedaron fijados al crear el expediente.
       await this.supabase
         .from('payment_orders')
         .update({

@@ -1280,7 +1280,7 @@ export class BridgeService {
         ...(dto.destination_address
           ? { destination_address: dto.destination_address }
           : {}),
-        ...(developerFeePercent && developerFeePercent !== '0'
+        ...(developerFeePercent !== undefined && developerFeePercent !== null
           ? { custom_developer_fee_percent: developerFeePercent }
           : {}),
       },
@@ -1303,7 +1303,10 @@ export class BridgeService {
           (bridgeLA.destination_currency as string) ?? dto.destination_currency,
         destination_external_account_id: dto.external_account_id ?? null,
         destination_address: dto.destination_address ?? null,
-        developer_fee_percent: developerFeePercent ?? null,
+        developer_fee_percent:
+          bridgeLA.custom_developer_fee_percent !== undefined
+            ? bridgeLA.custom_developer_fee_percent ?? null
+            : developerFeePercent ?? null,
         is_active: true,
       })
       .select()
@@ -1427,6 +1430,26 @@ export class BridgeService {
       throw new NotFoundException(
         'Liquidation Address no encontrada en la DB local',
       );
+    }
+
+    if (updatePayload.custom_developer_fee_percent === null) {
+      const { data: linkedSupplier } = await this.supabase
+        .from('suppliers')
+        .select('id')
+        .eq('user_id', userId)
+        .eq(
+          'bridge_liquidation_address_id',
+          laRecord.bridge_liquidation_address_id,
+        )
+        .eq('is_active', true)
+        .limit(1)
+        .maybeSingle();
+
+      if (linkedSupplier) {
+        throw new BadRequestException(
+          'No se puede dejar en null el developer fee de una liquidation address usada por proveedores. Define un porcentaje explícito para evitar discrepancias contables.',
+        );
+      }
     }
 
     // Construir payload — solo campos explícitamente enviados

@@ -45,7 +45,6 @@ export class CreateInterbankOrderDto {
   @ValidateIf((o) =>
     [
       'bolivia_to_world',
-      'world_to_bolivia',
       'wallet_to_wallet',
       'bolivia_to_wallet',
     ].includes(o.flow_type),

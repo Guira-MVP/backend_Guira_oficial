@@ -2,23 +2,14 @@ import {
   IsString,
   IsNotEmpty,
   IsOptional,
-  IsNumber,
   IsBoolean,
   MaxLength,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
+// La aprobación NO modifica la cotización (tipo de cambio, fee ni monto destino):
+// esos valores quedaron congelados al crear el expediente. Solo permite una nota.
 export class ApproveOrderDto {
-  @ApiPropertyOptional({ example: 6.9 })
-  @IsOptional()
-  @IsNumber()
-  exchange_rate_applied?: number;
-
-  @ApiPropertyOptional({ example: 15.0 })
-  @IsOptional()
-  @IsNumber()
-  fee_final?: number;
-
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

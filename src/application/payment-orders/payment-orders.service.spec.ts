@@ -87,7 +87,23 @@ describe('PaymentOrdersService bridge deposit collision guard', () => {
         error: null,
       }),
     };
-    const supabase = { from: jest.fn(() => supplierQuery) };
+
+    // assertCurrencyActive() queries 'currency_settings' using .single()
+    // — mock it separately so the currency check passes before reaching the guard.
+    const currencyQuery: any = {
+      select: jest.fn(() => currencyQuery),
+      eq: jest.fn(() => currencyQuery),
+      single: jest.fn().mockResolvedValue({
+        data: { currency: 'usdc', is_active: true },
+        error: null,
+      }),
+    };
+
+    const supabase = {
+      from: jest.fn((table: string) =>
+        table === 'currency_settings' ? currencyQuery : supplierQuery,
+      ),
+    };
     const feesService = {
       calculateFee: jest.fn(),
       getFeePercent: jest.fn(),
