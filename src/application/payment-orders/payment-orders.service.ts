@@ -3,6 +3,7 @@ import {
   Inject,
   NotFoundException,
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Logger,
 } from '@nestjs/common';
@@ -1080,11 +1081,14 @@ export class PaymentOrdersService {
 
     if (conflicting) {
       const shortId = conflicting.id.slice(0, 8);
-      throw new BadRequestException(
-        `Ya tienes un expediente activo (${shortId}) hacia ${normalizedCurrency}. ` +
+      throw new ConflictException({
+        code: 'ACTIVE_ORDER_CONFLICT',
+        active_order_id: conflicting.id,
+        message:
+          `Ya tienes un expediente activo (${shortId}) hacia ${normalizedCurrency}. ` +
           `Debes completar o cancelar ese expediente antes de crear uno nuevo ` +
           `hacia la misma divisa.`,
-      );
+      });
     }
   }
 
@@ -1128,7 +1132,7 @@ export class PaymentOrdersService {
 
     if (conflicting) {
       const shortId = conflicting.id.slice(0, 8);
-      throw new BadRequestException(
+      throw new ConflictException(
         `Ya tienes un expediente pendiente de depósito (${shortId}) ` +
           `que utiliza la misma dirección de recepción ` +
           `(${normalizedCurrency} en ${normalizedNetwork}). ` +
@@ -1168,7 +1172,7 @@ export class PaymentOrdersService {
 
     if (conflicting) {
       const shortId = conflicting.id.slice(0, 8);
-      throw new BadRequestException(
+      throw new ConflictException(
         `Ya tienes un expediente activo (${shortId}) de tipo ${flowType} ` +
           `hacia ${normalized}. Completa o cancela ese expediente antes ` +
           `de crear uno nuevo.`,
@@ -1203,7 +1207,7 @@ export class PaymentOrdersService {
 
     if (conflicting) {
       const shortId = conflicting.id.slice(0, 8);
-      throw new BadRequestException(
+      throw new ConflictException(
         `Ya tienes un retiro activo (${shortId}) desde ${normalized}. ` +
           `Espera a que se complete o cancélalo antes de crear uno nuevo.`,
       );
@@ -1238,7 +1242,7 @@ export class PaymentOrdersService {
 
     if (conflicting) {
       const shortId = conflicting.id.slice(0, 8);
-      throw new BadRequestException(
+      throw new ConflictException(
         `Ya tienes un retiro crypto activo (${shortId}) desde ${normCurrency} ` +
           `hacia la red ${normNetwork}. Espera a que se complete o cancélalo ` +
           `antes de crear uno nuevo.`,
@@ -1273,7 +1277,7 @@ export class PaymentOrdersService {
 
     if (conflicting) {
       const shortId = conflicting.id.slice(0, 8);
-      throw new BadRequestException(
+      throw new ConflictException(
         `Ya tienes un retiro activo (${shortId}) desde ${normCurrency} ` +
           `hacia este proveedor. Espera a que se complete o cancélalo ` +
           `antes de crear uno nuevo.`,

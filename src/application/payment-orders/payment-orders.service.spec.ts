@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { PaymentOrdersService } from './payment-orders.service';
 import { InterbankFlowType } from './dto/create-interbank-order.dto';
 
@@ -43,7 +43,7 @@ describe('PaymentOrdersService bridge deposit collision guard', () => {
         'usdc',
         'ethereum',
       ),
-    ).rejects.toBeInstanceOf(BadRequestException);
+    ).rejects.toBeInstanceOf(ConflictException);
 
     expect(query.in).toHaveBeenCalledWith('flow_type', [
       'fiat_bo_to_bridge_wallet',
