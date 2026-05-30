@@ -310,9 +310,10 @@ export class SuppliersService {
       .order('name');
 
     if (error) throw new BadRequestException(error.message);
-    return (data ?? []).map((supplier) =>
+    const suppliers = (data ?? []).map((supplier) =>
       this.mapBridgeDetailsToBankDetails(supplier),
     );
+    return this.attachLiquidationFee(userId, suppliers);
   }
 
   /** Detalle de un proveedor. */
@@ -325,7 +326,58 @@ export class SuppliersService {
       .single();
 
     if (error || !data) throw new NotFoundException('Proveedor no encontrado');
-    return this.mapBridgeDetailsToBankDetails(data);
+    const supplier = this.mapBridgeDetailsToBankDetails(data);
+    const [withFee] = await this.attachLiquidationFee(userId, [supplier]);
+    return withFee;
+  }
+
+  /**
+   * Adjunta `developer_fee_percent` (fee real de la liquidation address de Bridge)
+   * a cada proveedor. Es la fuente de verdad del fee para el flujo bolivia_to_wallet:
+   * el panel del cliente debe mostrar este valor y el backend lo usa al guardar el
+   * payment_order. Como `suppliers.bridge_liquidation_address_id` empareja con
+   * `bridge_liquidation_addresses.bridge_liquidation_address_id` (sin FK para embed
+   * de PostgREST), se resuelve con una segunda consulta + map.
+   */
+  private async attachLiquidationFee<T extends { bridge_liquidation_address_id?: string | null }>(
+    userId: string,
+    suppliers: T[],
+  ): Promise<Array<T & { developer_fee_percent: number | null }>> {
+    const laIds = Array.from(
+      new Set(
+        suppliers
+          .map((s) => s.bridge_liquidation_address_id)
+          .filter((id): id is string => typeof id === 'string' && id.length > 0),
+      ),
+    );
+
+    if (laIds.length === 0) {
+      return suppliers.map((s) => ({ ...s, developer_fee_percent: null }));
+    }
+
+    const { data: liquidationAddresses } = await this.supabase
+      .from('bridge_liquidation_addresses')
+      .select('bridge_liquidation_address_id, developer_fee_percent')
+      .eq('user_id', userId)
+      .in('bridge_liquidation_address_id', laIds);
+
+    const feeByLaId = new Map<string, number | null>(
+      (liquidationAddresses ?? []).map((la) => {
+        const raw = la.developer_fee_percent;
+        const parsed = raw === null || raw === undefined ? null : Number(raw);
+        return [
+          la.bridge_liquidation_address_id as string,
+          parsed !== null && Number.isFinite(parsed) ? parsed : null,
+        ];
+      }),
+    );
+
+    return suppliers.map((s) => ({
+      ...s,
+      developer_fee_percent: s.bridge_liquidation_address_id
+        ? (feeByLaId.get(s.bridge_liquidation_address_id) ?? null)
+        : null,
+    }));
   }
 
   private mapBridgeDetailsToBankDetails(supplier: any) {
