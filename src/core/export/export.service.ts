@@ -4,6 +4,7 @@ const pdfmake = require('pdfmake');
 import * as fs from 'fs';
 import * as path from 'path';
 import sharp = require('sharp');
+import { formatBoliviaDateTime } from '../../common/utils/date.util';
 
 // ── Tipos internos ──────────────────────────────────────────────────────────
 
@@ -41,10 +42,8 @@ interface PaymentOrder {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function formatDate(isoStr: string): string {
-  if (!isoStr) return 'N/D';
-  const d = new Date(isoStr);
-  if (Number.isNaN(d.getTime())) return isoStr;
-  return d.toLocaleString('es-BO', {
+  // Hora de Bolivia (UTC-4). El valor se guarda en UTC; aquí solo se presenta.
+  return formatBoliviaDateTime(isoStr, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -127,7 +126,7 @@ export class ExportService {
   ): Promise<Buffer> {
     const suppliersMap = new Map(suppliers.map((s) => [s.id, s.name]));
     const rows = buildRows(orders, suppliersMap, client.full_name ?? undefined);
-    const generatedAt = new Date().toLocaleString('es-BO', { hour12: false });
+    const generatedAt = formatBoliviaDateTime(new Date(), { hour12: false });
     const filterLabel = filters.status
       ? (STATUS_LABELS[filters.status] ?? filters.status)
       : 'Todos los estados';
@@ -323,7 +322,7 @@ export class ExportService {
   ): Promise<Buffer> {
     const suppliersMap = new Map(suppliers.map((s) => [s.id, s.name]));
     const rows = buildRows(orders, suppliersMap, client.full_name ?? undefined);
-    const generatedAt = new Date().toLocaleString('es-BO', { hour12: false });
+    const generatedAt = formatBoliviaDateTime(new Date(), { hour12: false });
     const filterLabel = filters.status
       ? (STATUS_LABELS[filters.status] ?? filters.status)
       : 'Todos los estados';

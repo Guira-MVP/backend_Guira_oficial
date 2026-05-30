@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 const pdfmake = require('pdfmake');
 import { TDocumentDefinitions } from 'pdfmake/interfaces';
+import { formatBoliviaDateTime } from '../../common/utils/date.util';
 
 // ═══════════════════════════════════════════════════════════
 //  Guira "Oceanic Trust" PDF Palette
@@ -86,10 +87,8 @@ export class PdfService {
   }
 
   private fmtDate(val: string): string {
-    if (!val) return 'N/D';
-    const d = new Date(val);
-    if (Number.isNaN(d.getTime())) return val;
-    return d.toLocaleString('es-BO', {
+    // Hora de Bolivia (UTC-4). El valor se guarda en UTC; aquí solo se presenta.
+    return formatBoliviaDateTime(val, {
       hour12: true,
       year: 'numeric',
       month: 'long',
