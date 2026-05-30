@@ -2740,13 +2740,28 @@ export class WebhooksService {
       // Orden encontrada por bridge_drain_id — completar
       await this.completeDrainOrder(order, drainId, receipt);
     } else if (state === 'payment_submitted') {
-      // Estado intermedio — solo log informativo
-      this.logger.log(
-        `📤 Drain ${drainId}: pago ACH/wire enviado, pendiente de confirmación final.`,
-      );
+      await this.handleDrainPaymentSubmitted(drainId);
+    } else if (state === 'in_review') {
+      await this.handleDrainInReview(drainId);
+    } else if (state === 'undeliverable') {
+      await this.handleDrainUndeliverable(drainId, eventObject);
+    } else if (state === 'returned') {
+      await this.handleDrainReturned(drainId, eventObject);
+    } else if (state === 'canceled') {
+      await this.handleDrainCanceled(drainId, eventObject);
+    } else if (state === 'error') {
+      await this.handleDrainError(drainId, eventObject);
+    } else if (state === 'missing_return_policy') {
+      await this.handleDrainMissingReturnPolicy(drainId);
+    } else if (state === 'refund_in_flight') {
+      await this.handleDrainRefundInFlight(drainId);
+    } else if (state === 'refund_failed') {
+      await this.handleDrainRefundFailed(drainId);
+    } else if (state === 'refunded') {
+      await this.handleDrainRefunded(drainId);
     } else {
-      this.logger.log(
-        `🔄 Drain ${drainId}: transición a estado ${state} — sin acción.`,
+      this.logger.warn(
+        `⚠️ Drain ${drainId}: estado desconocido "${state}" — sin handler registrado.`,
       );
     }
   }
@@ -2826,6 +2841,535 @@ export class WebhooksService {
     this.logger.log(
       `✅ Orden ${order.id} completada vía drain ${drainId} (payment_processed)`,
     );
+  }
+
+  // ═══════════════════════════════════════════════
+  //  HANDLERS: estados de drain de Bridge
+  //  Gestiona todos los estados intermedios y de fallo
+  //  que Bridge puede enviar vía webhook.
+  // ═══════════════════════════════════════════════
+
+  /**
+   * Notifica a los administradores/staff activos del sistema.
+   * Usado por handlers de fallo y estados críticos.
+   */
+  private async notifyAdminStaff(
+    title: string,
+    message: string,
+    referenceId: string,
+    notifType: 'system' | 'alert' = 'alert',
+  ): Promise<void> {
+    const { data: admins } = await this.supabase
+      .from('profiles')
+      .select('id')
+      .in('role', ['staff', 'admin', 'super_admin'])
+      .eq('is_active', true)
+      .limit(5);
+
+    if (admins?.length) {
+      await this.supabase.from('notifications').insert(
+        admins.map((a) => ({
+          user_id: a.id,
+          type: notifType,
+          title,
+          message,
+          reference_type: 'payment_order',
+          reference_id: referenceId,
+        })),
+      );
+    }
+  }
+
+  /**
+   * Busca la orden de pago vinculada a un drain por su bridge_drain_id.
+   */
+  private async findOrderByDrainId(drainId: string): Promise<{
+    id: string;
+    user_id: string;
+    amount: string;
+    amount_destination: string;
+    currency: string;
+    flow_type: string;
+    status: string;
+    failure_reason: string | null;
+  } | null> {
+    const { data } = await this.supabase
+      .from('payment_orders')
+      .select(
+        'id, user_id, amount, amount_destination, currency, flow_type, status, failure_reason',
+      )
+      .eq('bridge_drain_id', drainId)
+      .maybeSingle();
+    return data ?? null;
+  }
+
+  /**
+   * Marca una orden de pago como fallida a causa de un estado de drain de Bridge.
+   * Actualiza status, failure_reason, emite WebSocket, y registra audit/activity logs.
+   * Opcionalmente notifica al usuario final.
+   */
+  private async failDrainOrder(
+    order: {
+      id: string;
+      user_id: string;
+      flow_type: string;
+      status: string;
+    },
+    drainId: string,
+    bridgeState: string,
+    failureReason: string,
+    userMessage: string,
+    notifyUser = true,
+  ): Promise<void> {
+    if (['completed', 'failed', 'cancelled'].includes(order.status)) {
+      this.logger.warn(
+        `⚠️ Drain ${drainId}: estado ${bridgeState} recibido para orden ${order.id} ya en estado terminal "${order.status}" — ignorado.`,
+      );
+      return;
+    }
+
+    await this.supabase
+      .from('payment_orders')
+      .update({
+        status: 'failed',
+        failure_reason: failureReason,
+        bridge_drain_id: drainId,
+      })
+      .eq('id', order.id);
+
+    this.ordersGateway.emitOrderUpdated(order.user_id, {
+      id: order.id,
+      user_id: order.user_id,
+      status: 'failed',
+      flow_type: order.flow_type,
+      updated_at: new Date().toISOString(),
+    });
+
+    await this.supabase.from('audit_logs').insert({
+      performed_by: null,
+      action: `DRAIN_${bridgeState.toUpperCase().replace(/-/g, '_')}_ORDER_FAILED`,
+      table_name: 'payment_orders',
+      record_id: order.id,
+      previous_values: { status: order.status },
+      new_values: {
+        status: 'failed',
+        failure_reason: failureReason,
+        bridge_drain_id: drainId,
+      },
+      source: 'webhook',
+    });
+
+    if (notifyUser) {
+      await this.supabase.from('notifications').insert({
+        user_id: order.user_id,
+        type: 'alert',
+        title: 'Transferencia No Completada',
+        message: userMessage,
+        reference_type: 'payment_order',
+        reference_id: order.id,
+      });
+    }
+
+    await this.supabase.from('activity_logs').insert({
+      user_id: order.user_id,
+      action: 'PAYMENT_ORDER_DRAIN_FAILED',
+      description: `Orden ${order.id} fallida vía drain ${drainId} (Bridge state: ${bridgeState})`,
+    });
+
+    this.logger.warn(
+      `❌ Orden ${order.id} marcada como fallida — drain ${drainId}, estado Bridge: ${bridgeState}`,
+    );
+  }
+
+  // ── payment_submitted ──────────────────────────────────────────────────────
+
+  /**
+   * Bridge envió el pago ACH/wire al banco destino.
+   * Estado intermedio — la orden permanece en 'processing'.
+   * Notifica al usuario que los fondos están en camino.
+   */
+  private async handleDrainPaymentSubmitted(drainId: string): Promise<void> {
+    this.logger.log(
+      `📤 Drain ${drainId}: pago ACH/wire enviado, pendiente de confirmación final.`,
+    );
+
+    const order = await this.findOrderByDrainId(drainId);
+    if (!order) {
+      this.logger.warn(
+        `⚠️ handleDrainPaymentSubmitted: no se encontró orden para drain ${drainId}`,
+      );
+      return;
+    }
+
+    await this.supabase.from('notifications').insert({
+      user_id: order.user_id,
+      type: 'financial',
+      title: 'Transferencia en Camino',
+      message:
+        'Tu transferencia fue enviada al banco destino. La confirmación final puede demorar unos minutos dependiendo del banco.',
+      reference_type: 'payment_order',
+      reference_id: order.id,
+    });
+  }
+
+  // ── in_review ──────────────────────────────────────────────────────────────
+
+  /**
+   * Bridge puso el drain en revisión de compliance/AML.
+   * Suele resolverse automáticamente en segundos.
+   * La orden permanece en 'processing' — solo se alerta al staff.
+   */
+  private async handleDrainInReview(drainId: string): Promise<void> {
+    this.logger.warn(
+      `🔍 Drain ${drainId}: en revisión de compliance por Bridge.`,
+    );
+
+    const order = await this.findOrderByDrainId(drainId);
+    if (!order) {
+      this.logger.warn(
+        `⚠️ handleDrainInReview: no se encontró orden para drain ${drainId}`,
+      );
+      return;
+    }
+
+    await this.notifyAdminStaff(
+      '🔍 Drain en Revisión Bridge',
+      `Drain ${drainId} (Orden ${order.id}) en revisión de compliance. Normalmente resuelve en segundos de forma automática. Si supera 24 horas sin resolución, Bridge contactará al equipo técnico.`,
+      order.id,
+      'system',
+    );
+  }
+
+  // ── undeliverable ──────────────────────────────────────────────────────────
+
+  /**
+   * Bridge no pudo enviar el pago — cuenta bancaria inválida.
+   * El USDT quedó en Bridge; Bridge iniciará el reembolso automáticamente
+   * si hay Crypto Return Policy configurada.
+   */
+  private async handleDrainUndeliverable(
+    drainId: string,
+    eventObject: Record<string, unknown>,
+  ): Promise<void> {
+    this.logger.warn(
+      `❌ Drain ${drainId}: undeliverable — cuenta bancaria destino inválida.`,
+    );
+
+    const order = await this.findOrderByDrainId(drainId);
+    if (!order) {
+      this.logger.warn(
+        `⚠️ handleDrainUndeliverable: no se encontró orden para drain ${drainId}`,
+      );
+      return;
+    }
+
+    const reason =
+      (eventObject?.failure_reason as string) ??
+      'routing/account inválido o tipo de activo no soportado';
+
+    await this.failDrainOrder(
+      order,
+      drainId,
+      'undeliverable',
+      `bridge_undeliverable: ${reason}`,
+      'Tu transferencia no pudo ser procesada porque la cuenta bancaria de destino no es válida. Por favor contacta a soporte para verificar y corregir los datos bancarios.',
+    );
+
+    await this.notifyAdminStaff(
+      '⚠️ Drain UNDELIVERABLE',
+      `Orden ${order.id} — Drain ${drainId}: cuenta bancaria destino inválida (${reason}). Verificar el external_account del cliente. Bridge iniciará reembolso de USDT automáticamente al return address de Guira.`,
+      order.id,
+    );
+  }
+
+  // ── returned ──────────────────────────────────────────────────────────────
+
+  /**
+   * Bridge envió el pago pero el banco destino lo rechazó y devolvió los fondos.
+   * El USDT está de vuelta en Bridge; Bridge iniciará el reembolso automáticamente.
+   */
+  private async handleDrainReturned(
+    drainId: string,
+    eventObject: Record<string, unknown>,
+  ): Promise<void> {
+    this.logger.warn(
+      `🔄 Drain ${drainId}: returned — el banco destino rechazó y devolvió el pago.`,
+    );
+
+    const order = await this.findOrderByDrainId(drainId);
+    if (!order) {
+      this.logger.warn(
+        `⚠️ handleDrainReturned: no se encontró orden para drain ${drainId}`,
+      );
+      return;
+    }
+
+    const reason =
+      (eventObject?.return_reason as string) ??
+      (eventObject?.reason as string) ??
+      'banco destino rechazó el pago';
+
+    await this.failDrainOrder(
+      order,
+      drainId,
+      'returned',
+      `bridge_returned: ${reason}`,
+      'Tu transferencia fue enviada pero fue devuelta por el banco destino. Esto puede ocurrir si la cuenta tiene restricciones o fue cerrada. Por favor contacta a soporte.',
+    );
+
+    await this.notifyAdminStaff(
+      '⚠️ Drain RETURNED',
+      `Orden ${order.id} — Drain ${drainId}: pago devuelto por banco destino (${reason}). Bridge devolverá el USDT automáticamente al return address de Guira.`,
+      order.id,
+    );
+  }
+
+  // ── canceled ──────────────────────────────────────────────────────────────
+
+  /**
+   * Bridge canceló el drain antes de enviarlo.
+   * Causas: rechazo AML/EFE o monto debajo del threshold mínimo de la ruta.
+   */
+  private async handleDrainCanceled(
+    drainId: string,
+    eventObject: Record<string, unknown>,
+  ): Promise<void> {
+    this.logger.warn(`🚫 Drain ${drainId}: canceled.`);
+
+    const order = await this.findOrderByDrainId(drainId);
+    if (!order) {
+      this.logger.warn(
+        `⚠️ handleDrainCanceled: no se encontró orden para drain ${drainId}`,
+      );
+      return;
+    }
+
+    const reason =
+      (eventObject?.cancellation_reason as string) ??
+      (eventObject?.reason as string) ??
+      'cancelado por compliance o monto debajo del mínimo de la ruta';
+
+    await this.failDrainOrder(
+      order,
+      drainId,
+      'canceled',
+      `bridge_canceled: ${reason}`,
+      'Tu transferencia fue cancelada. Esto puede ocurrir por restricciones de compliance o porque el monto no cumple los requisitos mínimos de la ruta. Por favor contacta a soporte.',
+    );
+
+    await this.notifyAdminStaff(
+      '⚠️ Drain CANCELADO',
+      `Orden ${order.id} — Drain ${drainId} cancelado. Motivo: ${reason}. Verificar si aplica restricción de compliance (AML/EFE) o threshold mínimo de ruta.`,
+      order.id,
+    );
+  }
+
+  // ── error ──────────────────────────────────────────────────────────────────
+
+  /**
+   * Error interno de Bridge — intervención manual requerida.
+   * Bridge contactará al equipo técnico de Guira directamente.
+   */
+  private async handleDrainError(
+    drainId: string,
+    _eventObject: Record<string, unknown>,
+  ): Promise<void> {
+    this.logger.error(
+      `🚨 Drain ${drainId}: error interno de Bridge — intervención manual requerida.`,
+    );
+
+    const order = await this.findOrderByDrainId(drainId);
+    if (!order) {
+      this.logger.error(
+        `🚨 handleDrainError: no se encontró orden para drain ${drainId}. Contactar Bridge Support.`,
+      );
+      return;
+    }
+
+    await this.failDrainOrder(
+      order,
+      drainId,
+      'error',
+      'bridge_error: error interno de Bridge — intervención manual requerida',
+      'Hubo un problema técnico con tu transferencia. Nuestro equipo ya fue notificado y está trabajando en resolverlo. Te contactaremos pronto.',
+    );
+
+    await this.notifyAdminStaff(
+      '🚨 CRÍTICO — Error Bridge',
+      `Orden ${order.id} — Drain ${drainId} en estado de ERROR en Bridge. Bridge contactará al equipo técnico. Revisar dashboard de Bridge urgentemente y contactar Bridge Support si no hay respuesta.`,
+      order.id,
+      'alert',
+    );
+  }
+
+  // ── missing_return_policy ─────────────────────────────────────────────────
+
+  /**
+   * Bridge no puede devolver el USDT porque no hay Crypto Return Policy configurada.
+   * Error crítico de configuración de plataforma — solo alerta al staff.
+   * No notificar al usuario hasta resolver la configuración con Bridge.
+   */
+  private async handleDrainMissingReturnPolicy(drainId: string): Promise<void> {
+    this.logger.error(
+      `🚨 Drain ${drainId}: missing_return_policy — no hay Crypto Return Policy configurada en Bridge.`,
+    );
+
+    const order = await this.findOrderByDrainId(drainId);
+    if (!order) {
+      this.logger.error(
+        `🚨 handleDrainMissingReturnPolicy: no se encontró orden para drain ${drainId}.`,
+      );
+      return;
+    }
+
+    if (!['completed', 'failed', 'cancelled'].includes(order.status)) {
+      await this.supabase
+        .from('payment_orders')
+        .update({
+          status: 'failed',
+          failure_reason:
+            'bridge_missing_return_policy: Bridge no puede devolver el USDT sin una Crypto Return Policy configurada',
+          bridge_drain_id: drainId,
+        })
+        .eq('id', order.id);
+
+      this.ordersGateway.emitOrderUpdated(order.user_id, {
+        id: order.id,
+        user_id: order.user_id,
+        status: 'failed',
+        flow_type: order.flow_type,
+        updated_at: new Date().toISOString(),
+      });
+
+      await this.supabase.from('audit_logs').insert({
+        performed_by: null,
+        action: 'DRAIN_MISSING_RETURN_POLICY',
+        table_name: 'payment_orders',
+        record_id: order.id,
+        previous_values: { status: order.status },
+        new_values: {
+          status: 'failed',
+          failure_reason: 'bridge_missing_return_policy',
+        },
+        source: 'webhook',
+      });
+    }
+
+    // Solo alerta al staff — NO notificar al usuario hasta resolver la config
+    await this.notifyAdminStaff(
+      '🚨 CRÍTICO — Missing Return Policy',
+      `Drain ${drainId} (Orden ${order.id}): Bridge necesita devolver USDT pero NO existe una Crypto Return Policy configurada en la cuenta de Bridge de Guira. Configurar URGENTEMENTE en el dashboard de Bridge para que los fondos no queden retenidos indefinidamente.`,
+      order.id,
+      'alert',
+    );
+  }
+
+  // ── refund_in_flight ──────────────────────────────────────────────────────
+
+  /**
+   * Bridge está enviando el USDT de vuelta on-chain al return address de Guira.
+   * Estado informativo — solo notifica al staff.
+   */
+  private async handleDrainRefundInFlight(drainId: string): Promise<void> {
+    this.logger.log(
+      `🔄 Drain ${drainId}: reembolso de USDT en progreso (on-chain).`,
+    );
+
+    const order = await this.findOrderByDrainId(drainId);
+    if (!order) {
+      this.logger.warn(
+        `⚠️ handleDrainRefundInFlight: no se encontró orden para drain ${drainId}`,
+      );
+      return;
+    }
+
+    await this.notifyAdminStaff(
+      '🔄 Reembolso USDT en Progreso',
+      `Drain ${drainId} (Orden ${order.id}): Bridge está enviando el USDT de vuelta on-chain al return address de Guira. Esperar confirmación final (estado "refunded").`,
+      order.id,
+      'system',
+    );
+  }
+
+  // ── refund_failed ─────────────────────────────────────────────────────────
+
+  /**
+   * La transacción on-chain de reembolso del USDT falló.
+   * Los fondos pueden estar retenidos en Bridge — contactar Bridge Support.
+   */
+  private async handleDrainRefundFailed(drainId: string): Promise<void> {
+    this.logger.error(
+      `🚨 Drain ${drainId}: refund_failed — la transacción on-chain de reembolso falló.`,
+    );
+
+    const order = await this.findOrderByDrainId(drainId);
+    if (!order) {
+      this.logger.error(
+        `🚨 handleDrainRefundFailed: no se encontró orden para drain ${drainId}.`,
+      );
+      return;
+    }
+
+    await this.notifyAdminStaff(
+      '🚨 CRÍTICO — Reembolso USDT Fallido',
+      `Drain ${drainId} (Orden ${order.id}): la transacción on-chain de reembolso de USDT falló. Los fondos pueden estar retenidos en Bridge. Contactar Bridge Support inmediatamente.`,
+      order.id,
+      'alert',
+    );
+  }
+
+  // ── refunded ──────────────────────────────────────────────────────────────
+
+  /**
+   * Bridge completó el reembolso — USDT llegó al return address de Guira.
+   * Acción requerida: el staff debe procesar el reembolso en BOB al usuario vía PSAV.
+   */
+  private async handleDrainRefunded(drainId: string): Promise<void> {
+    this.logger.log(
+      `💰 Drain ${drainId}: USDT reembolsado exitosamente al return address de Guira.`,
+    );
+
+    const order = await this.findOrderByDrainId(drainId);
+    if (!order) {
+      this.logger.warn(
+        `⚠️ handleDrainRefunded: no se encontró orden para drain ${drainId}`,
+      );
+      return;
+    }
+
+    // Actualizar failure_reason para registrar que el USDT ya fue devuelto a Guira
+    const currentReason = order.failure_reason ?? 'bridge_refunded';
+    await this.supabase
+      .from('payment_orders')
+      .update({
+        failure_reason: `${currentReason} | USDT devuelto al return address de Guira — pendiente reembolso BOB al usuario`,
+      })
+      .eq('id', order.id);
+
+    // Alerta al staff: acción manual requerida — devolver BOB al usuario vía PSAV
+    await this.notifyAdminStaff(
+      '💰 USDT Devuelto — Acción Requerida',
+      `Drain ${drainId} (Orden ${order.id}): el USDT fue devuelto exitosamente al return address de Guira. ACCIÓN REQUERIDA: procesar reembolso en BOB al usuario ${order.user_id} vía PSAV. Monto original: ${order.amount} ${order.currency}.`,
+      order.id,
+      'alert',
+    );
+
+    // Notificar al usuario que su reembolso está siendo procesado
+    await this.supabase.from('notifications').insert({
+      user_id: order.user_id,
+      type: 'financial',
+      title: 'Reembolso en Proceso',
+      message:
+        'Tu transferencia no pudo completarse, pero los fondos han sido recuperados. Nuestro equipo procesará tu reembolso en los próximos días hábiles. Te contactaremos para confirmar los detalles.',
+      reference_type: 'payment_order',
+      reference_id: order.id,
+    });
+
+    await this.supabase.from('activity_logs').insert({
+      user_id: order.user_id,
+      action: 'PAYMENT_ORDER_DRAIN_REFUNDED',
+      description: `Drain ${drainId}: USDT devuelto a Guira. Orden ${order.id} pendiente de reembolso BOB manual vía PSAV.`,
+    });
   }
 
   // ═══════════════════════════════════════════════
