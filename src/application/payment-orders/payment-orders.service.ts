@@ -2000,18 +2000,27 @@ export class PaymentOrdersService {
         .select('id')
         .single();
 
-      // Crear ledger entry (debit, pending — se asienta con webhook transfer.complete)
-      await this.supabase.from('ledger_entries').insert({
-        wallet_id: wallet.id,
-        type: 'debit',
-        amount: totalNeeded,
-        currency: sourceCurrency,
-        status: 'pending',
-        reference_type: 'payment_order',
-        reference_id: order.id,
-        bridge_transfer_id: transferId ?? null,
-        description: `Off-ramp BO: ${net_amount} ${sourceCurrency} → BOB (PSAV)`,
-      });
+      // Crear ledger entry (debit, pending — se asienta con webhook transfer.complete).
+      // bridge_transfer_id referencia el id LOCAL de bridge_transfers (FK) — NO el UUID de Bridge.
+      const { error: ledgerErr } = await this.supabase
+        .from('ledger_entries')
+        .insert({
+          wallet_id: wallet.id,
+          type: 'debit',
+          amount: totalNeeded,
+          currency: sourceCurrency,
+          status: 'pending',
+          reference_type: 'payment_order',
+          reference_id: order.id,
+          bridge_transfer_id: btRow?.id ?? null,
+          description: `Off-ramp BO: ${net_amount} ${sourceCurrency} → BOB (PSAV)`,
+        });
+      if (ledgerErr) {
+        this.logger.error(
+          `❌ No se pudo crear el ledger_entry (debit) de la order ${order.id}: ${ledgerErr.message}. ` +
+            `El transfer Bridge ${transferId} ya fue enviado — requiere reconciliación manual del saldo.`,
+        );
+      }
 
       order.status = 'processing';
     } catch (err) {
@@ -2259,18 +2268,28 @@ export class PaymentOrdersService {
         .select('id')
         .single();
 
-      // Crear ledger entry (pending, se liquida con webhook)
-      await this.supabase.from('ledger_entries').insert({
-        wallet_id: wallet.id,
-        type: 'debit',
-        amount: totalNeeded,
-        currency: sourceCurrency,
-        status: 'pending',
-        reference_type: 'payment_order',
-        reference_id: order.id,
-        bridge_transfer_id: transferId ?? null,
-        description: `Off-ramp crypto: ${net_amount} ${sourceCurrency} → ${dto.destination_address}`,
-      });
+      // Crear ledger entry (pending, se liquida con webhook).
+      // bridge_transfer_id referencia el id LOCAL de bridge_transfers (FK) y es el
+      // valor por el que el webhook asienta el débito — NO el UUID de Bridge (transferId).
+      const { error: ledgerErr } = await this.supabase
+        .from('ledger_entries')
+        .insert({
+          wallet_id: wallet.id,
+          type: 'debit',
+          amount: totalNeeded,
+          currency: sourceCurrency,
+          status: 'pending',
+          reference_type: 'payment_order',
+          reference_id: order.id,
+          bridge_transfer_id: btRow?.id ?? null,
+          description: `Off-ramp crypto: ${net_amount} ${sourceCurrency} → ${dto.destination_address}`,
+        });
+      if (ledgerErr) {
+        this.logger.error(
+          `❌ No se pudo crear el ledger_entry (debit) de la order ${order.id}: ${ledgerErr.message}. ` +
+            `El transfer Bridge ${transferId} ya fue enviado — requiere reconciliación manual del saldo.`,
+        );
+      }
 
       order.status = 'processing';
     } catch (err) {
@@ -2509,17 +2528,26 @@ export class PaymentOrdersService {
         .select('id')
         .single();
 
-      await this.supabase.from('ledger_entries').insert({
-        wallet_id: wallet.id,
-        type: 'debit',
-        amount: totalNeeded,
-        currency: sourceCurrency,
-        status: 'pending',
-        reference_type: 'payment_order',
-        reference_id: order.id,
-        bridge_transfer_id: transferId ?? null,
-        description: `Off-ramp fiat US: $${net_amount} → cuenta bancaria`,
-      });
+      // bridge_transfer_id referencia el id LOCAL de bridge_transfers (FK) — NO el UUID de Bridge.
+      const { error: ledgerErr } = await this.supabase
+        .from('ledger_entries')
+        .insert({
+          wallet_id: wallet.id,
+          type: 'debit',
+          amount: totalNeeded,
+          currency: sourceCurrency,
+          status: 'pending',
+          reference_type: 'payment_order',
+          reference_id: order.id,
+          bridge_transfer_id: btRow?.id ?? null,
+          description: `Off-ramp fiat US: $${net_amount} → cuenta bancaria`,
+        });
+      if (ledgerErr) {
+        this.logger.error(
+          `❌ No se pudo crear el ledger_entry (debit) de la order ${order.id}: ${ledgerErr.message}. ` +
+            `El transfer Bridge ${transferId} ya fue enviado — requiere reconciliación manual del saldo.`,
+        );
+      }
 
       order.status = 'processing';
     } catch (err) {
