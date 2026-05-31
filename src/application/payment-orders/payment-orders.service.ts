@@ -3009,13 +3009,18 @@ export class PaymentOrdersService {
       await this.supabase.from('notifications').insert(notifications);
     }
 
-    // Notificar al usuario y al staff del cambio de estado
+    // Notificar al usuario y al staff del cambio de estado.
+    // Incluimos las URLs de documentos para que la pestaña "Documentos" del detalle
+    // del staff muestre el comprobante recién subido en vivo, sin recargar.
     this.ordersGateway.emitOrderUpdated(updated.user_id, {
       id: updated.id,
       user_id: updated.user_id,
       status: updated.status,
       flow_type: updated.flow_type,
       updated_at: new Date().toISOString(),
+      deposit_proof_url: updated.deposit_proof_url,
+      evidence_url: updated.evidence_url ?? null,
+      supporting_document_url: updated.supporting_document_url ?? null,
     });
 
     return updated;

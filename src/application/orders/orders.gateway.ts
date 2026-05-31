@@ -46,6 +46,11 @@ export interface OrderUpdatedPayload {
   exchange_rate_applied?: number | null;
   amount_destination?: number | null;
   bridge_source_deposit_instructions?: Record<string, unknown> | null;
+  // URLs de documentos: permiten que el detalle del staff refleje en vivo el
+  // comprobante que sube el cliente sin recargar (mismo socket/evento ya existente).
+  deposit_proof_url?: string | null;
+  evidence_url?: string | null;
+  supporting_document_url?: string | null;
 }
 
 @WebSocketGateway({
