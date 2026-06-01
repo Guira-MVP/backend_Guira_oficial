@@ -2138,6 +2138,9 @@ export class PaymentOrdersService {
         destination_network: dto.destination_network,
         destination_currency: (dto.destination_currency ?? sourceCurrency).toUpperCase(), // Fix #4: siempre uppercase
         exchange_rate_applied: 1.0,
+        // 1:1 stablecoin → el crédito neto estimado se conoce desde la creación.
+        // El webhook transfer.complete lo confirma con receipt.final_amount.
+        amount_destination: net_amount,
         business_purpose: dto.business_purpose,
         supporting_document_url: dto.supporting_document_url,
         notes: dto.notes,
@@ -2461,6 +2464,9 @@ export class PaymentOrdersService {
         destination_bank_name: (bankDetails?.bank_name as string) ?? null,
         destination_account_holder: supplier.name ?? null,
         destination_account_number: destinationAccountNumber,
+        // 1:1 USDC→USD → el crédito neto estimado se conoce desde la creación.
+        // El webhook transfer.complete lo confirma con receipt.final_amount.
+        amount_destination: net_amount,
         notes: dto.notes,
         business_purpose: dto.business_purpose,
         supporting_document_url: dto.supporting_document_url,

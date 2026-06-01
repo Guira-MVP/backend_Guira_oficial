@@ -1034,11 +1034,15 @@ export class WebhooksService {
         source_type: 'bridge_virtual_account',
         source_reference_id: va.id,
         flow_type: 'va_deposit',
+        flow_category: 'inbound',
         amount,
         fee_amount: feeAmount,
         net_amount: netAmount,
         currency: ((va.destination_currency as string) ?? 'USDC').toUpperCase(),
         source_currency: ((va.source_currency as string) ?? currency).toUpperCase(),
+        // Depósito fiat → stablecoin es a la par; el webhook payment_processed
+        // sobreescribe con receipt.exchange_rate cuando Bridge confirma.
+        exchange_rate_applied: 1.0,
         sender_name: senderName,
         bridge_event_id: bridgeEventId,
         deposit_id: depositId,
@@ -1128,10 +1132,12 @@ export class WebhooksService {
         source_type: 'bridge_virtual_account',
         source_reference_id: va.id,
         flow_type: 'va_deposit',
+        flow_category: 'inbound',
         amount,
         fee_amount: feeAmount,
         net_amount: netAmount,
         currency: ((va.source_currency as string) ?? currency).toUpperCase(),
+        exchange_rate_applied: 1.0,
         sender_name: senderName,
         bridge_event_id: (payload.id as string) ?? null,
         deposit_id: depositId,
@@ -1270,6 +1276,12 @@ export class WebhooksService {
           : null;
     const destinationNetwork = (data.destination_payment_rail as string) ?? null;
     const destinationCurrency = (data.currency as string) ?? null;
+    // Tasa de cambio de Bridge (receipt.exchange_rate). En va_deposit la conversión
+    // fiat → stablecoin es a la par, por lo que el fallback es 1.0 si Bridge no la envía.
+    const bridgeExchangeRate =
+      receipt?.exchange_rate != null
+        ? parseFloat(receipt.exchange_rate as string)
+        : 1.0;
 
     this.logger.log(`VA payment_processed: depositId=${depositId} va=${vaId} tx=${txHash ?? 'n/a'}`);
 
@@ -1351,6 +1363,7 @@ export class WebhooksService {
         fee_amount: bridgeDeveloperFee ?? undefined,
         net_amount: creditAmount,
         amount_destination: creditAmount,
+        exchange_rate_applied: bridgeExchangeRate,
         destination_currency: destinationCurrency?.toUpperCase() ?? null,
         destination_network: destinationNetwork ?? null,
         tx_hash: txHash,

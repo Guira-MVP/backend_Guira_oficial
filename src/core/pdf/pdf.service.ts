@@ -29,6 +29,8 @@ const COLORS = {
 const FLOW_LABELS: Record<string, string> = {
   fiat_bo_to_bridge_wallet: 'Deposito BOB - Billetera Guira',
   crypto_to_bridge_wallet: 'Deposito Crypto - Billetera Guira',
+  // NOTA: fiat_us_to_bridge_wallet está soportado en el PDF (label + destino) pero
+  // aún NO tiene método de creación en payment-orders.service.ts (flujo planificado).
   fiat_us_to_bridge_wallet: 'Deposito USD - Billetera Guira',
   bridge_wallet_to_fiat_bo: 'Retiro Guira - Cuenta BOB',
   bridge_wallet_to_fiat_us: 'Retiro Guira - Cuenta USD',
@@ -145,25 +147,30 @@ export class PdfService {
 
   private buildOriginRows(order: any, metadata: any, clientWallet: any): any[][] {
     const ft = order.flow_type;
-    // fiat_bo_to_bridge_wallet: source_currency stores the stablecoin, not the BOB origin
+    // fiat_bo_to_bridge_wallet: source_currency stores the stablecoin, not the BOB origin.
+    // Nota: amount_origin / fee_total / origin_currency NO existen como columnas en
+    // payment_orders. Las columnas reales son amount, fee_amount y source_currency/currency.
     const originCcy = ft === 'fiat_bo_to_bridge_wallet'
       ? (order.currency ?? '').toUpperCase()
-      : (order.origin_currency ?? order.source_currency ?? order.currency ?? '').toUpperCase();
+      : (order.source_currency ?? order.currency ?? '').toUpperCase();
 
-    // Resolve exchange rate: fallback to 1.00 label for pure stablecoin flows
-    const STABLECOIN_FLOWS = ['bridge_wallet_to_crypto', 'bridge_wallet_to_fiat_us', 'crypto_to_bridge_wallet'];
-    let exchangeRateDisplay: string;
-    if (order.exchange_rate_applied != null && order.exchange_rate_applied !== 0) {
-      exchangeRateDisplay = this.toDisplay(order.exchange_rate_applied);
-    } else if (STABLECOIN_FLOWS.includes(ft)) {
-      exchangeRateDisplay = '1.00 (stablecoin)';
-    } else {
-      exchangeRateDisplay = this.toDisplay(order.exchange_rate_applied);
-    }
+    // Tipo de cambio: los flujos 1:1 (stablecoin) muestran una etiqueta explícita.
+    // Estos flujos guardan exchange_rate_applied = 1.0, por lo que el chequeo de
+    // stablecoin DEBE tener prioridad; de lo contrario la etiqueta nunca se mostraba
+    // (el valor 1.0 hacía que siempre se imprimiera el "1" crudo).
+    const STABLECOIN_FLOWS = [
+      'wallet_to_wallet',
+      'bridge_wallet_to_crypto',
+      'bridge_wallet_to_fiat_us',
+      'crypto_to_bridge_wallet',
+    ];
+    const exchangeRateDisplay = STABLECOIN_FLOWS.includes(ft)
+      ? '1.00 (stablecoin)'
+      : this.toDisplay(order.exchange_rate_applied);
 
     const rows: any[][] = [
-      this.row('Monto Origen', `${this.fmtAmount(order.amount_origin ?? order.amount)} ${originCcy}`),
-      this.row('Comisión', `${this.fmtAmount(order.fee_total ?? order.fee_amount)} ${originCcy}`),
+      this.row('Monto Origen', `${this.fmtAmount(order.amount)} ${originCcy}`),
+      this.row('Comisión', `${this.fmtAmount(order.fee_amount)} ${originCcy}`),
       this.row('Tipo de Cambio', exchangeRateDisplay),
     ];
 
@@ -179,7 +186,7 @@ export class PdfService {
     if (ft === 'crypto_to_bridge_wallet') {
       rows.push(
         this.row('Red de Depósito', this.toDisplay(
-          order.source_network ?? this.readMeta(metadata, 'source_network') ?? order.origin_currency
+          order.source_network || this.readMeta(metadata, 'source_network')
         )),
       );
       // source_address = the external crypto wallet that sent funds to Bridge
@@ -190,9 +197,13 @@ export class PdfService {
 
     // ── fiat_bo_to_bridge_wallet: Bridge PSAV intermediate address ──
     if (ft === 'fiat_bo_to_bridge_wallet') {
-      // source_address = Bridge/PSAV intermediate wallet that converted BOB and sent stablecoin
-      if (order.source_address) {
-        rows.push(this.row('Direccion PSAV Guira', this.toDisplay(order.source_address)));
+      // source_address = Bridge/PSAV intermediate wallet that converted BOB and sent stablecoin.
+      // Hasta que el transfer se completa, source_address es null; usamos como fallback la
+      // liquidation address (to_address) capturada en las instrucciones de depósito al crear.
+      const psavAddress = order.source_address
+        || this.readMeta(order.bridge_source_deposit_instructions, 'to_address');
+      if (psavAddress) {
+        rows.push(this.row('Direccion PSAV Guira', this.toDisplay(psavAddress)));
       }
       if (order.source_network) {
         rows.push(this.row('Red de Salida Guira', this.toDisplay(order.source_network)));
@@ -261,7 +272,7 @@ export class PdfService {
       rows.push(
         this.row('Proveedor', this.toDisplay(supplier?.name ?? 'No asignado')),
         this.row('Wallet Destino', this.toDisplay(supplier?.bank_details?.wallet_address ?? order.destination_address)),
-        this.row('Red Destino', this.toDisplay(supplier?.bank_details?.wallet_network)),
+        this.row('Red Destino', this.toDisplay(supplier?.bank_details?.wallet_network ?? order.destination_network)),
         this.row('Moneda Destino', this.toDisplay(supplier?.bank_details?.wallet_currency ?? order.destination_currency)),
       );
     }
@@ -311,28 +322,26 @@ export class PdfService {
 
     // ── bridge_wallet_to_fiat_us ─────────────────────────
     else if (ft === 'bridge_wallet_to_fiat_us') {
-      // 1. Try direct order columns
-      let bankName = order.destination_bank_name ?? '';
-      let acctNum = order.destination_account_number ?? order.destination_address ?? '';
-      let routing = '';
-      let holder = order.destination_account_holder ?? '';
+      // bank_details guarda los datos ACH directamente (NO existe un sub-objeto `ach`).
+      // order.destination_account_number se guarda ENMASCARADO (****1234), por lo que
+      // preferimos el número completo de supplier.bank_details para el comprobante.
+      const bd: any = supplier?.bank_details ?? {};
+      let bankName = order.destination_bank_name || bd.bank_name || '';
+      let acctNum = bd.account_number || order.destination_account_number || order.destination_address || '';
+      const routing = bd.routing_number || '';
+      let holder = order.destination_account_holder
+        || bd.business_name
+        || [bd.first_name, bd.last_name].filter(Boolean).join(' ')
+        || supplier?.name
+        || '';
 
-      // 2. Fallback: supplier.bank_details (ACH data)
-      if (!bankName && supplier?.bank_details) {
-        const ach = (supplier.bank_details as any).ach ?? supplier.bank_details;
-        bankName = ach?.bank_name ?? '';
-        if (!acctNum) acctNum = ach?.account_number ?? '';
-        routing = ach?.routing_number ?? '';
-        if (!holder) holder = ach?.account_holder_name ?? supplier?.name ?? '';
-      }
-
-      // 3. Fallback: supplier.external_accounts
+      // Último recurso: supplier.external_accounts
       if (!bankName && supplier?.external_accounts?.length) {
         const ext = supplier.external_accounts.find((a: any) => a.id === order.external_account_id);
         if (ext) {
-          bankName = ext.bank_name ?? '';
-          if (!acctNum) acctNum = ext.account_number ?? '';
-          if (!holder) holder = ext.account_holder_name ?? '';
+          bankName = ext.bank_name || '';
+          if (!acctNum) acctNum = ext.account_number || '';
+          if (!holder) holder = ext.account_holder_name || '';
         }
       }
 
@@ -381,8 +390,10 @@ export class PdfService {
       'crypto_to_bridge_wallet', 'bridge_wallet_to_crypto',
       'wallet_to_wallet', 'bolivia_to_wallet',
       'fiat_bo_to_bridge_wallet', 'fiat_us_to_bridge_wallet',
+      // va_deposit: el stablecoin acreditado es la moneda destino (p.ej. USDC)
+      'va_deposit',
     ].includes(order.flow_type)) {
-      return order.destination_currency ?? 'N/D';
+      return order.destination_currency ?? order.currency ?? 'N/D';
     }
     // Off-ramps to fiat: stablecoin is the source (stored in currency column)
     if (['bridge_wallet_to_fiat_bo', 'bridge_wallet_to_fiat_us'].includes(order.flow_type)) {
@@ -433,7 +444,9 @@ export class PdfService {
       const metadata = order.metadata ?? {};
       const ft = order.flow_type ?? order.order_type ?? 'N/D';
       const destCcy = (order.destination_currency ?? order.currency ?? '').toUpperCase();
-      const amountDest = order.amount_converted ?? order.amount_destination ?? 0;
+      // amount_converted NO existe como columna; la columna real es amount_destination.
+      // Fallback a net_amount para flujos 1:1 que aún no han confirmado el monto final.
+      const amountDest = order.amount_destination ?? order.net_amount ?? 0;
       const statusUpper = this.toDisplay(order.status).toUpperCase();
       const statusLabel = STATUS_LABELS[statusUpper] ?? statusUpper;
       const flowLabel = FLOW_LABELS[ft] ?? ft.toUpperCase();
@@ -483,11 +496,6 @@ export class PdfService {
       // Source blockchain tx hash — proof that client sent funds
       if (order.source_tx_hash) {
         traceRows.push(this.row('Hash Blockchain Origen', this.toDisplay(order.source_tx_hash)));
-      }
-
-      // Official Bridge receipt URL — only full https:// URLs (not Supabase storage paths)
-      if (order.receipt_url && String(order.receipt_url).startsWith('http')) {
-        traceRows.push(this.row('Recibo Oficial Guira', this.toDisplay(order.receipt_url)));
       }
 
       // Staff approval date — manual flows that require Guira review

@@ -26,14 +26,12 @@ interface PaymentOrder {
   status: string;
   flow_type?: string;
   supplier_id?: string | null;
-  origin_currency?: string;
+  source_currency?: string;
   currency?: string;
-  amount_origin?: number;
   amount?: number;
   destination_currency?: string;
-  amount_converted?: number;
   amount_destination?: number;
-  fee_total?: number;
+  net_amount?: number;
   fee_amount?: number;
   exchange_rate_applied?: number;
   [key: string]: unknown;
@@ -87,11 +85,11 @@ function buildRows(orders: PaymentOrder[], suppliersMap: Map<string, string>, no
     flujo: FLOW_LABELS[o.flow_type ?? ''] ?? o.flow_type ?? 'N/D',
     estado: STATUS_LABELS[o.status] ?? o.status,
     proveedor: o.supplier_id ? (suppliersMap.get(o.supplier_id) ?? 'N/D') : fallback,
-    moneda_origen: (o.origin_currency ?? o.currency ?? '').toUpperCase(),
-    monto_origen: o.amount_origin ?? o.amount ?? 0,
+    moneda_origen: (o.source_currency ?? o.currency ?? '').toUpperCase(),
+    monto_origen: o.amount ?? 0,
     moneda_destino: (o.destination_currency ?? '').toUpperCase(),
-    monto_destino: o.amount_converted ?? o.amount_destination ?? 0,
-    fee: o.fee_total ?? o.fee_amount ?? 0,
+    monto_destino: o.amount_destination ?? o.net_amount ?? 0,
+    fee: o.fee_amount ?? 0,
     tipo_cambio: o.exchange_rate_applied ?? 1,
   }));
 }
