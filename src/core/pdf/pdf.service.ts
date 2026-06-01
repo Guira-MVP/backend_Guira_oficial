@@ -145,7 +145,7 @@ export class PdfService {
 
   // ─── Origin details (per service) ─────────────────────
 
-  private buildOriginRows(order: any, metadata: any, clientWallet: any): any[][] {
+  private buildOriginRows(order: any, clientWallet: any): any[][] {
     const ft = order.flow_type;
     // fiat_bo_to_bridge_wallet: source_currency stores the stablecoin, not the BOB origin.
     // Nota: amount_origin / fee_total / origin_currency NO existen como columnas en
@@ -185,9 +185,7 @@ export class PdfService {
     // ── crypto_to_bridge_wallet: network + sender address ──
     if (ft === 'crypto_to_bridge_wallet') {
       rows.push(
-        this.row('Red de Depósito', this.toDisplay(
-          order.source_network || this.readMeta(metadata, 'source_network')
-        )),
+        this.row('Red de Depósito', this.toDisplay(order.source_network)),
       );
       // source_address = the external crypto wallet that sent funds to Bridge
       if (order.source_address) {
@@ -219,7 +217,7 @@ export class PdfService {
     if (ft === 'wallet_to_wallet') {
       // source_address from DB is the actual sending external wallet (more accurate than clientWallet)
       const srcAddr = order.source_address ?? clientWallet?.address;
-      const srcNet = order.source_network ?? clientWallet?.network ?? this.readMeta(metadata, 'source_network');
+      const srcNet = order.source_network ?? clientWallet?.network;
       rows.push(
         this.row('Red Origen', this.toDisplay(srcNet)),
         this.row('Billetera Origen', this.toDisplay(srcAddr)),
@@ -231,17 +229,13 @@ export class PdfService {
 
   // ─── Destination details (per service) ────────────────
 
-  private buildDestinationRows(order: any, metadata: any, supplier: any, clientWallet: any): any[][] {
+  private buildDestinationRows(order: any, supplier: any, clientWallet: any): any[][] {
     const rows: any[][] = [];
     const ft = order.flow_type;
 
     // Purpose (common to all)
-    const purpose = order.business_purpose ?? this.readMeta(metadata, 'payment_reason');
+    const purpose = order.business_purpose;
     if (purpose) rows.push(this.row('Propósito', this.toDisplay(purpose)));
-
-    // Delivery method (common)
-    const delivery = this.readMeta(metadata, 'delivery_method');
-    if (delivery) rows.push(this.row('Método de Entrega', delivery));
 
     // ── bolivia_to_world ─────────────────────────────────
     if (ft === 'bolivia_to_world') {
@@ -254,7 +248,7 @@ export class PdfService {
           this.row('Titular', this.toDisplay(ext.account_holder_name)),
         );
       } else {
-        rows.push(this.row('Dirección Destino', this.toDisplay(order.destination_address ?? this.readMeta(metadata, 'destination_address'))));
+        rows.push(this.row('Dirección Destino', this.toDisplay(order.destination_address)));
       }
     }
 
@@ -303,15 +297,9 @@ export class PdfService {
     // ── bridge_wallet_to_fiat_bo ─────────────────────────
     else if (ft === 'bridge_wallet_to_fiat_bo') {
       // Primary source: dedicated columns populated at order creation
-      const bankName = order.destination_bank_name
-        ?? this.readMeta(metadata, 'destination_bank')
-        ?? this.readMeta(metadata, 'bank_name');
-      const acctNum = order.destination_account_number
-        ?? order.destination_address
-        ?? this.readMeta(metadata, 'destination_account');
-      const holder = order.destination_account_holder
-        ?? this.readMeta(metadata, 'account_holder')
-        ?? this.readMeta(metadata, 'beneficiary_name');
+      const bankName = order.destination_bank_name;
+      const acctNum = order.destination_account_number ?? order.destination_address;
+      const holder = order.destination_account_holder;
       rows.push(
         this.row('Banco Destino', this.toDisplay(bankName)),
         this.row('Cuenta Destino', this.toDisplay(acctNum)),
@@ -356,10 +344,8 @@ export class PdfService {
 
     // ── bridge_wallet_to_crypto ──────────────────────────
     else if (ft === 'bridge_wallet_to_crypto') {
-      const destAddr = order.destination_address ?? this.readMeta(metadata, 'destination_address');
-      const destNet = order.destination_network
-        ?? this.readMeta(metadata, 'destination_network')
-        ?? this.readMeta(metadata, 'dest_network');
+      const destAddr = order.destination_address;
+      const destNet = order.destination_network;
       rows.push(
         this.row('Wallet Destino', this.toDisplay(destAddr)),
         this.row('Red Destino', this.toDisplay(destNet)),
@@ -370,7 +356,7 @@ export class PdfService {
     // ── Generic fallback ─────────────────────────────────
     else {
       rows.push(
-        this.row('Dirección Destino', this.toDisplay(order.destination_address ?? this.readMeta(metadata, 'destination_address'))),
+        this.row('Dirección Destino', this.toDisplay(order.destination_address)),
       );
       if (order.destination_currency) {
         rows.push(this.row('Moneda Destino', order.destination_currency.toUpperCase()));
@@ -382,9 +368,7 @@ export class PdfService {
 
   // ─── Stablecoin resolution ────────────────────────────
 
-  private resolveStablecoin(order: any, metadata: any): string {
-    const fromMeta = this.readMeta(metadata, 'stablecoin');
-    if (fromMeta) return fromMeta;
+  private resolveStablecoin(order: any): string {
     // On-ramps: stablecoin is the destination
     if ([
       'crypto_to_bridge_wallet', 'bridge_wallet_to_crypto',
@@ -441,11 +425,10 @@ export class PdfService {
     clientWallet?: any,
   ): Promise<Buffer> {
     try {
-      const metadata = order.metadata ?? {};
-      const ft = order.flow_type ?? order.order_type ?? 'N/D';
+      const ft = order.flow_type ?? 'N/D';
       const destCcy = (order.destination_currency ?? order.currency ?? '').toUpperCase();
-      // amount_converted NO existe como columna; la columna real es amount_destination.
-      // Fallback a net_amount para flujos 1:1 que aún no han confirmado el monto final.
+      // amount_destination es la columna real; fallback a net_amount para flujos 1:1
+      // que aún no han confirmado el monto final.
       const amountDest = order.amount_destination ?? order.net_amount ?? 0;
       const statusUpper = this.toDisplay(order.status).toUpperCase();
       const statusLabel = STATUS_LABELS[statusUpper] ?? statusUpper;
@@ -453,23 +436,20 @@ export class PdfService {
       const stColor = this.statusColor(statusUpper);
       const logo = this.loadLogo();
 
-      const completedAtFb = this.readMeta(metadata, 'completed_at');
       const completedRender = order.completed_at
         ? this.fmtDate(order.completed_at)
-        : completedAtFb
-          ? this.fmtDate(completedAtFb)
-          : 'Pendiente';
+        : 'Pendiente';
 
-      const stablecoin = this.resolveStablecoin(order, metadata);
-      const rail = order.flow_category ?? order.processing_rail ?? 'N/D';
-      const originRows = this.buildOriginRows(order, metadata, clientWallet);
-      const destRows = this.buildDestinationRows(order, metadata, supplier, clientWallet);
+      const stablecoin = this.resolveStablecoin(order);
+      const rail = order.flow_category ?? 'N/D';
+      const originRows = this.buildOriginRows(order, clientWallet);
+      const destRows = this.buildDestinationRows(order, supplier, clientWallet);
 
       // ── Traceability rows ──────────────────────────────
       const traceRows: any[][] = [
         this.row('Categoría', this.toDisplay(rail)),
         this.row('Stablecoin', this.toDisplay(stablecoin)),
-        this.row('Ref. Proveedor', this.toDisplay(order.provider_reference ?? this.readMeta(metadata, 'reference'))),
+        this.row('Ref. Proveedor', this.toDisplay(order.provider_reference)),
         this.row('Completado', completedRender),
       ];
 
@@ -504,7 +484,7 @@ export class PdfService {
       }
 
       // Failure / rejection reason
-      const failReason = order.failure_reason ?? this.readMeta(metadata, 'rejection_reason');
+      const failReason = order.failure_reason;
       if (failReason) {
         traceRows.push(this.row('Motivo Rechazo', this.toDisplay(failReason), { color: COLORS.destructive }));
       }
