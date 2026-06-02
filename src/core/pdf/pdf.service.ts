@@ -82,6 +82,16 @@ export class PdfService {
     return val === null || val === undefined || val === '' ? 'N/D' : String(val);
   }
 
+  private truncateAddress(val: any): string {
+    const s = this.toDisplay(val);
+    if (s === 'N/D' || s.length <= 13) return s;
+    return `${s.slice(0, 5)}..................${s.slice(-5)}`;
+  }
+
+  private filterNd(rows: any[][]): any[][] {
+    return rows.filter(r => r[1]?.text !== 'N/D');
+  }
+
   private readMeta(meta: any, key: string): string {
     if (!meta || typeof meta !== 'object') return '';
     const val = meta[key];
@@ -177,7 +187,7 @@ export class PdfService {
     // ── Off-ramp flows: show source Bridge wallet ──────────
     if (['bridge_wallet_to_fiat_bo', 'bridge_wallet_to_fiat_us', 'bridge_wallet_to_crypto'].includes(ft)) {
       rows.push(
-        this.row('Billetera Origen', this.toDisplay(clientWallet?.address)),
+        this.row('Billetera Origen', this.truncateAddress(clientWallet?.address)),
         this.row('Red Origen', this.toDisplay(clientWallet?.network)),
       );
     }
@@ -189,7 +199,7 @@ export class PdfService {
       );
       // source_address = the external crypto wallet that sent funds to Bridge
       if (order.source_address) {
-        rows.push(this.row('Dirección de Depósito', this.toDisplay(order.source_address)));
+        rows.push(this.row('Dirección de Depósito', this.truncateAddress(order.source_address)));
       }
     }
 
@@ -201,7 +211,7 @@ export class PdfService {
       const psavAddress = order.source_address
         || this.readMeta(order.bridge_source_deposit_instructions, 'to_address');
       if (psavAddress) {
-        rows.push(this.row('Direccion PSAV Guira', this.toDisplay(psavAddress)));
+        rows.push(this.row('Direccion PSAV Guira', this.truncateAddress(psavAddress)));
       }
       if (order.source_network) {
         rows.push(this.row('Red de Salida Guira', this.toDisplay(order.source_network)));
@@ -220,7 +230,7 @@ export class PdfService {
       const srcNet = order.source_network ?? clientWallet?.network;
       rows.push(
         this.row('Red Origen', this.toDisplay(srcNet)),
-        this.row('Billetera Origen', this.toDisplay(srcAddr)),
+        this.row('Billetera Origen', this.truncateAddress(srcAddr)),
       );
     }
 
@@ -265,7 +275,7 @@ export class PdfService {
     else if (['bolivia_to_wallet', 'wallet_to_wallet'].includes(ft)) {
       rows.push(
         this.row('Proveedor', this.toDisplay(supplier?.name ?? 'No asignado')),
-        this.row('Wallet Destino', this.toDisplay(supplier?.bank_details?.wallet_address ?? order.destination_address)),
+        this.row('Wallet Destino', this.truncateAddress(supplier?.bank_details?.wallet_address ?? order.destination_address)),
         this.row('Red Destino', this.toDisplay(supplier?.bank_details?.wallet_network ?? order.destination_network)),
         this.row('Moneda Destino', this.toDisplay(supplier?.bank_details?.wallet_currency ?? order.destination_currency)),
       );
@@ -274,7 +284,7 @@ export class PdfService {
     // ── On-ramps: fiat/crypto/usd → bridge_wallet ─────────
     else if (['fiat_bo_to_bridge_wallet', 'crypto_to_bridge_wallet', 'fiat_us_to_bridge_wallet'].includes(ft)) {
       rows.push(
-        this.row('Billetera Destino', this.toDisplay(clientWallet?.address)),
+        this.row('Billetera Destino', this.truncateAddress(clientWallet?.address)),
         this.row('Red Destino', this.toDisplay(clientWallet?.network)),
       );
     }
@@ -347,7 +357,7 @@ export class PdfService {
       const destAddr = order.destination_address;
       const destNet = order.destination_network;
       rows.push(
-        this.row('Wallet Destino', this.toDisplay(destAddr)),
+        this.row('Wallet Destino', this.truncateAddress(destAddr)),
         this.row('Red Destino', this.toDisplay(destNet)),
         this.row('Moneda Destino', this.toDisplay(order.destination_currency)),
       );
@@ -441,15 +451,12 @@ export class PdfService {
         : 'Pendiente';
 
       const stablecoin = this.resolveStablecoin(order);
-      const rail = order.flow_category ?? 'N/D';
-      const originRows = this.buildOriginRows(order, clientWallet);
-      const destRows = this.buildDestinationRows(order, supplier, clientWallet);
+      const originRows = this.filterNd(this.buildOriginRows(order, clientWallet));
+      const destRows = this.filterNd(this.buildDestinationRows(order, supplier, clientWallet));
 
       // ── Traceability rows ──────────────────────────────
       const traceRows: any[][] = [
-        this.row('Categoría', this.toDisplay(rail)),
         this.row('Stablecoin', this.toDisplay(stablecoin)),
-        this.row('Ref. Proveedor', this.toDisplay(order.provider_reference)),
         this.row('Completado', completedRender),
       ];
 
@@ -570,7 +577,7 @@ export class PdfService {
           widths: ['30%', '70%'],
           body: [
             sectionHeader('TRAZABILIDAD Y REFERENCIAS', 2),
-            ...traceRows,
+            ...this.filterNd(traceRows),
           ],
         },
         layout: borderedLayout,
@@ -704,10 +711,7 @@ export class PdfService {
           {
             text: [
               { text: 'Aviso Legal: ', bold: true },
-              'Este comprobante es generado de forma automática por la plataforma Guira y constituye un registro ',
-              'operativo de la transacción aquí descrita. No sustituye documentación fiscal, tributaria ni contable ',
-              'requerida por las autoridades competentes. La información contenida es confidencial y de uso exclusivo ',
-              'del titular de la cuenta. Ante cualquier discrepancia, comuníquese con soporte@guira.com.',
+              'Transacción ejecutada mediante infraestructura certificada a través de Guira. Registro operativo oficial. No sustituye documentación fiscal ni contable. soporte@guiracorp.com',
             ],
             style: 'disclaimer',
             alignment: 'justify' as const,
@@ -719,8 +723,8 @@ export class PdfService {
           columns: [
             {
               stack: [
-                { text: 'Guira — Plataforma de Operaciones Financieras', style: 'footerBrand' },
-                { text: 'www.guira.com  |  soporte@guira.com', style: 'footerContact' },
+                { text: 'Guira — Plataforma de Operaciones Interbancarias', style: 'footerBrand' },
+                { text: 'www.guiracorp.com  |  soporte@guiracorp.com', style: 'footerContact' },
               ],
               alignment: 'left' as const,
             },
