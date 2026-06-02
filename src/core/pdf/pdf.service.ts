@@ -127,9 +127,10 @@ export class PdfService {
 
   private loadLogo(): any {
     try {
-      const logoPath = path.join(process.cwd(), 'assets', 'LOGO GUIRRA CON LETRA VERTICAL.svg');
+      const logoPath = path.join(process.cwd(), 'assets', 'LOGO-GUIRRA-CON-LETRA-VERTICAL.png');
       if (fs.existsSync(logoPath)) {
-        return { svg: fs.readFileSync(logoPath, 'utf-8'), width: 60, alignment: 'left' as const };
+        const b64 = fs.readFileSync(logoPath).toString('base64');
+        return { image: `data:image/png;base64,${b64}`, width: 60, alignment: 'left' as const };
       }
     } catch (err) {
       this.logger.warn('No se pudo cargar el logo para el PDF', err);
