@@ -179,4 +179,16 @@ export class CreateInterbankOrderDto {
   @IsString()
   @MaxLength(1000)
   notes?: string;
+
+  // ── Tipo de cambio congelado en la revisión (Step 4) ──
+  // "BOB por 1 USD" (effective_rate del par correspondiente). Es lo que el cliente
+  // aceptó visualmente; si llega, prevalece sobre el getRate() del servidor.
+  @ApiPropertyOptional({
+    description:
+      'Tipo de cambio congelado en la revisión del cliente (BOB por 1 USD).',
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  exchange_rate_applied?: number;
 }

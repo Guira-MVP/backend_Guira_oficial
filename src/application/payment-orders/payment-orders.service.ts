@@ -496,6 +496,12 @@ export class PaymentOrdersService {
 
     // Obtener tipo de cambio estimado
     const rateData = await this.exchangeRatesService.getRate('BOB_USD');
+    // Tipo de cambio congelado por el cliente en la revisión (Step 4). Si llegó,
+    // prevalece sobre el rate actual del servidor para honrar lo que el cliente aceptó.
+    const appliedRate =
+      dto.exchange_rate_applied && dto.exchange_rate_applied > 0
+        ? dto.exchange_rate_applied
+        : rateData.effective_rate;
 
     // Crear orden
     const { data: order, error } = await this.supabase
@@ -523,9 +529,9 @@ export class PaymentOrdersService {
           extAccount.first_name ??
           extAccount.business_name,
         destination_account_number: fullAccountNumber,
-        exchange_rate_applied: rateData.effective_rate,
+        exchange_rate_applied: appliedRate,
         amount_destination: parseFloat(
-          (net_amount / rateData.effective_rate).toFixed(2),
+          (net_amount / appliedRate).toFixed(2),
         ),
         psav_deposit_instructions: depositInstructions,
         business_purpose: dto.business_purpose,
@@ -819,6 +825,12 @@ export class PaymentOrdersService {
     );
 
     const rateData = await this.exchangeRatesService.getRate('BOB_USD');
+    // Tipo de cambio congelado por el cliente en la revisión (Step 4). Si llegó,
+    // prevalece sobre el rate actual del servidor para honrar lo que el cliente aceptó.
+    const appliedRate =
+      dto.exchange_rate_applied && dto.exchange_rate_applied > 0
+        ? dto.exchange_rate_applied
+        : rateData.effective_rate;
 
     // Validar que se especificó el token destino (no asumimos USDC por defecto)
     if (!dto.destination_currency) {
@@ -854,9 +866,9 @@ export class PaymentOrdersService {
         destination_network: dto.destination_network,
         destination_currency: dto.destination_currency.toUpperCase(),
         supplier_id: dto.supplier_id ?? null,
-        exchange_rate_applied: rateData.effective_rate,
+        exchange_rate_applied: appliedRate,
         amount_destination: parseFloat(
-          (net_amount / rateData.effective_rate).toFixed(2),
+          (net_amount / appliedRate).toFixed(2),
         ),
         psav_deposit_instructions: depositInstructions,
         business_purpose: dto.business_purpose,
@@ -900,6 +912,12 @@ export class PaymentOrdersService {
     );
 
     const rateData = await this.exchangeRatesService.getRate('USD_BOB');
+    // Tipo de cambio congelado por el cliente en la revisión (Step 4). Si llegó,
+    // prevalece sobre el rate actual del servidor para honrar lo que el cliente aceptó.
+    const appliedRate =
+      dto.exchange_rate_applied && dto.exchange_rate_applied > 0
+        ? dto.exchange_rate_applied
+        : rateData.effective_rate;
 
     // Bloquear si ya existe un expediente world_to_bolivia activo
     await this.assertNoConflictingPsavOrder(
@@ -926,9 +944,9 @@ export class PaymentOrdersService {
         destination_account_holder: dto.destination_account_holder,
         destination_qr_url: dto.destination_qr_url,
         supplier_id: dto.supplier_id ?? null,
-        exchange_rate_applied: rateData.effective_rate,
+        exchange_rate_applied: appliedRate,
         amount_destination: parseFloat(
-          (net_amount * rateData.effective_rate).toFixed(2),
+          (net_amount * appliedRate).toFixed(2),
         ),
         psav_deposit_instructions: depositInstructions,
         business_purpose: dto.business_purpose,
@@ -1439,6 +1457,12 @@ export class PaymentOrdersService {
     );
 
     const rateData = await this.exchangeRatesService.getRate('BOB_USD');
+    // Tipo de cambio congelado por el cliente en la revisión (Step 4). Si llegó,
+    // prevalece sobre el rate actual del servidor para honrar lo que el cliente aceptó.
+    const appliedRate =
+      dto.exchange_rate_applied && dto.exchange_rate_applied > 0
+        ? dto.exchange_rate_applied
+        : rateData.effective_rate;
 
     // ── Resolver fuente del PSAV según token destino ──
     const psavSource = resolvePsavCryptoSource(resolvedFiatBoDest);
@@ -1453,12 +1477,8 @@ export class PaymentOrdersService {
     // ── Convertir montos BOB → USDC (estimado interno, no se envía a Bridge) ──
     // Con flexible_amount Bridge acepta cualquier monto; usamos el estimado solo para
     // el registro interno (bridge_transfers, ledger_entry pendiente, amount_destination).
-    const bridgeAmountEstimated = (
-      dto.amount / rateData.effective_rate
-    ).toFixed(2);
-    const netAmountUsdc = parseFloat(
-      (net_amount / rateData.effective_rate).toFixed(2),
-    );
+    const bridgeAmountEstimated = (dto.amount / appliedRate).toFixed(2);
+    const netAmountUsdc = parseFloat((net_amount / appliedRate).toFixed(2));
 
     // ── developer_fee_percent: fee BOB / amount BOB * 100 (el tipo de cambio se cancela) ──
     const developerFeePercent =
@@ -1550,7 +1570,7 @@ export class PaymentOrdersService {
         destination_currency: resolvedFiatBoDest.toUpperCase(),
         bridge_transfer_id: bridgeTransfer.id as string,
         bridge_source_deposit_instructions: bridgeDepositInstructions,
-        exchange_rate_applied: rateData.effective_rate,
+        exchange_rate_applied: appliedRate,
         amount_destination: netAmountUsdc,
         psav_deposit_instructions: depositInstructions,
         notes: dto.notes,
@@ -1893,6 +1913,12 @@ export class PaymentOrdersService {
     });
 
     const rateData = await this.exchangeRatesService.getRate('USD_BOB');
+    // Tipo de cambio congelado por el cliente en la revisión (Step 4). Si llegó,
+    // prevalece sobre el rate actual del servidor para honrar lo que el cliente aceptó.
+    const appliedRate =
+      dto.exchange_rate_applied && dto.exchange_rate_applied > 0
+        ? dto.exchange_rate_applied
+        : rateData.effective_rate;
 
     // Snapshot: los datos bancarios se copian en la orden para trazabilidad histórica
     const { data: order, error } = await this.supabase
@@ -1915,9 +1941,9 @@ export class PaymentOrdersService {
         destination_account_holder: bankAccount.account_holder,
         client_bank_account_id: bankAccount.id,
         destination_qr_url: dto.destination_qr_url,
-        exchange_rate_applied: rateData.effective_rate,
+        exchange_rate_applied: appliedRate,
         amount_destination: parseFloat(
-          (net_amount * rateData.effective_rate).toFixed(2),
+          (net_amount * appliedRate).toFixed(2),
         ),
         business_purpose: dto.business_purpose,
         supporting_document_url: dto.supporting_document_url,
