@@ -1326,9 +1326,12 @@ export class PaymentOrdersService {
   ) {
     await this.validateRateLimit(userId);
 
-    // Validar que la divisa principal del flujo esté habilitada
+    // Validar que la divisa principal del flujo esté habilitada.
+    // source_currency tiene prioridad: en flujos de retiro de wallet es el crypto
+    // que sale (ej: usdc → usd). destination_currency solo aplica cuando no hay
+    // source_currency (ej: fiat_bo_to_bridge_wallet donde llega crypto como destino).
     const currencyToCheck =
-      dto.destination_currency ?? dto.source_currency;
+      dto.source_currency ?? dto.destination_currency;
     if (currencyToCheck) {
       await this.assertCurrencyActive(currencyToCheck);
     }
