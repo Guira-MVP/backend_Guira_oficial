@@ -108,6 +108,15 @@ export class PaymentOrdersService {
     };
   }
 
+  private generateDepositReferenceCode(): string {
+    const now = new Date();
+    const dd = String(now.getDate()).padStart(2, '0');
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const yyyy = String(now.getFullYear());
+    const rand = Math.floor(100000 + Math.random() * 900000);
+    return `G-${dd}${mm}${yyyy}-${rand}`;
+  }
+
   // ═══════════════════════════════════════════════
   //  RATE LIMITS & VALIDATION
   // ═══════════════════════════════════════════════
@@ -522,6 +531,7 @@ export class PaymentOrdersService {
         business_purpose: dto.business_purpose,
         supporting_document_url: dto.supporting_document_url,
         notes: dto.notes,
+        deposit_reference_code: this.generateDepositReferenceCode(),
         status: 'waiting_deposit',
       })
       .select()
@@ -852,6 +862,7 @@ export class PaymentOrdersService {
         business_purpose: dto.business_purpose,
         supporting_document_url: dto.supporting_document_url,
         notes: dto.notes,
+        deposit_reference_code: this.generateDepositReferenceCode(),
         status: 'waiting_deposit',
       })
       .select()
@@ -923,6 +934,7 @@ export class PaymentOrdersService {
         business_purpose: dto.business_purpose,
         supporting_document_url: dto.supporting_document_url,
         notes: dto.notes,
+        deposit_reference_code: this.generateDepositReferenceCode(),
         status: 'waiting_deposit',
       })
       .select()
@@ -1544,6 +1556,7 @@ export class PaymentOrdersService {
         notes: dto.notes,
         business_purpose: dto.business_purpose,
         supporting_document_url: dto.supporting_document_url,
+        deposit_reference_code: this.generateDepositReferenceCode(),
         status: 'waiting_deposit',
       })
       .select()
