@@ -611,14 +611,15 @@ export class PaymentOrdersService {
       );
     }
 
-    // ── 3. Validar monto mínimo de la ruta ──
+    // ── 3. Validar monto mínimo de la ruta (solo si el cliente especificó un monto) ──
+    const amount = dto.amount ?? 0;
     const minAmount = getTransferMinAmount(
       dto.source_network!,
       dto.source_currency!,
       destNetwork,
       destCurrency,
     );
-    if (dto.amount < minAmount) {
+    if (amount > 0 && amount < minAmount) {
       throw new BadRequestException(
         `El monto mínimo para esta ruta (${dto.source_currency?.toUpperCase()}/${dto.source_network} → ` +
           `${destCurrency.toUpperCase()}/${destNetwork}) es ${minAmount} ${dto.source_currency?.toUpperCase()}.`,
@@ -638,13 +639,17 @@ export class PaymentOrdersService {
       'bridge',
     );
 
-    // fee_amount / net_amount para el registro local de la orden
-    const { fee_amount, net_amount } = await this.feesService.calculateFee(
-      userId,
-      'interbank_w2w',
-      'bridge',
-      dto.amount,
-    );
+    // fee_amount / net_amount: se calculan solo si hay monto definido.
+    // Para depósitos flexibles (amount=0) se rellenan desde el receipt del webhook al completarse.
+    const { fee_amount, net_amount } =
+      amount > 0
+        ? await this.feesService.calculateFee(
+            userId,
+            'interbank_w2w',
+            'bridge',
+            amount,
+          )
+        : { fee_amount: 0, net_amount: 0 };
 
     // ── 4. Crear orden ──
     const { data: order, error } = await this.supabase
@@ -654,7 +659,7 @@ export class PaymentOrdersService {
         flow_type: 'wallet_to_wallet',
         flow_category: 'interbank',
         requires_psav: false,
-        amount: dto.amount,
+        amount: amount,
         currency: dto.source_currency?.toUpperCase(),
         fee_amount,
         net_amount,
@@ -726,7 +731,7 @@ export class PaymentOrdersService {
       await this.supabase.from('bridge_transfers').insert({
         user_id: userId,
         bridge_transfer_id: transferId,
-        amount: dto.amount,
+        amount: amount,
         net_amount,
         bridge_state: (bridgeResult?.state as string) ?? 'awaiting_funds',
         status: 'pending',
@@ -764,9 +769,9 @@ export class PaymentOrdersService {
     }
 
     this.logger.log(
-      `📋 Orden wallet_to_wallet creada: ${order.id} — ${dto.amount} ${dto.source_currency} → ${destCurrency.toUpperCase()}/${destNetwork} (supplier: ${supplier.name})`,
+      `📋 Orden wallet_to_wallet creada: ${order.id} — ${amount > 0 ? amount : 'flexible'} ${dto.source_currency} → ${destCurrency.toUpperCase()}/${destNetwork} (supplier: ${supplier.name}, fee: ${feePercent}%)`,
     );
-    return order;
+    return { ...order, fee_percent: parseFloat(feePercent) };
   }
 
   /**
@@ -3341,19 +3346,13 @@ export class PaymentOrdersService {
       const term = filters.q.trim().slice(0, 100).replace(/[,()%*:]/g, ' ').trim();
       if (term) {
         const orFilters: string[] = [
+          // Cast id a texto para admitir búsqueda parcial por prefijo (p.ej. "a1b2c3d4").
+          `id::text.ilike.%${term}%`,
           `status.ilike.%${term}%`,
           `flow_type.ilike.%${term}%`,
           `currency.ilike.%${term}%`,
           `destination_currency.ilike.%${term}%`,
         ];
-        // `id` es uuid (no admite ilike): solo igualdad exacta si el término es un UUID completo.
-        if (
-          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-            term,
-          )
-        ) {
-          orFilters.push(`id.eq.${term}`);
-        }
         // Cliente: resolvemos primero los user_ids cuyo nombre/email coincida.
         const { data: matchedProfiles } = await this.supabase
           .from('profiles')

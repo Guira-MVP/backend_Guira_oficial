@@ -433,10 +433,16 @@ export class PdfService {
   ): Promise<Buffer> {
     try {
       const ft = order.flow_type ?? 'N/D';
-      const destCcy = (order.destination_currency ?? order.currency ?? '').toUpperCase();
       // amount_destination es la columna real; fallback a net_amount para flujos 1:1
       // que aún no han confirmado el monto final.
       const amountDest = order.amount_destination ?? order.net_amount ?? 0;
+      const isFlexiblePending =
+        order.flow_type === 'wallet_to_wallet' &&
+        amountDest === 0 &&
+        order.status !== 'completed';
+      const amountDestText = isFlexiblePending
+        ? 'Por definir'
+        : `${this.fmtAmount(amountDest)} ${(order.destination_currency ?? order.currency ?? '').toUpperCase()}`;
       const statusUpper = this.toDisplay(order.status).toUpperCase();
       const statusLabel = STATUS_LABELS[statusUpper] ?? statusUpper;
       const flowLabel = FLOW_LABELS[ft] ?? ft.toUpperCase();
@@ -666,7 +672,7 @@ export class PdfService {
                     {
                       stack: [
                         { text: 'MONTO ACREDITADO', style: 'amountLabel' },
-                        { text: `${this.fmtAmount(amountDest)} ${destCcy}`, style: 'amountValue' },
+                        { text: amountDestText, style: 'amountValue' },
                       ],
                       width: '*',
                     },

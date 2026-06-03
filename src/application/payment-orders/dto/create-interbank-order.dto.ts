@@ -30,10 +30,11 @@ export class CreateInterbankOrderDto {
   @IsEnum(InterbankFlowType)
   flow_type: InterbankFlowType;
 
-  @ApiProperty({ example: 1000.0 })
+  @ApiPropertyOptional({ example: 1000.0, description: 'Requerido para todos los flujos excepto wallet_to_wallet, donde el depósito es flexible.' })
+  @ValidateIf((o) => o.flow_type !== InterbankFlowType.WALLET_TO_WALLET)
   @IsNumber()
   @Min(0.01)
-  amount: number;
+  amount?: number;
 
   // ── bolivia_to_world: destino es external_account ──
   @ApiPropertyOptional()
