@@ -800,7 +800,7 @@ export class PaymentOrdersService {
 
     const { data: liquidationAddressForFee } = await this.supabase
       .from('bridge_liquidation_addresses')
-      .select('bridge_liquidation_address_id, developer_fee_percent')
+      .select('bridge_liquidation_address_id, developer_fee_percent, currency')
       .eq('user_id', userId)
       .eq(
         'bridge_liquidation_address_id',
@@ -839,10 +839,17 @@ export class PaymentOrdersService {
         ? dto.exchange_rate_applied
         : rateData.effective_rate;
 
-    // Validar que se especificó el token destino (no asumimos USDC por defecto)
-    if (!dto.destination_currency) {
+    // La divisa destino es el token real de la liquidation address (USDC/USDT...),
+    // no la que envía el cliente. El formulario puede mandar 'USD' por defecto, pero
+    // la LA es la fuente de verdad: el dinero llega exactamente en su `currency`.
+    const destinationCurrency = (
+      liquidationAddressForFee.currency || dto.destination_currency
+    )?.toUpperCase();
+
+    if (!destinationCurrency) {
       throw new BadRequestException(
-        'destination_currency es obligatorio para bolivia_to_wallet. Especifica el token destino (ej: usdc, usdt).',
+        'No se pudo resolver la divisa destino para bolivia_to_wallet. La liquidation ' +
+          'address no tiene `currency` y el cliente no especificó destination_currency.',
       );
     }
 
@@ -850,7 +857,7 @@ export class PaymentOrdersService {
     await this.assertNoConflictingPsavOrder(
       userId,
       'bolivia_to_wallet',
-      dto.destination_currency,
+      destinationCurrency,
     );
 
     const { data: order, error } = await this.supabase
@@ -871,7 +878,7 @@ export class PaymentOrdersService {
         destination_type: 'crypto_address',
         destination_address: dto.destination_address,
         destination_network: dto.destination_network,
-        destination_currency: dto.destination_currency.toUpperCase(),
+        destination_currency: destinationCurrency,
         supplier_id: dto.supplier_id ?? null,
         exchange_rate_applied: appliedRate,
         amount_destination: parseFloat(
