@@ -3348,21 +3348,29 @@ export class PaymentOrdersService {
       const term = filters.q.trim().slice(0, 100).replace(/[,()%*:]/g, ' ').trim();
       if (term) {
         const orFilters: string[] = [
-          // Cast id a texto para admitir búsqueda parcial por prefijo (p.ej. "a1b2c3d4").
-          `id::text.ilike.%${term}%`,
           `status.ilike.%${term}%`,
           `flow_type.ilike.%${term}%`,
           `currency.ilike.%${term}%`,
           `destination_currency.ilike.%${term}%`,
         ];
-        // Cliente: resolvemos primero los user_ids cuyo nombre/email coincida.
-        const { data: matchedProfiles } = await this.supabase
-          .from('profiles')
-          .select('id')
-          .or(`full_name.ilike.%${term}%,email.ilike.%${term}%`)
-          .limit(50);
+        // PostgREST's or() parser does not support ::cast syntax, so id and
+        // profile matches are pre-resolved and added as in() conditions instead.
+        const [{ data: matchedProfiles }, { data: matchedOrderIds }] = await Promise.all([
+          this.supabase
+            .from('profiles')
+            .select('id')
+            .or(`full_name.ilike.%${term}%,email.ilike.%${term}%`)
+            .limit(50),
+          this.supabase
+            .from('payment_orders')
+            .select('id')
+            .filter('id::text', 'ilike', `%${term}%`)
+            .limit(50),
+        ]);
         const userIds = (matchedProfiles ?? []).map((p) => p.id);
         if (userIds.length) orFilters.push(`user_id.in.(${userIds.join(',')})`);
+        const orderIds = (matchedOrderIds ?? []).map((o) => o.id);
+        if (orderIds.length) orFilters.push(`id.in.(${orderIds.join(',')})`);
 
         query = query.or(orFilters.join(','));
       }
