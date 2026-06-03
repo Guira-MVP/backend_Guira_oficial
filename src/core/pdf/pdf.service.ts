@@ -633,7 +633,7 @@ export class PdfService {
                 {
                   stack: [
                     { text: 'FECHA DE EMISIÓN', style: 'metaLabel' },
-                    { text: this.fmtDate(order.created_at), style: 'metaValue' },
+                    { text: this.fmtDate(order.created_at), style: 'metaValue', fontSize: 10 },
                   ],
                   margin: [8, 6, 8, 6],
                 },
