@@ -250,17 +250,13 @@ export class PdfService {
 
     // ── bolivia_to_world ─────────────────────────────────
     if (ft === 'bolivia_to_world') {
-      rows.push(this.row('Proveedor', this.toDisplay(supplier?.name ?? 'No asignado')));
-      const ext = supplier?.external_accounts?.find((a: any) => a.id === order.external_account_id);
-      if (ext) {
-        rows.push(
-          this.row('Banco Destino', this.toDisplay(ext.bank_name)),
-          this.row('Cuenta Destino', this.toDisplay(ext.account_number)),
-          this.row('Titular', this.toDisplay(ext.account_holder_name)),
-        );
-      } else {
-        rows.push(this.row('Dirección Destino', this.toDisplay(order.destination_address)));
-      }
+      rows.push(
+        this.row('Proveedor', this.toDisplay(supplier?.name ?? 'No asignado')),
+        this.row('Banco Destino', this.toDisplay(order.destination_bank_name)),
+        this.row('Cuenta Destino', this.toDisplay(order.destination_account_number)),
+        this.row('Titular', this.toDisplay(order.destination_account_holder)),
+        this.row('Moneda Destino', this.toDisplay(order.destination_currency)),
+      );
     }
 
     // ── world_to_bolivia ─────────────────────────────────
