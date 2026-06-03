@@ -350,27 +350,29 @@ export class PaymentOrdersService {
       // WORLD_TO_BOLIVIA, WORLD_TO_WALLET → USD (default)
     }
 
-    const limitCheck = await this.checkAmountLimits(dto.amount, dto.flow_type, inputCurrency, userId);
+    if (dto.amount != null) {
+      const limitCheck = await this.checkAmountLimits(dto.amount, dto.flow_type, inputCurrency, userId);
 
-    if (limitCheck.exceeded) {
-      if (!reviewContext?.clientReason) {
-        throw new BadRequestException(
-          `El monto excede el límite máximo de $${limitCheck.max} USD. Envía una solicitud de revisión con el motivo de la operación.`,
-        );
+      if (limitCheck.exceeded) {
+        if (!reviewContext?.clientReason) {
+          throw new BadRequestException(
+            `El monto excede el límite máximo de $${limitCheck.max} USD. Envía una solicitud de revisión con el motivo de la operación.`,
+          );
+        }
+        const review = await this.orderReviewService.createReviewRequest({
+          userId,
+          flowType: dto.flow_type,
+          amount: dto.amount,
+          currency: inputCurrency,
+          amountUsdEquiv: limitCheck.amountUsd,
+          limitUsd: limitCheck.max,
+          excessUsd: parseFloat((limitCheck.amountUsd - limitCheck.max).toFixed(2)),
+          requestPayload: dto as unknown as Record<string, unknown>,
+          clientReason: reviewContext.clientReason,
+          documentUrl: reviewContext.documentUrl,
+        });
+        return { _type: 'review_request' as const, review };
       }
-      const review = await this.orderReviewService.createReviewRequest({
-        userId,
-        flowType: dto.flow_type,
-        amount: dto.amount,
-        currency: inputCurrency,
-        amountUsdEquiv: limitCheck.amountUsd,
-        limitUsd: limitCheck.max,
-        excessUsd: parseFloat((limitCheck.amountUsd - limitCheck.max).toFixed(2)),
-        requestPayload: dto as unknown as Record<string, unknown>,
-        clientReason: reviewContext.clientReason,
-        documentUrl: reviewContext.documentUrl,
-      });
-      return { _type: 'review_request' as const, review };
     }
 
     let interbankOrder: any;
@@ -490,7 +492,7 @@ export class PaymentOrdersService {
     // El fee de este flujo debe respetar el porcentaje congelado en la
     // liquidation address, no el fees_config global actual.
     const { fee_amount, net_amount } = this.calculateFeeFromLiquidationAddress(
-      dto.amount,
+      dto.amount!,
       liquidationFeePercent,
     );
 
@@ -825,7 +827,7 @@ export class PaymentOrdersService {
       this.psavService.formatDepositInstructions(psavAccount);
 
     const { fee_amount, net_amount } = this.calculateFeeFromLiquidationAddress(
-      dto.amount,
+      dto.amount!,
       liquidationFeePercent,
     );
 
@@ -913,7 +915,7 @@ export class PaymentOrdersService {
       userId,
       'interbank_bo_in',
       'psav',
-      dto.amount,
+      dto.amount!,
     );
 
     const rateData = await this.exchangeRatesService.getRate('USD_BOB');
@@ -1015,7 +1017,7 @@ export class PaymentOrdersService {
       userId,
       'ramp_on_fiat_us',
       'bridge',
-      dto.amount,
+      dto.amount!,
     );
 
     const depositInstructions = {
