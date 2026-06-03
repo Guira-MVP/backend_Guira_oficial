@@ -92,6 +92,39 @@ export class PdfService {
     return rows.filter(r => r[1]?.text !== 'N/D');
   }
 
+  private buildExplorerUrl(
+    value: string | undefined | null,
+    network: string | undefined | null,
+    type: 'tx' | 'address',
+  ): string | null {
+    if (!value || value === 'N/D' || !network) return null;
+    const n = network.toLowerCase();
+    switch (n) {
+      case 'solana':
+        return type === 'tx'
+          ? `https://solscan.io/tx/${value}`
+          : `https://solscan.io/account/${value}`;
+      case 'tron':
+        return type === 'tx'
+          ? `https://tronscan.org/#/transaction/${value}`
+          : `https://tronscan.org/#/address/${value}`;
+      case 'ethereum':
+        return type === 'tx'
+          ? `https://etherscan.io/tx/${value}`
+          : `https://etherscan.io/address/${value}`;
+      case 'polygon':
+        return type === 'tx'
+          ? `https://polygonscan.com/tx/${value}`
+          : `https://polygonscan.com/address/${value}`;
+      case 'stellar':
+        return type === 'tx'
+          ? `https://stellar.expert/explorer/public/tx/${value}`
+          : `https://stellar.expert/explorer/public/account/${value}`;
+      default:
+        return null;
+    }
+  }
+
   private readMeta(meta: any, key: string): string {
     if (!meta || typeof meta !== 'object') return '';
     const val = meta[key];
@@ -146,6 +179,17 @@ export class PdfService {
     ];
   }
 
+  /** Like row(), but renders the value as a clickable link when url is provided */
+  private linkRow(label: string, displayValue: string, url: string | null, opts?: { color?: string }): any[] {
+    if (url) {
+      return [
+        { text: label, style: 'tLabel' },
+        { text: displayValue, style: 'tValue', color: COLORS.primary, link: url, decoration: 'underline' },
+      ];
+    }
+    return this.row(label, displayValue, opts);
+  }
+
   /** Horizontal divider line */
   private divider(width = 515): any {
     return {
@@ -188,7 +232,7 @@ export class PdfService {
     // ── Off-ramp flows: show source Bridge wallet ──────────
     if (['bridge_wallet_to_fiat_bo', 'bridge_wallet_to_fiat_us', 'bridge_wallet_to_crypto'].includes(ft)) {
       rows.push(
-        this.row('Billetera Origen', this.truncateAddress(clientWallet?.address)),
+        this.linkRow('Billetera Origen', this.truncateAddress(clientWallet?.address), this.buildExplorerUrl(clientWallet?.address, clientWallet?.network, 'address')),
         this.row('Red Origen', this.toDisplay(clientWallet?.network)),
       );
     }
@@ -200,7 +244,7 @@ export class PdfService {
       );
       // source_address = the external crypto wallet that sent funds to Bridge
       if (order.source_address) {
-        rows.push(this.row('Dirección de Depósito', this.truncateAddress(order.source_address)));
+        rows.push(this.linkRow('Dirección de Depósito', this.truncateAddress(order.source_address), this.buildExplorerUrl(order.source_address, order.source_network, 'address')));
       }
     }
 
@@ -212,7 +256,7 @@ export class PdfService {
       const psavAddress = order.source_address
         || this.readMeta(order.bridge_source_deposit_instructions, 'to_address');
       if (psavAddress) {
-        rows.push(this.row('Direccion PSAV Guira', this.truncateAddress(psavAddress)));
+        rows.push(this.linkRow('Direccion PSAV Guira', this.truncateAddress(psavAddress), this.buildExplorerUrl(psavAddress, order.source_network, 'address')));
       }
       if (order.source_network) {
         rows.push(this.row('Red de Salida Guira', this.toDisplay(order.source_network)));
@@ -231,7 +275,7 @@ export class PdfService {
       const srcNet = order.source_network ?? clientWallet?.network;
       rows.push(
         this.row('Red Origen', this.toDisplay(srcNet)),
-        this.row('Billetera Origen', this.truncateAddress(srcAddr)),
+        this.linkRow('Billetera Origen', this.truncateAddress(srcAddr), this.buildExplorerUrl(srcAddr, srcNet, 'address')),
       );
     }
 
@@ -270,10 +314,12 @@ export class PdfService {
 
     // ── bolivia_to_wallet / wallet_to_wallet ─────────────
     else if (['bolivia_to_wallet', 'wallet_to_wallet'].includes(ft)) {
+      const walletAddr = supplier?.bank_details?.wallet_address ?? order.destination_address;
+      const walletNet = supplier?.bank_details?.wallet_network ?? order.destination_network;
       rows.push(
         this.row('Proveedor', this.toDisplay(supplier?.name ?? 'No asignado')),
-        this.row('Wallet Destino', this.truncateAddress(supplier?.bank_details?.wallet_address ?? order.destination_address)),
-        this.row('Red Destino', this.toDisplay(supplier?.bank_details?.wallet_network ?? order.destination_network)),
+        this.linkRow('Wallet Destino', this.truncateAddress(walletAddr), this.buildExplorerUrl(walletAddr, walletNet, 'address')),
+        this.row('Red Destino', this.toDisplay(walletNet)),
         this.row('Moneda Destino', this.toDisplay(supplier?.bank_details?.wallet_currency ?? order.destination_currency)),
       );
     }
@@ -281,7 +327,7 @@ export class PdfService {
     // ── On-ramps: fiat/crypto/usd → bridge_wallet ─────────
     else if (['fiat_bo_to_bridge_wallet', 'crypto_to_bridge_wallet', 'fiat_us_to_bridge_wallet'].includes(ft)) {
       rows.push(
-        this.row('Billetera Destino', this.truncateAddress(clientWallet?.address)),
+        this.linkRow('Billetera Destino', this.truncateAddress(clientWallet?.address), this.buildExplorerUrl(clientWallet?.address, clientWallet?.network, 'address')),
         this.row('Red Destino', this.toDisplay(clientWallet?.network)),
       );
     }
@@ -354,7 +400,7 @@ export class PdfService {
       const destAddr = order.destination_address;
       const destNet = order.destination_network;
       rows.push(
-        this.row('Wallet Destino', this.truncateAddress(destAddr)),
+        this.linkRow('Wallet Destino', this.truncateAddress(destAddr), this.buildExplorerUrl(destAddr, destNet, 'address')),
         this.row('Red Destino', this.toDisplay(destNet)),
         this.row('Moneda Destino', this.toDisplay(order.destination_currency)),
       );
@@ -477,15 +523,20 @@ export class PdfService {
       if (order.tx_hash) {
         // Manual flows use tx_hash as a staff-entered reference, not a real blockchain hash
         const isManualRef = ['bridge_wallet_to_fiat_bo', 'bolivia_to_world', 'bolivia_to_wallet'].includes(ft);
-        traceRows.push(this.row(
-          isManualRef ? 'Ref. de Ejecución' : 'Hash Blockchain Destino',
-          this.toDisplay(order.tx_hash),
-        ));
+        const txLabel = isManualRef ? 'Ref. de Ejecución' : 'Hash Blockchain Destino';
+        const txUrl = isManualRef
+          ? null
+          : this.buildExplorerUrl(order.tx_hash, order.destination_network ?? order.source_network, 'tx');
+        traceRows.push(this.linkRow(txLabel, this.truncateAddress(order.tx_hash), txUrl));
       }
 
       // Source blockchain tx hash — proof that client sent funds
       if (order.source_tx_hash) {
-        traceRows.push(this.row('Hash Blockchain Origen', this.toDisplay(order.source_tx_hash)));
+        traceRows.push(this.linkRow(
+          'Hash Blockchain Origen',
+          this.truncateAddress(order.source_tx_hash),
+          this.buildExplorerUrl(order.source_tx_hash, order.source_network, 'tx'),
+        ));
       }
 
       // Staff approval date — manual flows that require Guira review
