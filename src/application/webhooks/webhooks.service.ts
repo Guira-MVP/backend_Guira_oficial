@@ -2493,6 +2493,7 @@ export class WebhooksService {
     >;
     const drainId = eventObject?.id as string;
     const amount = parseFloat((eventObject?.amount as string) ?? '0');
+    const depositTxHash = (eventObject?.deposit_tx_hash as string) || null;
     const destination = eventObject?.destination as
       | Record<string, unknown>
       | undefined;
@@ -2549,7 +2550,7 @@ export class WebhooksService {
         if (matched) {
           await this.supabase
             .from('payment_orders')
-            .update({ bridge_drain_id: drainId })
+            .update({ bridge_drain_id: drainId, source_tx_hash: depositTxHash })
             .eq('id', matched.id);
 
           // Audit log
@@ -2598,7 +2599,7 @@ export class WebhooksService {
       if (matched) {
         await this.supabase
           .from('payment_orders')
-          .update({ bridge_drain_id: drainId })
+          .update({ bridge_drain_id: drainId, source_tx_hash: depositTxHash })
           .eq('id', matched.id);
 
         await this.supabase.from('audit_logs').insert({
@@ -2645,6 +2646,7 @@ export class WebhooksService {
     const state = (eventObject?.state ??
       payload?.event_object_status) as string;
     const receipt = eventObject?.receipt as Record<string, unknown> | undefined;
+    const depositTxHash = (eventObject?.deposit_tx_hash as string) || null;
 
     if (!drainId) {
       this.logger.warn('⚠️ handleDrainUpdated: payload sin drain ID');
@@ -2709,7 +2711,7 @@ export class WebhooksService {
 
             if (matched) {
               // Vincular y completar en un solo paso
-              await this.completeDrainOrder(matched, drainId, receipt);
+              await this.completeDrainOrder(matched, drainId, receipt, depositTxHash);
               return;
             }
           }
@@ -2739,7 +2741,7 @@ export class WebhooksService {
           });
 
           if (matchedByAddr) {
-            await this.completeDrainOrder(matchedByAddr, drainId, receipt);
+            await this.completeDrainOrder(matchedByAddr, drainId, receipt, depositTxHash);
             return;
           }
         }
@@ -2751,7 +2753,7 @@ export class WebhooksService {
       }
 
       // Orden encontrada por bridge_drain_id — completar
-      await this.completeDrainOrder(order, drainId, receipt);
+      await this.completeDrainOrder(order, drainId, receipt, depositTxHash);
     } else if (state === 'payment_submitted') {
       await this.handleDrainPaymentSubmitted(drainId);
     } else if (state === 'in_review') {
@@ -2794,6 +2796,7 @@ export class WebhooksService {
     },
     drainId: string,
     receipt?: Record<string, unknown>,
+    depositTxHash?: string | null,
   ): Promise<void> {
     // 1. Actualizar orden a completed
     await this.supabase
@@ -2802,6 +2805,7 @@ export class WebhooksService {
         status: 'completed',
         completed_at: new Date().toISOString(),
         bridge_drain_id: drainId,
+        ...(depositTxHash ? { source_tx_hash: depositTxHash } : {}),
         ...(receipt?.final_amount
           ? { amount_destination: parseFloat(receipt.final_amount as string) }
           : {}),
