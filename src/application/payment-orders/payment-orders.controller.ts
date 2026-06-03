@@ -448,6 +448,7 @@ export class AdminPaymentOrdersController {
   @ApiQuery({ name: 'user_id', required: false })
   @ApiQuery({ name: 'from_date', required: false })
   @ApiQuery({ name: 'to_date', required: false })
+  @ApiQuery({ name: 'q', required: false })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   listAllOrders(
@@ -458,6 +459,7 @@ export class AdminPaymentOrdersController {
     @Query('user_id') user_id?: string,
     @Query('from_date') from_date?: string,
     @Query('to_date') to_date?: string,
+    @Query('q') q?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
@@ -470,6 +472,7 @@ export class AdminPaymentOrdersController {
       user_id,
       from_date,
       to_date,
+      q,
       page: page ? parseInt(page, 10) : undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
     });

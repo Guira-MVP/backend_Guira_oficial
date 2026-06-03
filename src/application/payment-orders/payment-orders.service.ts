@@ -3304,6 +3304,7 @@ export class PaymentOrdersService {
     user_id?: string;
     from_date?: string;
     to_date?: string;
+    q?: string;
     page?: number;
     limit?: number;
   }) {
@@ -3311,9 +3312,15 @@ export class PaymentOrdersService {
     const limit = Math.min(filters.limit ?? 50, 100);
     const offset = (page - 1) * limit;
 
+    // Embebemos profiles (FK payment_orders_user_id_fkey → profiles.id) para que
+    // cada orden traiga el nombre/email del cliente: con paginación ya no podemos
+    // resolverlo contra un mapa de usuarios precargado en el frontend.
     let query = this.supabase
       .from('payment_orders')
-      .select(`*, suppliers(id, name)`, { count: 'exact' })
+      .select(
+        `*, suppliers(id, name), profiles!payment_orders_user_id_fkey(full_name, email)`,
+        { count: 'exact' },
+      )
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
@@ -3326,6 +3333,39 @@ export class PaymentOrdersService {
     if (filters.user_id) query = query.eq('user_id', filters.user_id);
     if (filters.from_date) query = query.gte('created_at', filters.from_date);
     if (filters.to_date) query = query.lte('created_at', filters.to_date);
+
+    // Búsqueda de texto libre (q): combina columnas propias de la orden con el
+    // nombre/email del cliente. Se sanea el término para no romper la gramática
+    // de filtros de PostgREST ni permitir inyección en `.or()`.
+    if (filters.q?.trim()) {
+      const term = filters.q.trim().slice(0, 100).replace(/[,()%*:]/g, ' ').trim();
+      if (term) {
+        const orFilters: string[] = [
+          `status.ilike.%${term}%`,
+          `flow_type.ilike.%${term}%`,
+          `currency.ilike.%${term}%`,
+          `destination_currency.ilike.%${term}%`,
+        ];
+        // `id` es uuid (no admite ilike): solo igualdad exacta si el término es un UUID completo.
+        if (
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+            term,
+          )
+        ) {
+          orFilters.push(`id.eq.${term}`);
+        }
+        // Cliente: resolvemos primero los user_ids cuyo nombre/email coincida.
+        const { data: matchedProfiles } = await this.supabase
+          .from('profiles')
+          .select('id')
+          .or(`full_name.ilike.%${term}%,email.ilike.%${term}%`)
+          .limit(50);
+        const userIds = (matchedProfiles ?? []).map((p) => p.id);
+        if (userIds.length) orFilters.push(`user_id.in.(${userIds.join(',')})`);
+
+        query = query.or(orFilters.join(','));
+      }
+    }
 
     const { data, count, error } = await query;
     this.logger.debug(`listAllOrders → rows=${data?.length ?? 'null'} count=${count ?? 'null'} error=${error ? JSON.stringify(error) : 'none'}`);
