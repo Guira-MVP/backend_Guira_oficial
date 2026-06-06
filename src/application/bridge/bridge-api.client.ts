@@ -50,7 +50,12 @@ export class BridgeApiClient {
     if (!res.ok) {
       const err = await res.text();
       this.logger.error(`Bridge POST ${path} failed [${res.status}]: ${err}`);
-      throw new BadGatewayException(`Bridge API error [${res.status}]: ${err}`);
+      // ALTO-02: No propagar el cuerpo crudo del error de Bridge al cliente
+      // (puede contener IDs internos, datos KYC o detalles de arquitectura).
+      // El detalle completo queda en logger.error de arriba para debugging.
+      throw new BadGatewayException(
+        'Error al procesar la operación con el proveedor financiero. Inténtalo de nuevo o contacta a soporte si el problema persiste.',
+      );
     }
 
     return res.json() as Promise<T>;
@@ -66,7 +71,12 @@ export class BridgeApiClient {
     if (!res.ok) {
       const err = await res.text();
       this.logger.error(`Bridge GET ${path} failed [${res.status}]: ${err}`);
-      throw new BadGatewayException(`Bridge API error [${res.status}]: ${err}`);
+      // ALTO-02: No propagar el cuerpo crudo del error de Bridge al cliente
+      // (puede contener IDs internos, datos KYC o detalles de arquitectura).
+      // El detalle completo queda en logger.error de arriba para debugging.
+      throw new BadGatewayException(
+        'Error al procesar la operación con el proveedor financiero. Inténtalo de nuevo o contacta a soporte si el problema persiste.',
+      );
     }
 
     return res.json() as Promise<T>;
@@ -91,7 +101,12 @@ export class BridgeApiClient {
     if (!res.ok) {
       const err = await res.text();
       this.logger.error(`Bridge PUT ${path} failed [${res.status}]: ${err}`);
-      throw new BadGatewayException(`Bridge API error [${res.status}]: ${err}`);
+      // ALTO-02: No propagar el cuerpo crudo del error de Bridge al cliente
+      // (puede contener IDs internos, datos KYC o detalles de arquitectura).
+      // El detalle completo queda en logger.error de arriba para debugging.
+      throw new BadGatewayException(
+        'Error al procesar la operación con el proveedor financiero. Inténtalo de nuevo o contacta a soporte si el problema persiste.',
+      );
     }
 
     return res.json() as Promise<T>;
@@ -108,7 +123,12 @@ export class BridgeApiClient {
     if (!res.ok) {
       const err = await res.text();
       this.logger.error(`Bridge DELETE ${path} failed [${res.status}]: ${err}`);
-      throw new BadGatewayException(`Bridge API error [${res.status}]: ${err}`);
+      // ALTO-02: No propagar el cuerpo crudo del error de Bridge al cliente
+      // (puede contener IDs internos, datos KYC o detalles de arquitectura).
+      // El detalle completo queda en logger.error de arriba para debugging.
+      throw new BadGatewayException(
+        'Error al procesar la operación con el proveedor financiero. Inténtalo de nuevo o contacta a soporte si el problema persiste.',
+      );
     }
 
     return res.json() as Promise<T>;

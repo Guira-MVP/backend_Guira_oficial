@@ -55,6 +55,13 @@ async function bootstrap() {
   // de Bridge Webhooks sin interferir con FileInterceptor (Multer) o uploads.
   const app = await NestFactory.create(AppModule, { rawBody: true });
 
+  // ALTO-01: Confiar en 1 hop de proxy (el load balancer de Render).
+  // Con esto, Express deriva request.ip de forma segura a partir del
+  // X-Forwarded-For inyectado por Render, ignorando cualquier valor que el
+  // cliente intente spoofear. Imprescindible para que el rate limiting y el
+  // logging de auditoría usen la IP real e inmanipulable.
+  app.getHttpAdapter().getInstance().set('trust proxy', 1);
+
   // Prefijo global de la API
   const prefix = process.env.PATH_SUBDOMAIN || 'api';
   app.setGlobalPrefix(prefix);

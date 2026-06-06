@@ -163,12 +163,11 @@ export class RateLimitGuard implements CanActivate {
   }
 
   private getIdentifier(request: Record<string, unknown>): string {
-    const headers = request.headers as Record<string, string | undefined>;
-    return (
-      headers['x-forwarded-for']?.split(',')[0]?.trim() ??
-      (request.ip as string) ??
-      'unknown'
-    );
+    // ALTO-01: Con 'trust proxy' habilitado en main.ts, request.ip es la IP
+    // real del cliente derivada de forma segura por Express. No se lee
+    // X-Forwarded-For directamente porque el cliente podría spoofearlo para
+    // evadir el rate limit usando una IP distinta en cada intento.
+    return (request.ip as string) ?? 'unknown';
   }
 
   private getAction(request: Record<string, unknown>): string {

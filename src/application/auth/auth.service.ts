@@ -108,13 +108,11 @@ export class AuthService {
     ip?: string;
   }): { ip_address: string; user_agent: string } {
     const headers = request.headers ?? {};
-    const forwarded = headers['x-forwarded-for'];
-    const ip_address =
-      (typeof forwarded === 'string'
-        ? forwarded.split(',')[0]?.trim()
-        : forwarded?.[0]) ??
-      request.ip ??
-      'unknown';
+    // ALTO-01: Con 'trust proxy' habilitado en main.ts, request.ip ya es la IP
+    // real del cliente (Express la deriva de forma segura del X-Forwarded-For
+    // de Render). No se parsea el header manualmente para evitar registrar IPs
+    // spoofeadas en la auditoría de autenticación.
+    const ip_address = request.ip ?? 'unknown';
     const ua = headers['user-agent'];
     const user_agent = (typeof ua === 'string' ? ua : ua?.[0]) ?? 'unknown';
     return { ip_address, user_agent };
