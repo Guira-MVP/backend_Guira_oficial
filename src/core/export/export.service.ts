@@ -64,17 +64,19 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const FLOW_LABELS: Record<string, string> = {
-  bolivia_to_world: 'Bolivia → Mundo',
-  bolivia_to_wallet: 'Bolivia → Wallet',
+  bolivia_to_world: 'Bolivia al exterior',
+  bolivia_to_wallet: 'Bolivia a cripto',
   world_to_bolivia: 'Exterior a Bolivia',
-  world_to_wallet: 'Mundo → Wallet',
-  wallet_to_wallet: 'Wallet → Wallet',
-  wallet_to_fiat: 'Wallet → Fiat',
-  fiat_bo_to_bridge_wallet: 'Fiat BO → Bridge Wallet',
-  crypto_to_bridge_wallet: 'Crypto → Bridge Wallet',
-  bridge_wallet_to_fiat_bo: 'Bridge Wallet → Fiat BO',
-  bridge_wallet_to_crypto: 'Bridge Wallet → Crypto',
-  bridge_wallet_to_fiat_us: 'Bridge Wallet → Fiat US',
+  world_to_wallet: 'Exterior a cripto',
+  wallet_to_wallet: 'Cripto a cripto',
+  wallet_to_fiat: 'Cripto a banco',
+  fiat_bo_to_bridge_wallet: 'Bolivia a Guira',
+  fiat_us_to_bridge_wallet: 'Exterior a Guira',
+  crypto_to_bridge_wallet: 'Cripto a Guira',
+  bridge_wallet_to_fiat_bo: 'Guira a Bolivia',
+  bridge_wallet_to_crypto: 'Guira a cripto',
+  bridge_wallet_to_fiat_us: 'Guira al exterior',
+  va_deposit: 'Depósito cuenta virtual',
 };
 
 function buildRows(orders: PaymentOrder[], suppliersMap: Map<string, string>, noSupplierFallback?: string) {
