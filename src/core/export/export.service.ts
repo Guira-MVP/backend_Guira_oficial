@@ -170,8 +170,8 @@ export class ExportService {
 
     // ── BLOQUE DE CABECERA DEL REPORTE ──
 
-    // Fondo de la cabecera (filas 1-5)
-    for (let r = 1; r <= 5; r++) {
+    // Fondo de la cabecera (filas 1-4)
+    for (let r = 1; r <= 4; r++) {
       const row = sheet.getRow(r);
       for (let c = 1; c <= 11; c++) {
         const cell = row.getCell(c);
@@ -179,39 +179,41 @@ export class ExportService {
       }
     }
 
-    // Logo centrado en fila 1
-    sheet.mergeCells('A1:K1');
-    sheet.getRow(1).height = 65;
+    // Logo izquierda: ocupa cols A-C (0-2) y filas 1-3 (0-2)
+    sheet.getRow(1).height = 28;
+    sheet.getRow(2).height = 22;
+    sheet.getRow(3).height = 20;
     if (logoImageId !== null) {
       sheet.addImage(logoImageId, {
-        tl: { col: 3.8, row: 0.1 },
-        ext: { width: 200, height: 55 },
-        editAs: 'absolute',
+        tl: { col: 0, row: 0 } as any,
+        br: { col: 3, row: 3 } as any,
+        editAs: 'twoCell',
       });
     }
 
-    // Título del reporte centrado
-    sheet.mergeCells('A2:K2');
-    const titleCell = sheet.getCell('A2');
-    titleCell.value = 'Reporte de Expedientes';
+    // Título del reporte — cols D-K, fila 1
+    sheet.mergeCells('D1:K1');
+    const titleCell = sheet.getCell('D1');
+    titleCell.value = 'GUIRA — Reporte de Expedientes';
     titleCell.font = { bold: true, size: 14, color: { argb: BRAND_NAVY } };
-    titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
-    sheet.getRow(2).height = 28;
+    titleCell.alignment = { vertical: 'middle', horizontal: 'left' };
 
-    // ── Datos del cliente ──
-    sheet.mergeCells('A3:K3');
-    const clientCell = sheet.getCell('A3');
+    // Datos del cliente — cols D-K, fila 2
+    sheet.mergeCells('D2:K2');
+    const clientCell = sheet.getCell('D2');
     clientCell.value = `Cliente: ${client.full_name ?? 'N/D'}   |   Email: ${client.email}   |   Teléfono: ${client.phone ?? 'N/D'}`;
     clientCell.font = { size: 10, color: { argb: META_FG } };
-    clientCell.alignment = { vertical: 'middle', horizontal: 'center' };
-    sheet.getRow(3).height = 22;
+    clientCell.alignment = { vertical: 'middle', horizontal: 'left' };
 
-    sheet.mergeCells('A4:K4');
-    const filterCell = sheet.getCell('A4');
-    filterCell.value = `Filtro aplicado: ${filterLabel}   |   Generado: ${generatedAt}   |   Total de expedientes: ${orders.length}`;
+    // Filtros y fecha — cols D-K, fila 3
+    sheet.mergeCells('D3:K3');
+    const filterCell = sheet.getCell('D3');
+    filterCell.value = `Filtro: ${filterLabel}   |   Generado: ${generatedAt}   |   Total: ${orders.length} expedientes`;
     filterCell.font = { size: 9, color: { argb: META_FG }, italic: true };
-    filterCell.alignment = { vertical: 'middle', horizontal: 'center' };
-    sheet.getRow(4).height = 20;
+    filterCell.alignment = { vertical: 'middle', horizontal: 'left' };
+
+    // Línea decorativa de separación (fila 4)
+    sheet.getRow(4).height = 4;
     for (let c = 1; c <= 11; c++) {
       sheet.getRow(4).getCell(c).border = {
         bottom: { style: 'medium', color: { argb: BRAND_PRIMARY } },
