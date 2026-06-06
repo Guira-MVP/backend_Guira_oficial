@@ -163,7 +163,7 @@ export class PdfService {
       const logoPath = path.join(process.cwd(), 'assets', 'LOGO_GUIRRA_HORIZONTAL.png');
       if (fs.existsSync(logoPath)) {
         const b64 = fs.readFileSync(logoPath).toString('base64');
-        return { image: `data:image/png;base64,${b64}`, width: 60, alignment: 'left' as const };
+        return { image: `data:image/png;base64,${b64}`, width: 120, alignment: 'left' as const };
       }
     } catch (err) {
       this.logger.warn('No se pudo cargar el logo para el PDF', err);
