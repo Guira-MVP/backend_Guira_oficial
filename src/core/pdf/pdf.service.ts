@@ -160,7 +160,7 @@ export class PdfService {
 
   private loadLogo(): any {
     try {
-      const logoPath = path.join(process.cwd(), 'assets', 'LOGO-GUIRRA-CON-LETRA-VERTICAL.png');
+      const logoPath = path.join(process.cwd(), 'assets', 'LOGO_GUIRRA_HORIZONTAL.png');
       if (fs.existsSync(logoPath)) {
         const b64 = fs.readFileSync(logoPath).toString('base64');
         return { image: `data:image/png;base64,${b64}`, width: 60, alignment: 'left' as const };
@@ -184,7 +184,7 @@ export class PdfService {
     if (url) {
       return [
         { text: label, style: 'tLabel' },
-        { text: displayValue, style: 'tValue', color: COLORS.primary, link: url, decoration: 'underline' },
+        { text: displayValue, style: 'tValue', color: COLORS.text, link: url, decoration: 'underline' },
       ];
     }
     return this.row(label, displayValue, opts);
