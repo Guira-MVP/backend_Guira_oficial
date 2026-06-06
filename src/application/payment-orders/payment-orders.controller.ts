@@ -110,18 +110,24 @@ export class PaymentOrdersController {
   @ApiQuery({ name: 'flow_category', required: false })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'year', required: false, type: Number })
+  @ApiQuery({ name: 'month', required: false, type: Number })
   getMyOrders(
     @CurrentUser() user: AuthenticatedUser,
     @Query('status') status?: string,
     @Query('flow_category') flow_category?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('year') year?: string,
+    @Query('month') month?: string,
   ) {
     return this.paymentOrdersService.getMyOrders(user.id, {
       status,
       flow_category,
       page: page ? parseInt(page, 10) : undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
+      year: year ? parseInt(year, 10) : undefined,
+      month: month ? parseInt(month, 10) : undefined,
     });
   }
 
@@ -192,21 +198,32 @@ export class PaymentOrdersController {
   }
 
   @Get('export')
-  @ApiOperation({ summary: 'Exportar historial de expedientes a Excel o PDF (respeta filtro de estado)' })
+  @ApiOperation({ summary: 'Exportar historial de expedientes a Excel o PDF (respeta filtros activos)' })
   @ApiQuery({ name: 'format', required: true, enum: ['excel', 'pdf'], description: 'Formato del archivo de exportación' })
   @ApiQuery({ name: 'status', required: false, description: 'Filtrar por estado (si se omite, exporta todos)' })
+  @ApiQuery({ name: 'year', required: false, type: Number, description: 'Gestión (año)' })
+  @ApiQuery({ name: 'month', required: false, type: Number, description: 'Mes (1-12)' })
   async exportOrders(
     @CurrentUser() user: AuthenticatedUser,
     @Query('format') format: string,
     @Query('status') status?: string,
+    @Query('year') year?: string,
+    @Query('month') month?: string,
     @Res({ passthrough: true }) res?: any,
   ) {
     if (format !== 'excel' && format !== 'pdf') {
       throw new BadRequestException('El parámetro format debe ser "excel" o "pdf"');
     }
 
+    const parsedYear = year ? parseInt(year, 10) : undefined;
+    const parsedMonth = month ? parseInt(month, 10) : undefined;
+
     // Obtener órdenes filtradas (sin paginación)
-    const orders = await this.paymentOrdersService.getOrdersForExport(user.id, { status });
+    const orders = await this.paymentOrdersService.getOrdersForExport(user.id, {
+      status,
+      year: parsedYear,
+      month: parsedMonth,
+    });
 
     // Resolver nombres de proveedores
     const supplierIds = [...new Set(orders.map((o: any) => o.supplier_id).filter(Boolean))];
@@ -223,7 +240,7 @@ export class PaymentOrdersController {
       phone,
     };
 
-    const filters = { status };
+    const filters = { status, year: parsedYear, month: parsedMonth };
     const dateStr = new Date().toISOString().slice(0, 10);
     let buffer: Buffer;
     let contentType: string;

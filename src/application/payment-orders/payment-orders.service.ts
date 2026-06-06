@@ -49,6 +49,21 @@ import {
   getTransferMinAmount,
 } from '../../common/constants/transfer-route-catalog.constants';
 
+function buildDateRange(year: number, month?: number): { dateFrom: string; dateTo: string } {
+  if (month && month >= 1 && month <= 12) {
+    const dateFrom = new Date(Date.UTC(year, month - 1, 1)).toISOString();
+    const dateTo = (month === 12
+      ? new Date(Date.UTC(year + 1, 0, 1))
+      : new Date(Date.UTC(year, month, 1))
+    ).toISOString();
+    return { dateFrom, dateTo };
+  }
+  return {
+    dateFrom: new Date(Date.UTC(year, 0, 1)).toISOString(),
+    dateTo: new Date(Date.UTC(year + 1, 0, 1)).toISOString(),
+  };
+}
+
 @Injectable()
 export class PaymentOrdersService {
   private readonly logger = new Logger(PaymentOrdersService.name);
@@ -2895,6 +2910,8 @@ export class PaymentOrdersService {
       flow_category?: string;
       page?: number;
       limit?: number;
+      year?: number;
+      month?: number;
     },
   ) {
     const page = filters?.page ?? 1;
@@ -2911,6 +2928,10 @@ export class PaymentOrdersService {
     if (filters?.status) query = query.eq('status', filters.status);
     if (filters?.flow_category)
       query = query.eq('flow_category', filters.flow_category);
+    if (filters?.year && Number.isFinite(filters.year)) {
+      const { dateFrom, dateTo } = buildDateRange(filters.year, filters.month);
+      query = query.gte('created_at', dateFrom).lt('created_at', dateTo);
+    }
 
     const { data, count, error } = await query;
     if (error) throw new BadRequestException(error.message);
@@ -2924,7 +2945,7 @@ export class PaymentOrdersService {
    */
   async getOrdersForExport(
     userId: string,
-    filters?: { status?: string },
+    filters?: { status?: string; year?: number; month?: number },
   ) {
     let query = this.supabase
       .from('payment_orders')
@@ -2933,6 +2954,10 @@ export class PaymentOrdersService {
       .order('created_at', { ascending: false });
 
     if (filters?.status) query = query.eq('status', filters.status);
+    if (filters?.year && Number.isFinite(filters.year)) {
+      const { dateFrom, dateTo } = buildDateRange(filters.year, filters.month);
+      query = query.gte('created_at', dateFrom).lt('created_at', dateTo);
+    }
 
     const { data, error } = await query;
     if (error) throw new BadRequestException(error.message);

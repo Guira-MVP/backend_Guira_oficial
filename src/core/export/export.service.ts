@@ -62,6 +62,23 @@ const STATUS_LABELS: Record<string, string> = {
   swept_external: 'Swept external',
 };
 
+const MONTH_NAMES_ES = [
+  '', 'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+  'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
+];
+
+function buildFilterLabel(filters: { status?: string; year?: number; month?: number }): string {
+  const parts: string[] = [];
+  if (filters.year) {
+    const monthPart = filters.month
+      ? `${MONTH_NAMES_ES[filters.month]} ${filters.year}`
+      : String(filters.year);
+    parts.push(`Gestión: ${monthPart}`);
+  }
+  if (filters.status) parts.push(STATUS_LABELS[filters.status] ?? filters.status);
+  return parts.length > 0 ? parts.join('   ·   ') : 'Todos los períodos';
+}
+
 const FLOW_LABELS: Record<string, string> = {
   bolivia_to_world: 'Bolivia al exterior',
   bolivia_to_wallet: 'Bolivia a cripto',
@@ -121,14 +138,12 @@ export class ExportService {
     orders: PaymentOrder[],
     suppliers: Supplier[],
     client: ClientProfile,
-    filters: { status?: string },
+    filters: { status?: string; year?: number; month?: number },
   ): Promise<Buffer> {
     const suppliersMap = new Map(suppliers.map((s) => [s.id, s.name]));
     const rows = buildRows(orders, suppliersMap, client.full_name ?? undefined);
     const generatedAt = formatBoliviaDateTime(new Date(), { hour12: false });
-    const filterLabel = filters.status
-      ? (STATUS_LABELS[filters.status] ?? filters.status)
-      : 'Todos los estados';
+    const filterLabel = buildFilterLabel(filters);
 
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Guira';
@@ -316,14 +331,12 @@ export class ExportService {
     orders: PaymentOrder[],
     suppliers: Supplier[],
     client: ClientProfile,
-    filters: { status?: string },
+    filters: { status?: string; year?: number; month?: number },
   ): Promise<Buffer> {
     const suppliersMap = new Map(suppliers.map((s) => [s.id, s.name]));
     const rows = buildRows(orders, suppliersMap, client.full_name ?? undefined);
     const generatedAt = formatBoliviaDateTime(new Date(), { hour12: false });
-    const filterLabel = filters.status
-      ? (STATUS_LABELS[filters.status] ?? filters.status)
-      : 'Todos los estados';
+    const filterLabel = buildFilterLabel(filters);
 
     const PRIMARY   = '#1e293b';
     const ACCENT    = '#3b82f6';
