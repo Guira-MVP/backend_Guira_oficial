@@ -3,7 +3,6 @@ import * as ExcelJS from 'exceljs';
 const pdfmake = require('pdfmake');
 import * as fs from 'fs';
 import * as path from 'path';
-import sharp = require('sharp');
 import { formatBoliviaDateTime } from '../../common/utils/date.util';
 
 // ── Tipos internos ──────────────────────────────────────────────────────────
@@ -154,29 +153,25 @@ export class ExportService {
     const BORDER_BLUE    = 'B8D4F0'; // Borde suave azul (var --border del frontend)
     const TITLE_BAND_BG  = 'F0F7FF'; // Fondo del bloque de cabecera
 
-    // ── Logo (SVG → PNG via sharp) ──
+    // ── Logo (PNG — lectura directa) ──
     let logoImageId: number | null = null;
     try {
-      const logoPath = path.join(process.cwd(), 'assets', 'LOGO GUIRRA ISOTIPO.svg');
+      const logoPath = path.join(process.cwd(), 'assets', 'LOGO GUIRRA 02.png');
       if (fs.existsSync(logoPath)) {
-        const svgBuffer = fs.readFileSync(logoPath);
-        const pngBuffer = await sharp(svgBuffer)
-          .resize({ width: 200, height: 200, fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
-          .png()
-          .toBuffer();
+        const pngBuffer = fs.readFileSync(logoPath);
         logoImageId = workbook.addImage({
           buffer: pngBuffer as any,
           extension: 'png',
         });
       }
     } catch (err) {
-      this.logger.warn('No se pudo cargar LOGO GUIRRA ISOTIPO.svg para el reporte Excel', err);
+      this.logger.warn('No se pudo cargar LOGO GUIRRA 02.png para el reporte Excel', err);
     }
 
     // ── BLOQUE DE CABECERA DEL REPORTE ──
 
-    // Fondo de la cabecera (filas 1-4)
-    for (let r = 1; r <= 4; r++) {
+    // Fondo de la cabecera (filas 1-5)
+    for (let r = 1; r <= 5; r++) {
       const row = sheet.getRow(r);
       for (let c = 1; c <= 11; c++) {
         const cell = row.getCell(c);
@@ -184,38 +179,39 @@ export class ExportService {
       }
     }
 
-    // Logo en la esquina superior izquierda
+    // Logo centrado en fila 1
+    sheet.mergeCells('A1:K1');
+    sheet.getRow(1).height = 65;
     if (logoImageId !== null) {
       sheet.addImage(logoImageId, {
-        tl: { col: 0, row: 0 },
-        ext: { width: 52, height: 52 },
+        tl: { col: 3.8, row: 0.1 },
+        ext: { width: 200, height: 55 },
         editAs: 'absolute',
       });
     }
 
-    // Título del reporte (desplazado a columna B para dejar espacio al logo)
-    sheet.mergeCells('B1:K1');
-    const titleCell = sheet.getCell('B1');
-    titleCell.value = 'GUIRA — Reporte de Expedientes';
-    titleCell.font = { bold: true, size: 16, color: { argb: BRAND_NAVY } };
-    titleCell.alignment = { vertical: 'middle', horizontal: 'left' };
-    sheet.getRow(1).height = 40;
+    // Título del reporte centrado
+    sheet.mergeCells('A2:K2');
+    const titleCell = sheet.getCell('A2');
+    titleCell.value = 'Reporte de Expedientes';
+    titleCell.font = { bold: true, size: 14, color: { argb: BRAND_NAVY } };
+    titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
+    sheet.getRow(2).height = 28;
 
     // ── Datos del cliente ──
-    sheet.mergeCells('B2:K2');
-    const clientCell = sheet.getCell('B2');
+    sheet.mergeCells('A3:K3');
+    const clientCell = sheet.getCell('A3');
     clientCell.value = `Cliente: ${client.full_name ?? 'N/D'}   |   Email: ${client.email}   |   Teléfono: ${client.phone ?? 'N/D'}`;
     clientCell.font = { size: 10, color: { argb: META_FG } };
-    sheet.getRow(2).height = 22;
+    clientCell.alignment = { vertical: 'middle', horizontal: 'center' };
+    sheet.getRow(3).height = 22;
 
-    sheet.mergeCells('B3:K3');
-    const filterCell = sheet.getCell('B3');
+    sheet.mergeCells('A4:K4');
+    const filterCell = sheet.getCell('A4');
     filterCell.value = `Filtro aplicado: ${filterLabel}   |   Generado: ${generatedAt}   |   Total de expedientes: ${orders.length}`;
     filterCell.font = { size: 9, color: { argb: META_FG }, italic: true };
-    sheet.getRow(3).height = 18;
-
-    // Línea decorativa de separación (fila 4)
-    sheet.getRow(4).height = 4;
+    filterCell.alignment = { vertical: 'middle', horizontal: 'center' };
+    sheet.getRow(4).height = 20;
     for (let c = 1; c <= 11; c++) {
       sheet.getRow(4).getCell(c).border = {
         bottom: { style: 'medium', color: { argb: BRAND_PRIMARY } },
@@ -332,20 +328,17 @@ export class ExportService {
     const HEADER_BG = '#1e40af';
     const EVEN_BG   = '#f1f5f9';
 
-    // Logo SVG (LOGO GUIRRA ISOTIPO)
-    let logoBlock: any = { text: 'Guira\n', style: 'brandName' };
+    // Logo PNG (LOGO GUIRRA 02)
+    let logoBlock: any = { text: 'Guira', style: 'brandName', alignment: 'center' };
     try {
-      const logoPath = path.join(
-        process.cwd(),
-        'assets',
-        'LOGO GUIRRA ISOTIPO.svg',
-      );
+      const logoPath = path.join(process.cwd(), 'assets', 'LOGO GUIRRA 02.png');
       if (fs.existsSync(logoPath)) {
-        const svgContent = fs.readFileSync(logoPath, 'utf-8');
-        logoBlock = { svg: svgContent, width: 60, margin: [0, 0, 0, 4] };
+        const pngBuffer = fs.readFileSync(logoPath);
+        const base64 = `data:image/png;base64,${pngBuffer.toString('base64')}`;
+        logoBlock = { image: base64, width: 160, alignment: 'center', margin: [0, 0, 0, 6] };
       }
     } catch {
-      this.logger.warn('No se pudo cargar logo ISOTIPO para el PDF de reporte');
+      this.logger.warn('No se pudo cargar LOGO GUIRRA 02.png para el PDF de reporte');
     }
 
     const tableBody: any[][] = [
@@ -396,16 +389,11 @@ export class ExportService {
       content: [
         // Encabezado
         {
-          columns: [
+          stack: [
             logoBlock,
-            {
-              stack: [
-                { text: 'REPORTE DE EXPEDIENTES', style: 'reportTitle' },
-                { text: `Generado: ${generatedAt}`, style: 'meta' },
-                { text: `Filtro: ${filterLabel}`, style: 'meta' },
-              ],
-              alignment: 'right',
-            },
+            { text: 'REPORTE DE EXPEDIENTES', style: 'reportTitle', alignment: 'center' },
+            { text: `Generado: ${generatedAt}`, style: 'meta', alignment: 'center' },
+            { text: `Filtro: ${filterLabel}`, style: 'meta', alignment: 'center' },
           ],
           margin: [0, 0, 0, 12],
         },
