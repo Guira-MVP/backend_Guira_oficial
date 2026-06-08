@@ -198,8 +198,8 @@ export class PaymentOrdersController {
   }
 
   @Get('export')
-  @ApiOperation({ summary: 'Exportar historial de expedientes a Excel o PDF (respeta filtros activos)' })
-  @ApiQuery({ name: 'format', required: true, enum: ['excel', 'pdf'], description: 'Formato del archivo de exportación' })
+  @ApiOperation({ summary: 'Exportar historial de expedientes a Excel (respeta filtros activos)' })
+  @ApiQuery({ name: 'format', required: true, enum: ['excel'], description: 'Formato del archivo de exportación' })
   @ApiQuery({ name: 'status', required: false, description: 'Filtrar por estado (si se omite, exporta todos)' })
   @ApiQuery({ name: 'year', required: false, type: Number, description: 'Gestión (año)' })
   @ApiQuery({ name: 'month', required: false, type: Number, description: 'Mes (1-12)' })
@@ -211,8 +211,8 @@ export class PaymentOrdersController {
     @Query('month') month?: string,
     @Res({ passthrough: true }) res?: any,
   ) {
-    if (format !== 'excel' && format !== 'pdf') {
-      throw new BadRequestException('El parámetro format debe ser "excel" o "pdf"');
+    if (format !== 'excel') {
+      throw new BadRequestException('El parámetro format debe ser "excel"');
     }
 
     const parsedYear = year ? parseInt(year, 10) : undefined;
@@ -242,19 +242,9 @@ export class PaymentOrdersController {
 
     const filters = { status, year: parsedYear, month: parsedMonth };
     const dateStr = new Date().toISOString().slice(0, 10);
-    let buffer: Buffer;
-    let contentType: string;
-    let filename: string;
-
-    if (format === 'excel') {
-      buffer = await this.exportService.generateExcel(orders, suppliers, client, filters);
-      contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-      filename = `expedientes-${dateStr}.xlsx`;
-    } else {
-      buffer = await this.exportService.generatePdfReport(orders, suppliers, client, filters);
-      contentType = 'application/pdf';
-      filename = `expedientes-${dateStr}.pdf`;
-    }
+    const buffer = await this.exportService.generateExcel(orders, suppliers, client, filters);
+    const contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    const filename = `expedientes-${dateStr}.xlsx`;
 
     res.set({
       'Content-Type': contentType,
