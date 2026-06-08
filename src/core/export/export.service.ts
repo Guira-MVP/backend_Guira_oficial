@@ -156,7 +156,7 @@ export class ExportService {
     // ── Logo (PNG — lectura directa) ──
     let logoImageId: number | null = null;
     try {
-      const logoPath = path.join(process.cwd(), 'assets', 'LOGO GUIRRA 02.png');
+      const logoPath = path.join(process.cwd(), 'assets', 'LOGO_GUIRRA_HORIZONTAL.png');
       if (fs.existsSync(logoPath)) {
         const pngBuffer = fs.readFileSync(logoPath);
         logoImageId = workbook.addImage({
@@ -165,7 +165,7 @@ export class ExportService {
         });
       }
     } catch (err) {
-      this.logger.warn('No se pudo cargar LOGO GUIRRA 02.png para el reporte Excel', err);
+      this.logger.warn('No se pudo cargar LOGO_GUIRRA_HORIZONTAL.png para el reporte Excel', err);
     }
 
     // ── BLOQUE DE CABECERA DEL REPORTE ──
