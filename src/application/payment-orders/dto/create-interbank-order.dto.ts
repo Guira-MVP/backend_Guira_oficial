@@ -116,22 +116,28 @@ export class CreateInterbankOrderDto {
   destination_network?: string;
 
   // ── world_to_bolivia: destino es cuenta boliviana ──
-  @ApiPropertyOptional()
-  @ValidateIf((o) => o.flow_type === 'world_to_bolivia')
+  // Deprecado: el backend lee la cuenta primaria BOB aprobada desde
+  // client_bank_accounts (ver PaymentOrdersService.createWorldToBolivia).
+  // Se mantienen opcionales por retrocompatibilidad pero son IGNORADOS.
+  @ApiPropertyOptional({
+    description: 'Deprecado. El backend lee de client_bank_accounts.',
+  })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   destination_bank_name?: string;
 
-  @ApiPropertyOptional()
-  @ValidateIf((o) => o.flow_type === 'world_to_bolivia')
+  @ApiPropertyOptional({
+    description: 'Deprecado. El backend lee de client_bank_accounts.',
+  })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   destination_account_number?: string;
 
-  @ApiPropertyOptional()
-  @ValidateIf((o) => o.flow_type === 'world_to_bolivia')
+  @ApiPropertyOptional({
+    description: 'Deprecado. El backend lee de client_bank_accounts.',
+  })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   destination_account_holder?: string;
 
   @ApiPropertyOptional()

@@ -925,6 +925,13 @@ export class PaymentOrdersService {
     userId: string,
     dto: CreateInterbankOrderDto,
   ) {
+    // El destino bancario se obtiene de la cuenta primaria BOB aprobada del
+    // cliente (igual que bridge_wallet_to_fiat_bo): no se acepta una cuenta
+    // arbitraria del payload, así se garantiza que el depósito siempre llegue
+    // a la cuenta que el cliente registró y verificó en su perfil.
+    const bankAccount =
+      await this.bankAccountsService.getApprovedAccountForWithdrawal(userId);
+
     // Obtener cuenta PSAV para depósito en USD (el usuario deposita USD)
     const psavAccount = await this.psavService.getDepositAccount(
       'bank_us',
@@ -968,9 +975,10 @@ export class PaymentOrdersService {
         net_amount,
         destination_type: 'bank_bo',
         destination_currency: 'BOB',
-        destination_bank_name: dto.destination_bank_name,
-        destination_account_number: dto.destination_account_number,
-        destination_account_holder: dto.destination_account_holder,
+        destination_bank_name: bankAccount.bank_name,
+        destination_account_number: bankAccount.account_number,
+        destination_account_holder: bankAccount.account_holder,
+        client_bank_account_id: bankAccount.id,
         destination_qr_url: dto.destination_qr_url,
         supplier_id: dto.supplier_id ?? null,
         exchange_rate_applied: appliedRate,
