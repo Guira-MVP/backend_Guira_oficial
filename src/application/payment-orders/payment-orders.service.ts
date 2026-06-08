@@ -3387,21 +3387,27 @@ export class PaymentOrdersService {
         ];
         // PostgREST's or() parser does not support ::cast syntax, so id and
         // profile matches are pre-resolved and added as in() conditions instead.
-        const [{ data: matchedProfiles }, { data: matchedOrderIds }] = await Promise.all([
+        // El match por id usa la función search_payment_order_ids (ver
+        // migración 20260608): `id` es uuid y Postgres no tiene operador
+        // ilike para ese tipo, así que el cast a text se resuelve dentro de
+        // la función SQL en vez de depender de la sintaxis cast-en-filtro
+        // del cliente PostgREST/JS (que fallaba en silencio).
+        const [
+          { data: matchedProfiles, error: profilesError },
+          { data: matchedOrderIds, error: orderIdsError },
+        ] = await Promise.all([
           this.supabase
             .from('profiles')
             .select('id')
             .or(`full_name.ilike.%${term}%,email.ilike.%${term}%`)
             .limit(50),
-          this.supabase
-            .from('payment_orders')
-            .select('id')
-            .filter('id::text', 'ilike', `%${term}%`)
-            .limit(50),
+          this.supabase.rpc('search_payment_order_ids', { term }),
         ]);
+        if (profilesError) this.logger.warn(`listAllOrders → fallo buscando perfiles por "${term}": ${profilesError.message}`);
+        if (orderIdsError) this.logger.warn(`listAllOrders → fallo buscando ids por "${term}": ${orderIdsError.message}`);
         const userIds = (matchedProfiles ?? []).map((p) => p.id);
         if (userIds.length) orFilters.push(`user_id.in.(${userIds.join(',')})`);
-        const orderIds = (matchedOrderIds ?? []).map((o) => o.id);
+        const orderIds = (matchedOrderIds ?? []).map((o: { id: string }) => o.id);
         if (orderIds.length) orFilters.push(`id.in.(${orderIds.join(',')})`);
 
         query = query.or(orFilters.join(','));
