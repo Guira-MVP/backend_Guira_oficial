@@ -58,10 +58,18 @@ export class IdempotencyInterceptor implements NestInterceptor {
       return next.handle();
     }
 
-    // Validate UUID format (loose check to prevent injection)
-    if (!/^[0-9a-f\-]{36}$/i.test(idempotencyKey)) {
+    // BAJO-02: Validación estricta de UUID v4 (RFC 4122).
+    // El check anterior (/^[0-9a-f\-]{36}$/i) solo verificaba longitud y
+    // alfabeto, aceptando cadenas estructuralmente inválidas (ej. 36 guiones).
+    // Esto valida agrupación 8-4-4-4-12, nibble de versión "4" y bits de
+    // variante correctos — el formato real que generan uuid v4 (crypto.randomUUID).
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        idempotencyKey,
+      )
+    ) {
       throw new HttpException(
-        'Idempotency-Key debe ser un UUID válido',
+        'Idempotency-Key debe ser un UUID v4 válido',
         HttpStatus.BAD_REQUEST,
       );
     }
