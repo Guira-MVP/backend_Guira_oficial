@@ -74,7 +74,7 @@ export class ExchangeRatesService {
   }
 
   /**
-   * Tarea automática para sincronizar las tasas de cambio diariamente (a medianoche).
+   * Tarea automática: sincroniza tasas cada 10 minutos.
    */
   @Cron(CronExpression.EVERY_10_MINUTES)
   async handleCronSyncRates() {
@@ -126,7 +126,15 @@ export class ExchangeRatesService {
         'Sincronización de tasas de cambio completada exitosamente.',
       );
 
-      await this.syncBridgeCrossRates(actorId);
+      // Los cruzados se sincronizan en su propio bloque para que un fallo de Bridge
+      // no enmascare el éxito del par ancla BOB/USD que ya quedó guardado.
+      try {
+        await this.syncBridgeCrossRates(actorId);
+      } catch (crossErr) {
+        this.logger.warn(
+          `Tasas BOB/USD actualizadas, pero falló la sincronización de cruzados: ${(crossErr as Error).message}`,
+        );
+      }
 
       return {
         message: 'Tasas sincronizadas correctamente',
@@ -298,6 +306,12 @@ export class ExchangeRatesService {
     // Ahora todas las tasas almacenan "BOB por 1 USD"
     // BOB→USD/USDC: dividir (cuántos USD obtienes por X BOB)
     // USD/USDC→BOB: multiplicar (cuántos BOB obtienes por X USD)
+    if (!rateData.effective_rate) {
+      throw new BadRequestException(
+        `Tipo de cambio ${pair} no tiene tasa efectiva válida. Verifique la configuración.`,
+      );
+    }
+
     const isBobToUsd = pair.startsWith('BOB_');
     const converted = isBobToUsd
       ? amount / rateData.effective_rate
