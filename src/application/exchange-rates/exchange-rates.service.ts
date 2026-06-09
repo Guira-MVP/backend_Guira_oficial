@@ -10,6 +10,13 @@ import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ExchangeRatesGateway } from './exchange-rates.gateway';
 import type { RateUpdatedPayload } from './exchange-rates.gateway';
+import { BridgeApiClient } from '../bridge/bridge-api.client';
+
+interface BridgeExchangeRateResponse {
+  midmarket_rate: string;
+  buy_rate: string;
+  sell_rate: string;
+}
 
 @Injectable()
 export class ExchangeRatesService {
@@ -26,9 +33,13 @@ export class ExchangeRatesService {
     USDC_BOB: 'USD_BOB',
   };
 
+  /** Divisas fiat de Bridge para las que se calculan pares cruzados contra BOB. */
+  private readonly BRIDGE_CURRENCIES = ['eur', 'mxn', 'brl', 'cop', 'gbp'] as const;
+
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly gateway: ExchangeRatesGateway,
+    private readonly bridgeApi: BridgeApiClient,
   ) {}
 
   /** Construye el payload para la notificación WS sin consultar DB nuevamente. */
@@ -105,6 +116,9 @@ export class ExchangeRatesService {
       this.logger.log(
         'Sincronización de tasas de cambio completada exitosamente.',
       );
+
+      await this.syncBridgeCrossRates(actorId);
+
       return {
         message: 'Tasas sincronizadas correctamente',
         buy_rate_bob_usd: bobToUsdRate,
@@ -118,6 +132,50 @@ export class ExchangeRatesService {
         'No se pudo establecer conexión con el proveedor de tipos de cambio.',
       );
     }
+  }
+
+  /**
+   * Sincroniza los 10 pares cruzados BOB/X y X/BOB usando las tasas midmarket
+   * de Bridge (5 llamadas HTTP, una por divisa).
+   *
+   * BOB_X = BOB_USD_base / midmarket(USD→X)
+   * X_BOB = USD_BOB_base / midmarket(USD→X)
+   *
+   * Si Bridge falla en una divisa concreta, se logea y se continúa con las demás.
+   */
+  async syncBridgeCrossRates(actorId = 'system_cron') {
+    const [bobUsdData, usdBobData] = await Promise.all([
+      this.getRate('BOB_USD'),
+      this.getRate('USD_BOB'),
+    ]);
+    const bobUsdBase = bobUsdData.base_rate;
+    const usdBobBase = usdBobData.base_rate;
+
+    for (const currency of this.BRIDGE_CURRENCIES) {
+      try {
+        const resp = await this.bridgeApi.get<BridgeExchangeRateResponse>(
+          `/v0/exchange_rates?from=usd&to=${currency}`,
+        );
+        const midmarket = parseFloat(resp.midmarket_rate);
+        if (!midmarket || midmarket <= 0) {
+          this.logger.warn(`Bridge devolvió midmarket inválido para USD→${currency}: ${resp.midmarket_rate}`);
+          continue;
+        }
+
+        const upper = currency.toUpperCase();
+        const bobXRate = Math.round((bobUsdBase / midmarket) * 10000) / 10000;
+        const xBobRate = Math.round((usdBobBase / midmarket) * 10000) / 10000;
+
+        await this.updateRateInternal(`BOB_${upper}`, bobXRate, actorId);
+        await this.updateRateInternal(`${upper}_BOB`, xBobRate, actorId);
+      } catch (e) {
+        this.logger.warn(
+          `No se pudo sincronizar par BOB/${currency.toUpperCase()} desde Bridge: ${(e as Error).message}`,
+        );
+      }
+    }
+
+    this.logger.log('Sincronización de tasas cruzadas Bridge completada.');
   }
 
   /**
@@ -135,7 +193,7 @@ export class ExchangeRatesService {
         .from('exchange_rates_config')
         .update({
           rate,
-          updated_by: actorId,
+          updated_by: actorId.startsWith('system') ? null : actorId,
           updated_at: new Date().toISOString(),
         })
         .eq('pair', pair.toUpperCase());
