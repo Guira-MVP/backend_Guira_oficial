@@ -9,6 +9,7 @@ import {
   IsEnum,
   ValidateNested,
   Matches,
+  ValidateIf,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -89,9 +90,9 @@ export class CreateSupplierDto {
 
   // ── ACH / Wire ──
   @ApiPropertyOptional({ example: '1210002481111' })
-  @IsOptional()
+  @ValidateIf(o => ['ach', 'wire', 'co_bank_transfer', 'faster_payments'].includes(o.payment_rail))
+  @IsNotEmpty()
   @IsString()
-  @MinLength(1)
   account_number?: string;
 
   @ApiPropertyOptional({ example: '021000021' })
@@ -152,10 +153,10 @@ export class CreateSupplierDto {
 
   // ── SPEI (México) ──
   @ApiPropertyOptional({ example: '014180655500000007' })
-  @IsOptional()
+  @ValidateIf(o => o.payment_rail === 'spei')
+  @IsNotEmpty()
   @IsString()
-  @MinLength(18)
-  @MaxLength(18)
+  @Matches(/^\d{18}$/, { message: 'CLABE debe tener exactamente 18 dígitos numéricos' })
   clabe?: string;
 
   // ── PIX (Brasil) ──
@@ -170,13 +171,15 @@ export class CreateSupplierDto {
   br_code?: string;
 
   @ApiPropertyOptional()
-  @IsOptional()
+  @ValidateIf(o => o.payment_rail === 'co_bank_transfer')
+  @IsNotEmpty({ message: 'document_number es requerido para CO Bank Transfer' })
   @IsString()
   document_number?: string;
 
   // ── Bre-B (Colombia) ──
   @ApiPropertyOptional()
-  @IsOptional()
+  @ValidateIf(o => o.payment_rail === 'bre_b')
+  @IsNotEmpty()
   @IsString()
   bre_b_key?: string;
 
@@ -197,7 +200,8 @@ export class CreateSupplierDto {
     description: 'Código del banco colombiano (ColombianBankCode de Bridge)',
     enum: COLOMBIAN_BANK_CODES,
   })
-  @IsOptional()
+  @ValidateIf(o => o.payment_rail === 'co_bank_transfer')
+  @IsNotEmpty({ message: 'bank_code es requerido para CO Bank Transfer' })
   @IsIn([...COLOMBIAN_BANK_CODES], {
     message: `bank_code inválido. Usa uno de los códigos de banco colombiano permitidos por Bridge.`,
   })
@@ -218,7 +222,8 @@ export class CreateSupplierDto {
       'nd',
     ],
   })
-  @IsOptional()
+  @ValidateIf(o => o.payment_rail === 'co_bank_transfer')
+  @IsNotEmpty({ message: 'document_type es requerido para CO Bank Transfer' })
   @IsEnum([
     'cc',
     'ce',
@@ -235,7 +240,8 @@ export class CreateSupplierDto {
   document_type?: string;
 
   @ApiPropertyOptional({ example: '+573001234567', description: 'Teléfono en formato E.164' })
-  @IsOptional()
+  @ValidateIf(o => o.payment_rail === 'co_bank_transfer')
+  @IsNotEmpty({ message: 'phone_number es requerido para CO Bank Transfer' })
   @Matches(/^\+\d{7,15}$/, { message: 'phone_number debe estar en formato E.164 (ej. +573001234567)' })
   phone_number?: string;
 
