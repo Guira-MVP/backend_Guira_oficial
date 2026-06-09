@@ -156,15 +156,21 @@ export class ExchangeRatesService {
         const resp = await this.bridgeApi.get<BridgeExchangeRateResponse>(
           `/v0/exchange_rates?from=usd&to=${currency}`,
         );
-        const midmarket = parseFloat(resp.midmarket_rate);
-        if (!midmarket || midmarket <= 0) {
-          this.logger.warn(`Bridge devolvió midmarket inválido para USD→${currency}: ${resp.midmarket_rate}`);
+        const buyRate  = parseFloat(resp.buy_rate);
+        const sellRate = parseFloat(resp.sell_rate);
+
+        if (!buyRate || buyRate <= 0 || !sellRate || sellRate <= 0) {
+          this.logger.warn(
+            `Bridge devolvió rates inválidos para USD→${currency}: buy=${resp.buy_rate} sell=${resp.sell_rate}`,
+          );
           continue;
         }
 
         const upper = currency.toUpperCase();
-        const bobXRate = Math.round((bobUsdBase / midmarket) * 10000) / 10000;
-        const xBobRate = Math.round((usdBobBase / midmarket) * 10000) / 10000;
+        // BOB_X: usuario da BOB, recibe X → Guira compra X → usa buy_rate
+        const bobXRate = Math.round((bobUsdBase / buyRate) * 10000) / 10000;
+        // X_BOB: usuario da X, recibe BOB → Guira vende X → usa sell_rate
+        const xBobRate = Math.round((usdBobBase / sellRate) * 10000) / 10000;
 
         await this.updateRateInternal(`BOB_${upper}`, bobXRate, actorId);
         await this.updateRateInternal(`${upper}_BOB`, xBobRate, actorId);
@@ -373,6 +379,13 @@ export class ExchangeRatesService {
     this.gateway.emitRateUpdated(
       this.buildRateUpdatedPayload(resolvedPair, dto.rate, spread),
     );
+
+    // Si se actualizó un par ancla BOB/USD, recalcular los cruzados desde Bridge
+    if (resolvedPair === 'BOB_USD' || resolvedPair === 'USD_BOB') {
+      this.syncBridgeCrossRates(actorId).catch((e) =>
+        this.logger.warn(`No se pudo sincronizar cruzados tras actualización manual: ${(e as Error).message}`),
+      );
+    }
 
     return data;
   }
