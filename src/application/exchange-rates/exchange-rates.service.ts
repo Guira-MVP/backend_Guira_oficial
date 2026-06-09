@@ -42,6 +42,16 @@ export class ExchangeRatesService {
     private readonly bridgeApi: BridgeApiClient,
   ) {}
 
+  /**
+   * Redondea el effective_rate con precisión adaptativa:
+   * tasas < 0.1 (ej. COP) usan 4 decimales; el resto usa 2.
+   */
+  private roundEffectiveRate(value: number): number {
+    const decimals = value < 0.1 ? 4 : 2;
+    const factor = Math.pow(10, decimals);
+    return Math.round(value * factor) / factor;
+  }
+
   /** Construye el payload para la notificación WS sin consultar DB nuevamente. */
   private buildRateUpdatedPayload(
     pair: string,
@@ -52,8 +62,7 @@ export class ExchangeRatesService {
     const spreadMultiplier = isBobPair
       ? 1 + spreadPercent / 100
       : 1 - spreadPercent / 100;
-    const effectiveRate =
-      Math.round(baseRate * spreadMultiplier * 100) / 100;
+    const effectiveRate = this.roundEffectiveRate(baseRate * spreadMultiplier);
 
     return {
       pair,
@@ -266,7 +275,7 @@ export class ExchangeRatesService {
     const spreadMultiplier = isBobPair
       ? 1 + spreadPercent / 100 // subir tasa para penalizar al dividir
       : 1 - spreadPercent / 100; // bajar tasa para penalizar al multiplicar
-    const effectiveRate = Math.round(baseRate * spreadMultiplier * 100) / 100;
+    const effectiveRate = this.roundEffectiveRate(baseRate * spreadMultiplier);
 
     return {
       pair: data.pair,
@@ -322,7 +331,7 @@ export class ExchangeRatesService {
         ? 1 + spreadPercent / 100
         : 1 - spreadPercent / 100;
 
-      const effectiveRate = Math.round(baseRate * spreadMultiplier * 100) / 100;
+      const effectiveRate = this.roundEffectiveRate(baseRate * spreadMultiplier);
 
       return {
         ...row,
