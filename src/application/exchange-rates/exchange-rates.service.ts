@@ -135,13 +135,14 @@ export class ExchangeRatesService {
   }
 
   /**
-   * Sincroniza los 10 pares cruzados BOB/X y X/BOB usando las tasas midmarket
+   * Sincroniza los 10 pares cruzados BOB/X y X/BOB usando buy_rate y sell_rate
    * de Bridge (5 llamadas HTTP, una por divisa).
    *
-   * BOB_X = BOB_USD_base / midmarket(USD→X)
-   * X_BOB = USD_BOB_base / midmarket(USD→X)
+   * BOB_X = BOB_USD_base / buy_rate(USD→X)   — usuario compra X con BOB
+   * X_BOB = USD_BOB_base / sell_rate(USD→X)  — usuario vende X para obtener BOB
    *
-   * Si Bridge falla en una divisa concreta, se logea y se continúa con las demás.
+   * Los valores crudos de Bridge (buy_rate, sell_rate) se guardan en la DB
+   * para trazabilidad. Si Bridge falla en una divisa concreta se loguea y continúa.
    */
   async syncBridgeCrossRates(actorId = 'system_cron') {
     const [bobUsdData, usdBobData] = await Promise.all([
@@ -172,8 +173,9 @@ export class ExchangeRatesService {
         // X_BOB: usuario da X, recibe BOB → Guira vende X → usa sell_rate
         const xBobRate = Math.round((usdBobBase / sellRate) * 10000) / 10000;
 
-        await this.updateRateInternal(`BOB_${upper}`, bobXRate, actorId);
-        await this.updateRateInternal(`${upper}_BOB`, xBobRate, actorId);
+        const bridgeRates = { buy_rate: buyRate, sell_rate: sellRate };
+        await this.updateRateInternal(`BOB_${upper}`, bobXRate, actorId, bridgeRates);
+        await this.updateRateInternal(`${upper}_BOB`, xBobRate, actorId, bridgeRates);
       } catch (e) {
         this.logger.warn(
           `No se pudo sincronizar par BOB/${currency.toUpperCase()} desde Bridge: ${(e as Error).message}`,
@@ -185,23 +187,32 @@ export class ExchangeRatesService {
   }
 
   /**
-   * Método interno helper para updates estandarizados sin parámetros de spread
+   * Método interno helper para updates estandarizados sin parámetros de spread.
+   * bridgeRates solo se pasa para pares cruzados (EUR, BRL, etc.); es null para BOB_USD/USD_BOB.
    */
   private async updateRateInternal(
     pair: string,
     rate: number,
     actorId: string,
+    bridgeRates?: { buy_rate: number; sell_rate: number },
   ) {
     try {
       const old = await this.getRate(pair);
 
+      const updatePayload: Record<string, unknown> = {
+        rate,
+        updated_by: actorId.startsWith('system') ? null : actorId,
+        updated_at: new Date().toISOString(),
+      };
+
+      if (bridgeRates) {
+        updatePayload.bridge_buy_rate  = bridgeRates.buy_rate;
+        updatePayload.bridge_sell_rate = bridgeRates.sell_rate;
+      }
+
       await this.supabase
         .from('exchange_rates_config')
-        .update({
-          rate,
-          updated_by: actorId.startsWith('system') ? null : actorId,
-          updated_at: new Date().toISOString(),
-        })
+        .update(updatePayload)
         .eq('pair', pair.toUpperCase());
 
       // Emitir con datos locales — sin consulta extra que pueda fallar tras el UPDATE
