@@ -414,6 +414,11 @@ export class SuppliersService {
         'br_code',
         'bre_b_key',
         'account_number',
+        // CO Bank Transfer: inmutables en Bridge una vez registrados
+        'bank_code',
+        'document_type',
+        'document_number',
+        'phone_number',
       ] as const;
 
       const blockedFields = immutableFields.filter(

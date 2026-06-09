@@ -8,6 +8,7 @@ import {
   MinLength,
   IsEnum,
   ValidateNested,
+  Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -16,6 +17,14 @@ import {
   ALLOWED_NETWORKS,
   ALLOWED_CRYPTO_CURRENCIES,
 } from '../../../common/constants/guira-crypto-config.constants';
+
+const COLOMBIAN_BANK_CODES = [
+  '1001','1002','1006','1007','1009','1012','1013','1019','1023','1032',
+  '1040','1047','1051','1052','1053','1059','1060','1061','1062','1063',
+  '1065','1066','1067','1069','1070','1071','1097','1121','1283','1286',
+  '1289','1292','1303','1370','1507','1551','1558','1637','1801','1802',
+  '1803','1804','1805','1808','1809','1811','1812','1814','1815','1816',
+] as const;
 
 export class CreateSupplierDto {
   @ApiProperty({ example: 'Acme Logistics S.A.' })
@@ -92,10 +101,10 @@ export class CreateSupplierDto {
   @MaxLength(9)
   routing_number?: string;
 
-  @ApiPropertyOptional({ enum: ['checking', 'savings'] })
+  @ApiPropertyOptional({ enum: ['checking', 'savings', 'electronic_deposit'] })
   @IsOptional()
-  @IsEnum(['checking', 'savings'])
-  checking_or_savings?: 'checking' | 'savings';
+  @IsEnum(['checking', 'savings', 'electronic_deposit'])
+  checking_or_savings?: 'checking' | 'savings' | 'electronic_deposit';
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -185,10 +194,13 @@ export class CreateSupplierDto {
   // ── CO Bank Transfer (Colombia) ──
   @ApiPropertyOptional({
     example: '1007',
-    description: 'Código del banco colombiano',
+    description: 'Código del banco colombiano (ColombianBankCode de Bridge)',
+    enum: COLOMBIAN_BANK_CODES,
   })
   @IsOptional()
-  @IsString()
+  @IsIn([...COLOMBIAN_BANK_CODES], {
+    message: `bank_code inválido. Usa uno de los códigos de banco colombiano permitidos por Bridge.`,
+  })
   bank_code?: string;
 
   @ApiPropertyOptional({
@@ -222,9 +234,9 @@ export class CreateSupplierDto {
   ])
   document_type?: string;
 
-  @ApiPropertyOptional({ example: '+573001234567' })
+  @ApiPropertyOptional({ example: '+573001234567', description: 'Teléfono en formato E.164' })
   @IsOptional()
-  @IsString()
+  @Matches(/^\+\d{7,15}$/, { message: 'phone_number debe estar en formato E.164 (ej. +573001234567)' })
   phone_number?: string;
 
   // ── Crypto Wallet ──
@@ -303,10 +315,10 @@ export class UpdateSupplierDto {
   @IsString()
   routing_number?: string;
 
-  @ApiPropertyOptional({ enum: ['checking', 'savings'] })
+  @ApiPropertyOptional({ enum: ['checking', 'savings', 'electronic_deposit'] })
   @IsOptional()
-  @IsEnum(['checking', 'savings'])
-  checking_or_savings?: 'checking' | 'savings';
+  @IsEnum(['checking', 'savings', 'electronic_deposit'])
+  checking_or_savings?: 'checking' | 'savings' | 'electronic_deposit';
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -387,9 +399,11 @@ export class UpdateSupplierDto {
   sort_code?: string;
 
   // CO Bank Transfer (Colombia)
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ enum: COLOMBIAN_BANK_CODES })
   @IsOptional()
-  @IsString()
+  @IsIn([...COLOMBIAN_BANK_CODES], {
+    message: `bank_code inválido. Usa uno de los códigos de banco colombiano permitidos por Bridge.`,
+  })
   bank_code?: string;
 
   @ApiPropertyOptional({
@@ -423,9 +437,9 @@ export class UpdateSupplierDto {
   ])
   document_type?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'Teléfono en formato E.164' })
   @IsOptional()
-  @IsString()
+  @Matches(/^\+\d{7,15}$/, { message: 'phone_number debe estar en formato E.164 (ej. +573001234567)' })
   phone_number?: string;
 
   // Crypto
