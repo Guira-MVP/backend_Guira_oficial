@@ -19,6 +19,7 @@ import {
 } from './dto/create-virtual-account.dto';
 import { CreateLiquidationAddressDto } from './dto/create-liquidation-address.dto';
 import { UpdateVirtualAccountDto } from './dto/update-virtual-account.dto';
+import { VIRTUAL_ACCOUNT_FLOW } from '../../common/constants/flow-access.constants';
 
 @Injectable()
 export class BridgeService {
@@ -63,8 +64,30 @@ export class BridgeService {
     }
   }
 
+  /**
+   * Barrera de visibilidad: la sección de Cuentas Virtuales está habilitada por
+   * defecto para todos los clientes (independiente del país), pero el staff puede
+   * apagarla por cliente con un override (customer_flow_overrides, is_enabled=false).
+   */
+  private async assertVirtualAccountEnabled(userId: string): Promise<void> {
+    const { data } = await this.supabase
+      .from('customer_flow_overrides')
+      .select('is_enabled')
+      .eq('user_id', userId)
+      .eq('flow_type', VIRTUAL_ACCOUNT_FLOW)
+      .eq('is_active', true)
+      .maybeSingle();
+
+    if (data && data.is_enabled === false) {
+      throw new ForbiddenException(
+        'Las Cuentas Virtuales no están habilitadas para tu cuenta. Contacta a soporte si crees que es un error.',
+      );
+    }
+  }
+
   /** Crea Virtual Account en Bridge + guarda en DB. */
   async createVirtualAccount(userId: string, dto: CreateVirtualAccountDto) {
+    await this.assertVirtualAccountEnabled(userId);
     const profile = await this.getVerifiedProfile(userId);
 
     await this.assertCurrencyActive(dto.destination_currency);

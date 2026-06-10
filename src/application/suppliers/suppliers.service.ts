@@ -48,6 +48,22 @@ export class SuppliersService {
     }
   }
 
+  private async assertFiatSupplierCurrencyActive(
+    currency: string,
+  ): Promise<void> {
+    const { data } = await this.supabase
+      .from('va_source_currency_settings')
+      .select('is_active_supplier')
+      .eq('currency', currency.toLowerCase())
+      .single();
+
+    if (!data || !data.is_active_supplier) {
+      throw new BadRequestException(
+        `La divisa ${currency.toUpperCase()} no está habilitada para proveedores en este momento.`,
+      );
+    }
+  }
+
   /** Devuelve los rails ya registrados por un email para un usuario. */
   async getExistingRailsForEmail(userId: string, email: string): Promise<{
     exists: boolean;
@@ -132,6 +148,10 @@ export class SuppliersService {
     let bridge_liquidation_address_id: string | null = null;
 
     if (isFiat) {
+      const fiatCurrency =
+        FIAT_RAIL_TO_CURRENCY[dto.payment_rail] ?? dto.currency.toLowerCase();
+      await this.assertFiatSupplierCurrencyActive(fiatCurrency);
+
       // Registrar cuenta externa en Bridge (valida KYC internamente)
       const ea = await this.bridgeService.createExternalAccount(userId, {
         account_owner_name: dto.name,

@@ -53,6 +53,7 @@ import {
   FIAT_BO_EXCLUDED_SOURCE_CURRENCIES,
 } from '../../common/constants/bridge-route-catalog.constants';
 import { getValidSourceRoutes } from '../../common/constants/transfer-route-catalog.constants';
+import { GOVERNED_FLOWS, isGovernedFlow } from '../../common/constants/flow-access.constants';
 
 // ═══════════════════════════════════════════════
 //  USER CONTROLLER — /payment-orders
@@ -148,6 +149,15 @@ export class PaymentOrdersController {
   })
   getActiveExclusiveOrder(@CurrentUser() user: AuthenticatedUser) {
     return this.paymentOrdersService.getActiveExclusiveOrder(user.id);
+  }
+
+  @Get('available-flows')
+  @ApiOperation({
+    summary:
+      'Flujos de servicio visibles para el usuario (regla por país + override de staff)',
+  })
+  getAvailableFlows(@CurrentUser() user: AuthenticatedUser) {
+    return this.paymentOrdersService.getAvailableFlows(user.id);
   }
 
   @Get('route-catalog')
@@ -687,6 +697,67 @@ export class AdminPaymentOrdersController {
     @CurrentUser() actor: AuthenticatedUser,
   ) {
     return this.paymentOrdersService.deleteLimitOverride(id, actor.id);
+  }
+
+  // ── Flow Overrides por cliente (visibilidad de flujos) ──
+
+  @Get('flow-overrides/:userId')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({
+    summary:
+      'Visibilidad de flujos de un cliente: default por país, override y efectivo + filas de override',
+  })
+  async getFlowOverrides(@Param('userId', new ParseUUIDPipe()) userId: string) {
+    const [summary, overrides] = await Promise.all([
+      this.paymentOrdersService.getAvailableFlows(userId),
+      this.paymentOrdersService.getFlowOverrides(userId),
+    ]);
+    return { ...summary, governed_flows: GOVERNED_FLOWS, overrides };
+  }
+
+  @Post('flow-overrides')
+  @Roles('admin', 'super_admin')
+  @ApiOperation({ summary: 'Forzar visibilidad (on/off) de un flujo para un cliente' })
+  createFlowOverride(
+    @Body() dto: {
+      user_id: string;
+      flow_type: string;
+      is_enabled: boolean;
+      notes?: string;
+    },
+    @CurrentUser() actor: AuthenticatedUser,
+  ) {
+    if (!dto.user_id || !dto.flow_type) {
+      throw new BadRequestException('user_id y flow_type son requeridos');
+    }
+    if (typeof dto.is_enabled !== 'boolean') {
+      throw new BadRequestException('is_enabled debe ser booleano');
+    }
+    if (!isGovernedFlow(dto.flow_type)) {
+      throw new BadRequestException(`flow_type no gobernado: ${dto.flow_type}`);
+    }
+    return this.paymentOrdersService.createFlowOverride(dto, actor.id);
+  }
+
+  @Patch('flow-overrides/:id')
+  @Roles('admin', 'super_admin')
+  @ApiOperation({ summary: 'Actualizar override de flujo (is_enabled, is_active, notes)' })
+  updateFlowOverride(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: { is_enabled?: boolean; is_active?: boolean; notes?: string },
+    @CurrentUser() actor: AuthenticatedUser,
+  ) {
+    return this.paymentOrdersService.updateFlowOverride(id, dto, actor.id);
+  }
+
+  @Delete('flow-overrides/:id')
+  @Roles('super_admin')
+  @ApiOperation({ summary: 'Eliminar override de flujo permanentemente (solo super_admin)' })
+  deleteFlowOverride(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ) {
+    return this.paymentOrdersService.deleteFlowOverride(id, actor.id);
   }
 
   // ── Exchange Rates Admin ──

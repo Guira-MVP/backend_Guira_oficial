@@ -37,6 +37,24 @@ export class OnboardingService {
     private readonly adminGateway: AdminGateway,
   ) {}
 
+  /**
+   * Materializa el país de origen del cliente en profiles.country_code para que
+   * la resolución de visibilidad de flujos no tenga que joinear people/businesses.
+   * Best-effort: un fallo aquí no debe romper el onboarding.
+   */
+  private async syncProfileCountry(userId: string, countryCode?: string | null) {
+    if (!countryCode) return;
+    const { error } = await this.supabase
+      .from('profiles')
+      .update({ country_code: countryCode.toUpperCase() })
+      .eq('id', userId);
+    if (error) {
+      this.logger.warn(
+        `No se pudo sincronizar profiles.country_code para ${userId}: ${error.message}`,
+      );
+    }
+  }
+
   // ───────────────────────────────────────────────
   //  KYC — Persona Natural
   // ───────────────────────────────────────────────
@@ -65,6 +83,7 @@ export class OnboardingService {
         .select()
         .single();
       if (error) throw new BadRequestException(error.message);
+      await this.syncProfileCountry(userId, dto.country_of_residence ?? dto.country);
       return data;
     }
 
@@ -75,6 +94,7 @@ export class OnboardingService {
       .select()
       .single();
     if (error) throw new BadRequestException(error.message);
+    await this.syncProfileCountry(userId, dto.country_of_residence ?? dto.country);
     return data;
   }
 
@@ -337,6 +357,7 @@ export class OnboardingService {
         .select()
         .single();
       if (error) throw new BadRequestException(error.message);
+      await this.syncProfileCountry(userId, dto.country_of_incorporation ?? dto.country);
       return data;
     }
 
@@ -346,6 +367,7 @@ export class OnboardingService {
       .select()
       .single();
     if (error) throw new BadRequestException(error.message);
+    await this.syncProfileCountry(userId, dto.country_of_incorporation ?? dto.country);
     return data;
   }
 

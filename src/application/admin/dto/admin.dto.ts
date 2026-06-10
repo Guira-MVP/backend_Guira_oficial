@@ -43,6 +43,11 @@ export class UpdateVaSourceCurrencySettingDto {
   @IsBoolean()
   @IsOptional()
   is_active?: boolean;
+
+  @ApiPropertyOptional({ description: 'Activar o desactivar esta moneda/rail fiat para creación de proveedores' })
+  @IsBoolean()
+  @IsOptional()
+  is_active_supplier?: boolean;
 }
 
 export class CreateSettingDto extends UpdateSettingDto {

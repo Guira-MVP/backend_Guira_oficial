@@ -48,6 +48,11 @@ import {
   isValidTransferRoute,
   getTransferMinAmount,
 } from '../../common/constants/transfer-route-catalog.constants';
+import {
+  GOVERNED_FLOWS,
+  isGovernedFlow,
+  resolveDefaultFlows,
+} from '../../common/constants/flow-access.constants';
 
 function buildDateRange(year: number, month?: number): { dateFrom: string; dateTo: string } {
   if (month && month >= 1 && month <= 12) {
@@ -351,6 +356,7 @@ export class PaymentOrdersService {
     reviewContext?: { clientReason: string; documentUrl?: string },
   ) {
     await this.validateRateLimit(userId);
+    await this.assertFlowEnabled(userId, dto.flow_type);
 
     // Resolver la moneda de entrada para normalizar límites a USD
     let inputCurrency = 'USD';
@@ -1362,6 +1368,7 @@ export class PaymentOrdersService {
     reviewContext?: { clientReason: string; documentUrl?: string },
   ) {
     await this.validateRateLimit(userId);
+    await this.assertFlowEnabled(userId, dto.flow_type);
 
     // Validar que la divisa principal del flujo esté habilitada.
     // source_currency tiene prioridad: en flujos de retiro de wallet es el crypto
@@ -4251,6 +4258,242 @@ export class PaymentOrdersService {
         flow_type: current.flow_type,
         min_usd: current.min_usd,
         max_usd: current.max_usd,
+      },
+    });
+  }
+
+  // ── Visibilidad de flujos por país + override de staff ───────
+
+  /** País de origen materializado del cliente (profiles.country_code). NULL si no resuelto. */
+  private async getProfileCountry(userId: string): Promise<string | null> {
+    const { data } = await this.supabase
+      .from('profiles')
+      .select('country_code')
+      .eq('id', userId)
+      .maybeSingle();
+    return (data?.country_code as string | null) ?? null;
+  }
+
+  /** Overrides de flujo ACTIVOS de un cliente, como mapa flow_type → is_enabled. */
+  private async getActiveFlowOverrides(
+    userId: string,
+  ): Promise<Map<string, boolean>> {
+    const { data } = await this.supabase
+      .from('customer_flow_overrides')
+      .select('flow_type, is_enabled')
+      .eq('user_id', userId)
+      .eq('is_active', true);
+    const map = new Map<string, boolean>();
+    for (const row of data ?? []) {
+      map.set(row.flow_type as string, row.is_enabled as boolean);
+    }
+    return map;
+  }
+
+  /**
+   * Resuelve el conjunto de flow_types VISIBLES para el cliente:
+   * default por país (NULL → Bolivia) y luego override de staff (prioritario).
+   */
+  async resolveEnabledFlows(userId: string): Promise<Set<string>> {
+    const [country, overrides] = await Promise.all([
+      this.getProfileCountry(userId),
+      this.getActiveFlowOverrides(userId),
+    ]);
+    const enabled = new Set<string>(resolveDefaultFlows(country));
+    for (const flow of GOVERNED_FLOWS) {
+      const override = overrides.get(flow);
+      if (override === undefined) continue;
+      if (override) enabled.add(flow);
+      else enabled.delete(flow);
+    }
+    return enabled;
+  }
+
+  /**
+   * Barrera de seguridad: rechaza con 403 si el flujo está oculto para el cliente.
+   * Solo aplica a flujos gobernados; los fuera de alcance pasan sin gating.
+   */
+  async assertFlowEnabled(userId: string, flowType: string): Promise<void> {
+    if (!isGovernedFlow(flowType)) return;
+    const enabled = await this.resolveEnabledFlows(userId);
+    if (!enabled.has(flowType)) {
+      throw new ForbiddenException(
+        `El flujo "${flowType}" no está habilitado para tu cuenta. Contacta a soporte si crees que es un error.`,
+      );
+    }
+  }
+
+  /**
+   * Detalle de visibilidad para el cliente autenticado: lista de flujos
+   * habilitados + desglose default/override/efectivo por flujo gobernado.
+   */
+  async getAvailableFlows(userId: string) {
+    const [country, overrides] = await Promise.all([
+      this.getProfileCountry(userId),
+      this.getActiveFlowOverrides(userId),
+    ]);
+    const defaults = new Set(resolveDefaultFlows(country));
+    const by_flow: Record<
+      string,
+      { default: boolean; override: boolean | null; effective: boolean }
+    > = {};
+    const enabled: string[] = [];
+    for (const flow of GOVERNED_FLOWS) {
+      const def = defaults.has(flow);
+      const override = overrides.has(flow) ? overrides.get(flow)! : null;
+      const effective = override === null ? def : override;
+      by_flow[flow] = { default: def, override, effective };
+      if (effective) enabled.push(flow);
+    }
+    return { country_code: country, enabled, by_flow };
+  }
+
+  /** Lista los overrides de flujo de un cliente (admin). */
+  async getFlowOverrides(userId: string) {
+    const { data, error } = await this.supabase
+      .from('customer_flow_overrides')
+      .select('*')
+      .eq('user_id', userId)
+      .order('flow_type');
+    if (error) throw new BadRequestException(error.message);
+    return data ?? [];
+  }
+
+  /** Crea un override de visibilidad de flujo para un cliente. */
+  async createFlowOverride(
+    dto: { user_id: string; flow_type: string; is_enabled: boolean; notes?: string },
+    actorId: string,
+  ) {
+    const { data: conflict } = await this.supabase
+      .from('customer_flow_overrides')
+      .select('id')
+      .eq('user_id', dto.user_id)
+      .eq('flow_type', dto.flow_type)
+      .eq('is_active', true)
+      .maybeSingle();
+
+    if (conflict) {
+      throw new BadRequestException(
+        `Ya existe un override activo para el flujo "${dto.flow_type}". Desactívalo o elimínalo primero.`,
+      );
+    }
+
+    const { data, error } = await this.supabase
+      .from('customer_flow_overrides')
+      .insert({
+        user_id: dto.user_id,
+        flow_type: dto.flow_type,
+        is_enabled: dto.is_enabled,
+        notes: dto.notes,
+        is_active: true,
+        created_by: actorId,
+      })
+      .select()
+      .single();
+
+    if (error) throw new BadRequestException(error.message);
+
+    await this.supabase.from('audit_logs').insert({
+      actor_id: actorId,
+      action: 'flow_override_created',
+      entity_type: 'customer_flow_override',
+      entity_id: data.id,
+      details: {
+        user_id: dto.user_id,
+        flow_type: dto.flow_type,
+        is_enabled: dto.is_enabled,
+      },
+    });
+
+    return data;
+  }
+
+  /** Actualiza un override de flujo (is_enabled, is_active, notes). */
+  async updateFlowOverride(
+    overrideId: string,
+    dto: { is_enabled?: boolean; is_active?: boolean; notes?: string },
+    actorId: string,
+  ) {
+    const { data: current, error: findError } = await this.supabase
+      .from('customer_flow_overrides')
+      .select('*')
+      .eq('id', overrideId)
+      .single();
+
+    if (findError || !current)
+      throw new NotFoundException('Override de flujo no encontrado');
+
+    // Si se reactiva, verificar que no haya otro activo para el mismo (user_id, flow_type)
+    if (dto.is_active === true && !current.is_active) {
+      const { data: conflict } = await this.supabase
+        .from('customer_flow_overrides')
+        .select('id')
+        .eq('user_id', current.user_id)
+        .eq('flow_type', current.flow_type)
+        .eq('is_active', true)
+        .neq('id', overrideId)
+        .maybeSingle();
+
+      if (conflict) {
+        throw new BadRequestException(
+          `Ya existe un override activo para el flujo "${current.flow_type}". Desactívalo primero.`,
+        );
+      }
+    }
+
+    const { data, error } = await this.supabase
+      .from('customer_flow_overrides')
+      .update({ ...dto, updated_at: new Date().toISOString() })
+      .eq('id', overrideId)
+      .select()
+      .single();
+
+    if (error || !data)
+      throw new BadRequestException('No se pudo actualizar el override de flujo');
+
+    await this.supabase.from('audit_logs').insert({
+      actor_id: actorId,
+      action: 'flow_override_updated',
+      entity_type: 'customer_flow_override',
+      entity_id: overrideId,
+      details: {
+        user_id: current.user_id,
+        flow_type: current.flow_type,
+        previous: { is_enabled: current.is_enabled, is_active: current.is_active },
+        updated: dto,
+      },
+    });
+
+    return data;
+  }
+
+  /** Elimina permanentemente un override de flujo. Solo super_admin. */
+  async deleteFlowOverride(overrideId: string, actorId: string) {
+    const { data: current, error: findError } = await this.supabase
+      .from('customer_flow_overrides')
+      .select('*')
+      .eq('id', overrideId)
+      .single();
+
+    if (findError || !current)
+      throw new NotFoundException('Override de flujo no encontrado');
+
+    const { error } = await this.supabase
+      .from('customer_flow_overrides')
+      .delete()
+      .eq('id', overrideId);
+
+    if (error) throw new BadRequestException('No se pudo eliminar el override de flujo');
+
+    await this.supabase.from('audit_logs').insert({
+      actor_id: actorId,
+      action: 'flow_override_deleted',
+      entity_type: 'customer_flow_override',
+      entity_id: overrideId,
+      details: {
+        user_id: current.user_id,
+        flow_type: current.flow_type,
+        is_enabled: current.is_enabled,
       },
     });
   }

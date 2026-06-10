@@ -216,13 +216,16 @@ export class AdminService {
     actorId: string,
     actorRole: string,
   ) {
+    const updateData: Record<string, unknown> = {
+      updated_by: actorId,
+      updated_at: new Date().toISOString(),
+    };
+    if (dto.is_active !== undefined) updateData.is_active = dto.is_active;
+    if (dto.is_active_supplier !== undefined) updateData.is_active_supplier = dto.is_active_supplier;
+
     const { data, error } = await this.supabase
       .from('va_source_currency_settings')
-      .update({
-        is_active: dto.is_active,
-        updated_by: actorId,
-        updated_at: new Date().toISOString(),
-      })
+      .update(updateData)
       .eq('currency', currency.toLowerCase())
       .select()
       .single();
@@ -230,13 +233,19 @@ export class AdminService {
     if (error || !data)
       throw new NotFoundException(`Moneda fiat '${currency}' no encontrada en VA source settings`);
 
+    const changedField = dto.is_active_supplier !== undefined ? 'is_active_supplier' : 'is_active';
+    const newValue = updateData[changedField] as boolean;
+    const action = changedField === 'is_active_supplier'
+      ? (newValue ? 'ENABLE_FIAT_SUPPLIER_CURRENCY' : 'DISABLE_FIAT_SUPPLIER_CURRENCY')
+      : (newValue ? 'ENABLE_VA_SOURCE_CURRENCY' : 'DISABLE_VA_SOURCE_CURRENCY');
+
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
       role: actorRole,
-      action: dto.is_active ? 'ENABLE_VA_SOURCE_CURRENCY' : 'DISABLE_VA_SOURCE_CURRENCY',
+      action,
       table_name: 'va_source_currency_settings',
       record_id: null,
-      new_values: { currency, is_active: dto.is_active },
+      new_values: { currency, [changedField]: newValue },
       source: 'admin_panel',
     });
 
