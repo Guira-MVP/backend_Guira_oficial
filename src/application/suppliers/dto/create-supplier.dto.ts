@@ -10,6 +10,10 @@ import {
   ValidateNested,
   Matches,
   ValidateIf,
+  Validate,
+  ValidatorConstraint,
+  ValidatorConstraintInterface,
+  ValidationArguments,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -26,6 +30,60 @@ const COLOMBIAN_BANK_CODES = [
   '1289','1292','1303','1370','1507','1551','1558','1637','1801','1802',
   '1803','1804','1805','1808','1809','1811','1812','1814','1815','1816',
 ] as const;
+
+// EVP (UUID), CPF (11 dígitos), CNPJ (14 dígitos), teléfono BR (+55 + 11 dígitos) o email
+const PIX_KEY_REGEX =
+  /^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|\d{11}|\d{14}|\+55\d{11}|[^\s@]+@[^\s@]+\.[^\s@]+)$/;
+
+const PIX_KEY_FORMAT_MESSAGE =
+  'pix_key debe ser un email, CPF (11 dígitos), CNPJ (14 dígitos), teléfono brasileño (+55 + 11 dígitos) o UUID (EVP) válido';
+
+@ValidatorConstraint({ name: 'pixKeyOrBrCode', async: false })
+class PixKeyConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown, args: ValidationArguments) {
+    const obj = args.object as CreateSupplierDto;
+    if (obj.payment_rail !== 'pix') return true;
+
+    const pixKey = typeof value === 'string' ? value.trim() : '';
+    if (pixKey) return PIX_KEY_REGEX.test(pixKey);
+
+    const brCode = typeof obj.br_code === 'string' ? obj.br_code.trim() : '';
+    return !!brCode;
+  }
+
+  defaultMessage(args: ValidationArguments) {
+    const obj = args.object as CreateSupplierDto;
+    const pixKey = typeof obj.pix_key === 'string' ? obj.pix_key.trim() : '';
+    const brCode = typeof obj.br_code === 'string' ? obj.br_code.trim() : '';
+    if (!pixKey && !brCode) {
+      return 'Para PIX debes proporcionar pix_key o br_code';
+    }
+    return PIX_KEY_FORMAT_MESSAGE;
+  }
+}
+
+@ValidatorConstraint({ name: 'supplierDocumentNumber', async: false })
+class DocumentNumberConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown, args: ValidationArguments) {
+    const obj = args.object as CreateSupplierDto;
+    if (obj.payment_rail === 'co_bank_transfer') {
+      return typeof value === 'string' && value.trim().length > 0;
+    }
+    if (obj.payment_rail === 'pix') {
+      if (value === undefined || value === null || value === '') return true;
+      return typeof value === 'string' && /^(\d{11}|\d{14})$/.test(value);
+    }
+    return true;
+  }
+
+  defaultMessage(args: ValidationArguments) {
+    const obj = args.object as CreateSupplierDto;
+    if (obj.payment_rail === 'co_bank_transfer') {
+      return 'document_number es requerido para CO Bank Transfer';
+    }
+    return 'document_number debe ser un CPF (11 dígitos) o CNPJ (14 dígitos), solo números sin puntuación';
+  }
+}
 
 export class CreateSupplierDto {
   @ApiProperty({ example: 'Acme Logistics S.A.' })
@@ -160,27 +218,34 @@ export class CreateSupplierDto {
   clabe?: string;
 
   // ── PIX (Brasil) ──
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
+  @ApiPropertyOptional({
+    description:
+      'Requerido si payment_rail es "pix" y no se envía br_code. Debe ser email, CPF (11 dígitos), CNPJ (14 dígitos), teléfono +55 (11 dígitos) o UUID (EVP).',
+  })
+  @Validate(PixKeyConstraint)
   pix_key?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: 'Requerido si payment_rail es "pix" y no se envía pix_key (código "copia e cola").',
+  })
   @IsOptional()
   @IsString()
   br_code?: string;
 
-  @ApiPropertyOptional()
-  @ValidateIf(o => o.payment_rail === 'co_bank_transfer')
-  @IsNotEmpty({ message: 'document_number es requerido para CO Bank Transfer' })
-  @IsString()
+  @ApiPropertyOptional({
+    description:
+      'Para PIX: opcional, pero si se envía debe ser CPF (11 dígitos) o CNPJ (14 dígitos), solo números. Para CO Bank Transfer: requerido.',
+  })
+  @Validate(DocumentNumberConstraint)
   document_number?: string;
 
   // ── Bre-B (Colombia) ──
   @ApiPropertyOptional()
   @ValidateIf(o => o.payment_rail === 'bre_b')
-  @IsNotEmpty()
+  @IsNotEmpty({ message: 'bre_b_key es requerido para Bre-B' })
   @IsString()
+  @MinLength(3, { message: 'bre_b_key debe tener al menos 3 caracteres' })
+  @MaxLength(140, { message: 'bre_b_key no puede exceder 140 caracteres' })
   bre_b_key?: string;
 
   // ── FPS — Faster Payments (Reino Unido) ──
@@ -376,8 +441,7 @@ export class UpdateSupplierDto {
 
   // PIX
   @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
+  @Validate(PixKeyConstraint)
   pix_key?: string;
 
   @ApiPropertyOptional()
@@ -386,14 +450,16 @@ export class UpdateSupplierDto {
   br_code?: string;
 
   @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
+  @Validate(DocumentNumberConstraint)
   document_number?: string;
 
   // Bre-B
   @ApiPropertyOptional()
-  @IsOptional()
+  @ValidateIf(o => o.payment_rail === 'bre_b')
+  @IsNotEmpty({ message: 'bre_b_key es requerido para Bre-B' })
   @IsString()
+  @MinLength(3, { message: 'bre_b_key debe tener al menos 3 caracteres' })
+  @MaxLength(140, { message: 'bre_b_key no puede exceder 140 caracteres' })
   bre_b_key?: string;
 
   // FPS — Faster Payments (Reino Unido)
