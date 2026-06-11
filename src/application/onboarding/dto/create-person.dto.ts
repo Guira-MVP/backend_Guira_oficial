@@ -7,6 +7,7 @@ import {
   IsBoolean,
   IsEnum,
   Length,
+  ValidateIf,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -175,9 +176,18 @@ export class CreatePersonDto {
 
   @ApiPropertyOptional()
   @Transform(trimString)
-  @IsOptional()
+  @ValidateIf((o) => o.id_type !== 'national_id')
+  @IsNotEmpty({ message: 'tax_id es requerido cuando el documento no es Cédula de Identidad / DNI' })
   @IsString()
   tax_id?: string;
+
+  /** Bridge identifying_information.type (ej. 'nit', 'rut', 'curp', 'rfc', 'tin') — depende del país */
+  @ApiPropertyOptional()
+  @Transform(trimString)
+  @ValidateIf((o) => o.id_type !== 'national_id')
+  @IsNotEmpty({ message: 'tax_id_type es requerido cuando el documento no es Cédula de Identidad / DNI' })
+  @IsString()
+  tax_id_type?: string;
 
   /** H10 — enforced Bridge enum */
   @ApiPropertyOptional({ enum: SourceOfFundsEnum })

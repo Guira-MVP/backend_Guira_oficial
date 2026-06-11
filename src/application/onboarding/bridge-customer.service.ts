@@ -329,9 +329,9 @@ export class BridgeCustomerService {
     BOL: 'nit',
     BRA: 'cpf',
     CHL: 'rut',
-    COL: 'other', // Cédula de Ciudadanía no está en el enum de Bridge
-    CRI: 'other', // Cédula física no está en el enum de Bridge
-    DOM: 'other', // Cédula de identidad dominicana no está en el enum
+    COL: 'nit',
+    CRI: 'tin',
+    DOM: 'tin',
     ECU: 'ruc',
     SLV: 'nit',
     GTM: 'nit',
@@ -340,8 +340,8 @@ export class BridgeCustomerService {
     MEX: 'curp',
     PAN: 'ruc',
     PRY: 'ruc',
-    PER: 'other', // DNI peruano (individual) no está en el enum
-    SUR: 'other',
+    PER: 'ruc',
+    SUR: 'tin',
     URY: 'rut',
   };
 
@@ -1155,19 +1155,17 @@ export class BridgeCustomerService {
       result.push(item);
     }
 
-    // P0-D: Tax ID — tipo específico por país según spec Bridge
+    // P0-D: Tax ID — tipo seleccionado por el usuario, o por país según spec Bridge
     if (entity.tax_id) {
       const taxIdType =
-        BridgeCustomerService.COUNTRY_TAX_ID_INDIVIDUAL[countryAlpha3] ??
-        'other';
+        (entity.tax_id_type as string) ||
+        BridgeCustomerService.COUNTRY_TAX_ID_INDIVIDUAL[countryAlpha3] ||
+        'tin';
       const taxIdEntry: Record<string, unknown> = {
         type: taxIdType,
         issuing_country: countryAlpha3,
         number: entity.tax_id,
       };
-      if (taxIdType === 'other') {
-        taxIdEntry.description = 'Tax Identification Number';
-      }
       result.push(taxIdEntry);
     }
 
