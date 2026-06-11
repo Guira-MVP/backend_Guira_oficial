@@ -309,8 +309,11 @@ export class PaymentOrdersService {
       const rateData = await this.exchangeRatesService.getRate('BOB_USD');
       amountUsd = parseFloat((amount / rateData.effective_rate).toFixed(2));
     } else if (upperCurrency === 'EURC') {
-      const rateData = await this.exchangeRatesService.getRate('EUR_USD');
-      amountUsd = parseFloat((amount * rateData.effective_rate).toFixed(2));
+      const rateData = await this.exchangeRatesService.getRate('BOB_EUR');
+      if (!rateData.bridge_sell_rate) {
+        throw new BadRequestException('Tipo de cambio EUR/USD no disponible.');
+      }
+      amountUsd = parseFloat((amount / rateData.bridge_sell_rate).toFixed(2));
     }
 
     if (amountUsd < min) {

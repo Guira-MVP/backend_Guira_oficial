@@ -57,6 +57,8 @@ export class ExchangeRatesService {
     pair: string,
     baseRate: number,
     spreadPercent: number,
+    bridgeBuyRate: number | null = null,
+    bridgeSellRate: number | null = null,
   ): RateUpdatedPayload {
     const isBobPair = pair.toUpperCase().startsWith('BOB_');
     const spreadMultiplier = isBobPair
@@ -69,6 +71,8 @@ export class ExchangeRatesService {
       base_rate: baseRate,
       spread_percent: spreadPercent,
       effective_rate: effectiveRate,
+      bridge_buy_rate: bridgeBuyRate,
+      bridge_sell_rate: bridgeSellRate,
       updated_at: new Date().toISOString(),
     };
   }
@@ -234,7 +238,13 @@ export class ExchangeRatesService {
 
       // Emitir con datos locales — sin consulta extra que pueda fallar tras el UPDATE
       this.gateway.emitRateUpdated(
-        this.buildRateUpdatedPayload(pair, rate, old.spread_percent),
+        this.buildRateUpdatedPayload(
+          pair,
+          rate,
+          old.spread_percent,
+          bridgeRates?.buy_rate ?? old.bridge_buy_rate ?? null,
+          bridgeRates?.sell_rate ?? old.bridge_sell_rate ?? null,
+        ),
       );
 
       await this.supabase.from('audit_logs').insert({
@@ -275,6 +285,10 @@ export class ExchangeRatesService {
 
     const baseRate = parseFloat(data.rate);
     const spreadPercent = parseFloat(data.spread_percent ?? '0');
+    const bridgeBuyRate =
+      data.bridge_buy_rate != null ? parseFloat(data.bridge_buy_rate) : null;
+    const bridgeSellRate =
+      data.bridge_sell_rate != null ? parseFloat(data.bridge_sell_rate) : null;
 
     // El spread se aplica SIEMPRE en contra del usuario:
     // - Para BOB_USD (dividimos): SUBIR la tasa → el divisor es mayor → usuario recibe MENOS USD
@@ -290,6 +304,8 @@ export class ExchangeRatesService {
       base_rate: baseRate,
       spread_percent: spreadPercent,
       effective_rate: effectiveRate,
+      bridge_buy_rate: bridgeBuyRate,
+      bridge_sell_rate: bridgeSellRate,
       updated_at: data.updated_at,
     };
   }
@@ -411,7 +427,13 @@ export class ExchangeRatesService {
     // Emitir con datos locales — sin consulta extra que pueda fallar tras el UPDATE
     const spread = dto.spread_percent ?? old.spread_percent;
     this.gateway.emitRateUpdated(
-      this.buildRateUpdatedPayload(resolvedPair, dto.rate, spread),
+      this.buildRateUpdatedPayload(
+        resolvedPair,
+        dto.rate,
+        spread,
+        old.bridge_buy_rate,
+        old.bridge_sell_rate,
+      ),
     );
 
     // Si se actualizó un par ancla BOB/USD, recalcular los cruzados desde Bridge

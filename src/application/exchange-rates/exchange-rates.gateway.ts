@@ -15,6 +15,8 @@ export interface RateUpdatedPayload {
   base_rate: number;
   spread_percent: number;
   effective_rate: number;
+  bridge_buy_rate: number | null;
+  bridge_sell_rate: number | null;
   updated_at: string;
 }
 
