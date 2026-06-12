@@ -18,6 +18,7 @@ import { OrderReviewService } from './order-review.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/dto/notifications.dto';
 import { OrdersGateway } from '../orders/orders.gateway';
+import { EmailService } from '../email/email.service';
 import {
   CreateInterbankOrderDto,
   InterbankFlowType,
@@ -54,12 +55,16 @@ import {
   resolveDefaultFlows,
 } from '../../common/constants/flow-access.constants';
 
-function buildDateRange(year: number, month?: number): { dateFrom: string; dateTo: string } {
+function buildDateRange(
+  year: number,
+  month?: number,
+): { dateFrom: string; dateTo: string } {
   if (month && month >= 1 && month <= 12) {
     const dateFrom = new Date(Date.UTC(year, month - 1, 1)).toISOString();
-    const dateTo = (month === 12
-      ? new Date(Date.UTC(year + 1, 0, 1))
-      : new Date(Date.UTC(year, month, 1))
+    const dateTo = (
+      month === 12
+        ? new Date(Date.UTC(year + 1, 0, 1))
+        : new Date(Date.UTC(year, month, 1))
     ).toISOString();
     return { dateFrom, dateTo };
   }
@@ -83,6 +88,7 @@ export class PaymentOrdersService {
     private readonly orderReviewService: OrderReviewService,
     private readonly notificationsService: NotificationsService,
     private readonly ordersGateway: OrdersGateway,
+    private readonly emailService: EmailService,
   ) {}
 
   private async getActorRole(actorId: string): Promise<string> {
@@ -92,6 +98,54 @@ export class PaymentOrdersService {
       .eq('id', actorId)
       .single();
     return data?.role ?? 'unknown';
+  }
+
+  /**
+   * Envía el correo de notificación cuando una orden ("expediente") llega a un
+   * estado final (completed/failed). Fire-and-forget: nunca lanza, solo loggea.
+   */
+  private async notifyOrderFinalStatusEmail(
+    order: {
+      id: string;
+      user_id: string;
+      amount: number | string | null;
+      currency: string | null;
+      deposit_reference_code?: string | null;
+    },
+    status: 'completed' | 'failed',
+  ): Promise<void> {
+    try {
+      const { data: profile } = await this.supabase
+        .from('profiles')
+        .select('full_name, email')
+        .eq('id', order.user_id)
+        .maybeSingle();
+
+      if (!profile?.email) return;
+
+      const details = {
+        amount: order.amount ?? 0,
+        currency: (order.currency ?? '').toUpperCase(),
+        reference: order.deposit_reference_code ?? order.id,
+      };
+      const recipient = {
+        email: profile.email,
+        name: profile.full_name ?? undefined,
+      };
+
+      if (status === 'completed') {
+        await this.emailService.sendPaymentOrderCompletedEmail(
+          recipient,
+          details,
+        );
+      } else {
+        await this.emailService.sendPaymentOrderFailedEmail(recipient, details);
+      }
+    } catch (err) {
+      this.logger.error(
+        `Error enviando email de orden ${status} (${order.id}): ${(err as Error).message}`,
+      );
+    }
   }
 
   private parseLiquidationFeePercent(
@@ -295,9 +349,16 @@ export class PaymentOrdersService {
     flowType: string,
     currency?: string,
     userId?: string,
-  ): Promise<{ amountUsd: number; min: number; max: number; exceeded: boolean }> {
-    const { min_usd: min, max_usd: max } =
-      await this.getPaymentLimits(flowType, userId);
+  ): Promise<{
+    amountUsd: number;
+    min: number;
+    max: number;
+    exceeded: boolean;
+  }> {
+    const { min_usd: min, max_usd: max } = await this.getPaymentLimits(
+      flowType,
+      userId,
+    );
 
     // BOB y EURC se convierten con el tipo de cambio actual.
     // Stablecoins USD (USDC, USDT, USDB, PYUSD) se tratan como 1:1 USD.
@@ -375,7 +436,12 @@ export class PaymentOrdersService {
     }
 
     if (dto.amount != null) {
-      const limitCheck = await this.checkAmountLimits(dto.amount, dto.flow_type, inputCurrency, userId);
+      const limitCheck = await this.checkAmountLimits(
+        dto.amount,
+        dto.flow_type,
+        inputCurrency,
+        userId,
+      );
 
       if (limitCheck.exceeded) {
         if (!reviewContext?.clientReason) {
@@ -390,7 +456,9 @@ export class PaymentOrdersService {
           currency: inputCurrency,
           amountUsdEquiv: limitCheck.amountUsd,
           limitUsd: limitCheck.max,
-          excessUsd: parseFloat((limitCheck.amountUsd - limitCheck.max).toFixed(2)),
+          excessUsd: parseFloat(
+            (limitCheck.amountUsd - limitCheck.max).toFixed(2),
+          ),
           requestPayload: dto as unknown as Record<string, unknown>,
           clientReason: reviewContext.clientReason,
           documentUrl: reviewContext.documentUrl,
@@ -456,8 +524,7 @@ export class PaymentOrdersService {
     }
 
     // Bloquear si ya existe un expediente activo hacia la misma divisa destino
-    const destinationCurrency =
-      dto.destination_currency ?? extAccount.currency;
+    const destinationCurrency = dto.destination_currency ?? extAccount.currency;
     await this.assertNoConflictingBoliviaToWorldOrder(
       userId,
       destinationCurrency,
@@ -556,9 +623,7 @@ export class PaymentOrdersService {
           extAccount.business_name,
         destination_account_number: fullAccountNumber,
         exchange_rate_applied: appliedRate,
-        amount_destination: parseFloat(
-          (net_amount / appliedRate).toFixed(2),
-        ),
+        amount_destination: parseFloat((net_amount / appliedRate).toFixed(2)),
         psav_deposit_instructions: depositInstructions,
         business_purpose: dto.business_purpose,
         supporting_document_url: dto.supporting_document_url,
@@ -791,6 +856,8 @@ export class PaymentOrdersService {
         })
         .eq('id', order.id);
 
+      void this.notifyOrderFinalStatusEmail(order, 'failed');
+
       throw new BadRequestException(`Error al ejecutar transfer: ${message}`);
     }
 
@@ -905,9 +972,7 @@ export class PaymentOrdersService {
         destination_currency: destinationCurrency,
         supplier_id: dto.supplier_id ?? null,
         exchange_rate_applied: appliedRate,
-        amount_destination: parseFloat(
-          (net_amount / appliedRate).toFixed(2),
-        ),
+        amount_destination: parseFloat((net_amount / appliedRate).toFixed(2)),
         psav_deposit_instructions: depositInstructions,
         business_purpose: dto.business_purpose,
         supporting_document_url: dto.supporting_document_url,
@@ -965,11 +1030,7 @@ export class PaymentOrdersService {
         : rateData.effective_rate;
 
     // Bloquear si ya existe un expediente world_to_bolivia activo
-    await this.assertNoConflictingPsavOrder(
-      userId,
-      'world_to_bolivia',
-      'BOB',
-    );
+    await this.assertNoConflictingPsavOrder(userId, 'world_to_bolivia', 'BOB');
 
     const { data: order, error } = await this.supabase
       .from('payment_orders')
@@ -991,9 +1052,7 @@ export class PaymentOrdersService {
         destination_qr_url: dto.destination_qr_url,
         supplier_id: dto.supplier_id ?? null,
         exchange_rate_applied: appliedRate,
-        amount_destination: parseFloat(
-          (net_amount * appliedRate).toFixed(2),
-        ),
+        amount_destination: parseFloat((net_amount * appliedRate).toFixed(2)),
         psav_deposit_instructions: depositInstructions,
         business_purpose: dto.business_purpose,
         supporting_document_url: dto.supporting_document_url,
@@ -1109,9 +1168,7 @@ export class PaymentOrdersService {
    * Endpoint legado para clientes antiguos.
    * El bloqueo general entre los 5 servicios fue desactivado.
    */
-  async getActiveExclusiveOrder(
-    userId: string,
-  ): Promise<{
+  async getActiveExclusiveOrder(userId: string): Promise<{
     has_active: boolean;
     active_order?: {
       id: string;
@@ -1199,9 +1256,7 @@ export class PaymentOrdersService {
         'wallet_to_wallet',
       ])
       .eq('source_network', normalizedNetwork)
-      .or(
-        `source_currency.eq.${normalizedCurrency},source_currency.is.null`,
-      )
+      .or(`source_currency.eq.${normalizedCurrency},source_currency.is.null`)
       .not('bridge_transfer_id', 'is', null)
       .limit(1)
       .maybeSingle();
@@ -1377,8 +1432,7 @@ export class PaymentOrdersService {
     // source_currency tiene prioridad: en flujos de retiro de wallet es el crypto
     // que sale (ej: usdc → usd). destination_currency solo aplica cuando no hay
     // source_currency (ej: fiat_bo_to_bridge_wallet donde llega crypto como destino).
-    const currencyToCheck =
-      dto.source_currency ?? dto.destination_currency;
+    const currencyToCheck = dto.source_currency ?? dto.destination_currency;
     if (currencyToCheck) {
       await this.assertCurrencyActive(currencyToCheck);
     }
@@ -1398,7 +1452,12 @@ export class PaymentOrdersService {
         break;
     }
 
-    const limitCheck = await this.checkAmountLimits(dto.amount, dto.flow_type, inputCurrency, userId);
+    const limitCheck = await this.checkAmountLimits(
+      dto.amount,
+      dto.flow_type,
+      inputCurrency,
+      userId,
+    );
 
     if (limitCheck.exceeded) {
       if (!reviewContext?.clientReason) {
@@ -1413,7 +1472,9 @@ export class PaymentOrdersService {
         currency: inputCurrency,
         amountUsdEquiv: limitCheck.amountUsd,
         limitUsd: limitCheck.max,
-        excessUsd: parseFloat((limitCheck.amountUsd - limitCheck.max).toFixed(2)),
+        excessUsd: parseFloat(
+          (limitCheck.amountUsd - limitCheck.max).toFixed(2),
+        ),
         requestPayload: dto as unknown as Record<string, unknown>,
         clientReason: reviewContext.clientReason,
         documentUrl: reviewContext.documentUrl,
@@ -1888,9 +1949,7 @@ export class PaymentOrdersService {
       dto.amount,
     );
 
-    const sourceCurrency = (
-      dto.source_currency ?? 'usdc'
-    ).toUpperCase();
+    const sourceCurrency = (dto.source_currency ?? 'usdc').toUpperCase();
 
     // Validar token y ruta PSAV antes de tocar el saldo — sin coste de rollback si falla
     if (
@@ -1992,9 +2051,7 @@ export class PaymentOrdersService {
         client_bank_account_id: bankAccount.id,
         destination_qr_url: dto.destination_qr_url,
         exchange_rate_applied: appliedRate,
-        amount_destination: parseFloat(
-          (net_amount * appliedRate).toFixed(2),
-        ),
+        amount_destination: parseFloat((net_amount * appliedRate).toFixed(2)),
         business_purpose: dto.business_purpose,
         supporting_document_url: dto.supporting_document_url,
         notes: dto.notes,
@@ -2132,6 +2189,8 @@ export class PaymentOrdersService {
         })
         .eq('id', order.id);
 
+      void this.notifyOrderFinalStatusEmail(order, 'failed');
+
       throw new BadRequestException(
         `Error al ejecutar transfer BO: ${message}`,
       );
@@ -2161,9 +2220,7 @@ export class PaymentOrdersService {
     );
 
     // Verificar saldo del token específico
-    const sourceCurrency = (
-      dto.source_currency ?? 'usdc'
-    ).toUpperCase();
+    const sourceCurrency = (dto.source_currency ?? 'usdc').toUpperCase();
     const { data: balance } = await this.supabase
       .from('balances')
       .select('available_amount')
@@ -2181,14 +2238,24 @@ export class PaymentOrdersService {
     // Fix #5: Validar red y ruta off-ramp antes de reservar saldo ni tocar estado.
     // Evita que redes en ALLOWED_NETWORKS pero sin rutas (ej: 'base') lleguen al try block,
     // preveniendo órdenes 'failed' por validación y el ciclo innecesario reserve→release.
-    const destinationRailPre = (dto.destination_network ?? '').toLowerCase().trim();
+    const destinationRailPre = (dto.destination_network ?? '')
+      .toLowerCase()
+      .trim();
     if (!ALLOWED_NETWORKS.includes(destinationRailPre as any)) {
       throw new BadRequestException(
         `Red de destino inválida: "${dto.destination_network}". Redes permitidas: ${ALLOWED_NETWORKS.join(', ')}`,
       );
     }
-    const destCurrencyPre = (dto.destination_currency ?? sourceCurrency).toLowerCase();
-    if (!isValidOffRampRoute(sourceCurrency.toLowerCase(), destinationRailPre, destCurrencyPre)) {
+    const destCurrencyPre = (
+      dto.destination_currency ?? sourceCurrency
+    ).toLowerCase();
+    if (
+      !isValidOffRampRoute(
+        sourceCurrency.toLowerCase(),
+        destinationRailPre,
+        destCurrencyPre,
+      )
+    ) {
       throw new BadRequestException(
         `Ruta off-ramp no soportada: ${sourceCurrency} → ${destinationRailPre} → ${destCurrencyPre.toUpperCase()}. Verifica las combinaciones válidas en el catálogo Bridge.`,
       );
@@ -2219,13 +2286,15 @@ export class PaymentOrdersService {
         requires_psav: false,
         amount: dto.amount,
         currency: sourceCurrency,
-        source_currency: sourceCurrency,        // Fix #1: requerido por idx_po_bw2c_active_per_src_dest y assertNoConflictingCryptoOffRamp
+        source_currency: sourceCurrency, // Fix #1: requerido por idx_po_bw2c_active_per_src_dest y assertNoConflictingCryptoOffRamp
         fee_amount,
         net_amount,
         destination_type: 'crypto_address',
         destination_address: dto.destination_address,
         destination_network: dto.destination_network,
-        destination_currency: (dto.destination_currency ?? sourceCurrency).toUpperCase(), // Fix #4: siempre uppercase
+        destination_currency: (
+          dto.destination_currency ?? sourceCurrency
+        ).toUpperCase(), // Fix #4: siempre uppercase
         exchange_rate_applied: 1.0,
         // 1:1 stablecoin → el crédito neto estimado se conoce desde la creación.
         // El webhook transfer.complete lo confirma con receipt.final_amount.
@@ -2293,7 +2362,6 @@ export class PaymentOrdersService {
           `Monto mínimo para esta ruta es ${routeMin} ${sourceCurrency}. Ingresaste ${dto.amount}.`,
         );
       }
-
 
       const transferPayload = {
         on_behalf_of: profile?.bridge_customer_id,
@@ -2392,8 +2460,10 @@ export class PaymentOrdersService {
       const message = err instanceof Error ? err.message : String(err);
       console.log(
         '\n══════════ [bridge_wallet_to_crypto] ERROR ← Bridge API ════════════',
-        '\nmessage:', message,
-        '\nraw:', err,
+        '\nmessage:',
+        message,
+        '\nraw:',
+        err,
         '\n════════════════════════════════════════════════════════════════════\n',
       );
       // Revertir
@@ -2409,6 +2479,8 @@ export class PaymentOrdersService {
           failure_reason: `Bridge Transfer falló: ${message}`,
         })
         .eq('id', order.id);
+
+      void this.notifyOrderFinalStatusEmail(order, 'failed');
 
       throw new BadRequestException(
         `Error al ejecutar transfer crypto: ${message}`,
@@ -2494,9 +2566,7 @@ export class PaymentOrdersService {
     );
 
     // Verificar saldo del token específico
-    const sourceCurrency = (
-      dto.source_currency ?? 'usdc'
-    ).toUpperCase();
+    const sourceCurrency = (dto.source_currency ?? 'usdc').toUpperCase();
     const { data: balance } = await this.supabase
       .from('balances')
       .select('available_amount')
@@ -2515,7 +2585,7 @@ export class PaymentOrdersService {
     await this.assertNoConflictingFiatUsOffRamp(
       userId,
       sourceCurrency,
-      dto.supplier_id!,
+      dto.supplier_id,
     );
 
     // Reservar saldo
@@ -2663,6 +2733,8 @@ export class PaymentOrdersService {
           failure_reason: `Bridge Payout falló: ${message}`,
         })
         .eq('id', order.id);
+
+      void this.notifyOrderFinalStatusEmail(order, 'failed');
 
       throw new BadRequestException(`Error al ejecutar payout: ${message}`);
     }
@@ -2904,6 +2976,8 @@ export class PaymentOrdersService {
           failure_reason: `Bridge Transfer falló: ${message}`,
         })
         .eq('id', order.id);
+
+      void this.notifyOrderFinalStatusEmail(order, 'failed');
 
       throw new BadRequestException(
         `Error al ejecutar wallet-to-fiat: ${message}`,
@@ -3268,9 +3342,7 @@ export class PaymentOrdersService {
   async getMyFlowStats(userId: string, month?: string) {
     let query = this.supabase
       .from('payment_orders')
-      .select(
-        'flow_type, destination_currency, currency, amount, created_at',
-      )
+      .select('flow_type, destination_currency, currency, amount, created_at')
       .eq('user_id', userId)
       .eq('flow_category', 'interbank')
       .in('flow_type', ['bolivia_to_world', 'world_to_bolivia'])
@@ -3395,7 +3467,11 @@ export class PaymentOrdersService {
     // nombre/email del cliente. Se sanea el término para no romper la gramática
     // de filtros de PostgREST ni permitir inyección en `.or()`.
     if (filters.q?.trim()) {
-      const term = filters.q.trim().slice(0, 100).replace(/[,()%*:]/g, ' ').trim();
+      const term = filters.q
+        .trim()
+        .slice(0, 100)
+        .replace(/[,()%*:]/g, ' ')
+        .trim();
       if (term) {
         const orFilters: string[] = [
           `status.ilike.%${term}%`,
@@ -3421,11 +3497,19 @@ export class PaymentOrdersService {
             .limit(50),
           this.supabase.rpc('search_payment_order_ids', { term }),
         ]);
-        if (profilesError) this.logger.warn(`listAllOrders → fallo buscando perfiles por "${term}": ${profilesError.message}`);
-        if (orderIdsError) this.logger.warn(`listAllOrders → fallo buscando ids por "${term}": ${orderIdsError.message}`);
+        if (profilesError)
+          this.logger.warn(
+            `listAllOrders → fallo buscando perfiles por "${term}": ${profilesError.message}`,
+          );
+        if (orderIdsError)
+          this.logger.warn(
+            `listAllOrders → fallo buscando ids por "${term}": ${orderIdsError.message}`,
+          );
         const userIds = (matchedProfiles ?? []).map((p) => p.id);
         if (userIds.length) orFilters.push(`user_id.in.(${userIds.join(',')})`);
-        const orderIds = (matchedOrderIds ?? []).map((o: { id: string }) => o.id);
+        const orderIds = (matchedOrderIds ?? []).map(
+          (o: { id: string }) => o.id,
+        );
         if (orderIds.length) orFilters.push(`id.in.(${orderIds.join(',')})`);
 
         query = query.or(orFilters.join(','));
@@ -3433,7 +3517,9 @@ export class PaymentOrdersService {
     }
 
     const { data, count, error } = await query;
-    this.logger.debug(`listAllOrders → rows=${data?.length ?? 'null'} count=${count ?? 'null'} error=${error ? JSON.stringify(error) : 'none'}`);
+    this.logger.debug(
+      `listAllOrders → rows=${data?.length ?? 'null'} count=${count ?? 'null'} error=${error ? JSON.stringify(error) : 'none'}`,
+    );
     if (error) throw new BadRequestException(error.message);
     return { data: data ?? [], total: count ?? 0, page, limit };
   }
@@ -3464,9 +3550,7 @@ export class PaymentOrdersService {
   async getGlobalFlowStats(month?: string) {
     let query = this.supabase
       .from('payment_orders')
-      .select(
-        'flow_type, destination_currency, currency, amount, created_at',
-      )
+      .select('flow_type, destination_currency, currency, amount, created_at')
       .eq('flow_category', 'interbank')
       .in('flow_type', ['bolivia_to_world', 'world_to_bolivia'])
       .eq('status', 'completed');
@@ -3804,7 +3888,8 @@ export class PaymentOrdersService {
       updated_at: new Date().toISOString(),
       exchange_rate_applied: updated.exchange_rate_applied,
       amount_destination: updated.amount_destination,
-      bridge_source_deposit_instructions: updated.bridge_source_deposit_instructions,
+      bridge_source_deposit_instructions:
+        updated.bridge_source_deposit_instructions,
     });
 
     return updated;
@@ -3921,6 +4006,8 @@ export class PaymentOrdersService {
 
     if (error) throw new BadRequestException(error.message);
 
+    void this.notifyOrderFinalStatusEmail(order, 'completed');
+
     // Off-ramp PSAV a fiat BO — El ledger debit y la liberación de reserva
     // ahora se manejan automáticamente en el webhook transfer.complete (Tramo 1).
     // El completeOrder solo finaliza el estado de la orden tras el payout BOB (Tramo 2).
@@ -3972,7 +4059,15 @@ export class PaymentOrdersService {
       .single();
 
     if (!order) throw new NotFoundException('Orden no encontrada');
-    if (['completed', 'failed', 'cancelled', 'swept_external', 'refunded'].includes(order.status)) {
+    if (
+      [
+        'completed',
+        'failed',
+        'cancelled',
+        'swept_external',
+        'refunded',
+      ].includes(order.status)
+    ) {
       throw new BadRequestException(
         `No se puede fallar una orden en estado terminal "${order.status}"`,
       );
@@ -3989,6 +4084,8 @@ export class PaymentOrdersService {
       .single();
 
     if (error) throw new BadRequestException(error.message);
+
+    void this.notifyOrderFinalStatusEmail(order, 'failed');
 
     // 1. Manejar ledger entries 'pending' de esta orden
     const { data: pendingLedgers } = await this.supabase
@@ -4215,7 +4312,9 @@ export class PaymentOrdersService {
       .single();
 
     if (error || !data)
-      throw new BadRequestException('No se pudo actualizar el override de límite');
+      throw new BadRequestException(
+        'No se pudo actualizar el override de límite',
+      );
 
     await this.supabase.from('audit_logs').insert({
       actor_id: actorId,
@@ -4225,7 +4324,11 @@ export class PaymentOrdersService {
       details: {
         user_id: current.user_id,
         flow_type: current.flow_type,
-        previous: { min_usd: current.min_usd, max_usd: current.max_usd, is_active: current.is_active },
+        previous: {
+          min_usd: current.min_usd,
+          max_usd: current.max_usd,
+          is_active: current.is_active,
+        },
         updated: dto,
       },
     });
@@ -4249,7 +4352,10 @@ export class PaymentOrdersService {
       .delete()
       .eq('id', overrideId);
 
-    if (error) throw new BadRequestException('No se pudo eliminar el override de límite');
+    if (error)
+      throw new BadRequestException(
+        'No se pudo eliminar el override de límite',
+      );
 
     await this.supabase.from('audit_logs').insert({
       actor_id: actorId,
@@ -4364,7 +4470,12 @@ export class PaymentOrdersService {
 
   /** Crea un override de visibilidad de flujo para un cliente. */
   async createFlowOverride(
-    dto: { user_id: string; flow_type: string; is_enabled: boolean; notes?: string },
+    dto: {
+      user_id: string;
+      flow_type: string;
+      is_enabled: boolean;
+      notes?: string;
+    },
     actorId: string,
   ) {
     const { data: conflict } = await this.supabase
@@ -4452,7 +4563,9 @@ export class PaymentOrdersService {
       .single();
 
     if (error || !data)
-      throw new BadRequestException('No se pudo actualizar el override de flujo');
+      throw new BadRequestException(
+        'No se pudo actualizar el override de flujo',
+      );
 
     await this.supabase.from('audit_logs').insert({
       actor_id: actorId,
@@ -4462,7 +4575,10 @@ export class PaymentOrdersService {
       details: {
         user_id: current.user_id,
         flow_type: current.flow_type,
-        previous: { is_enabled: current.is_enabled, is_active: current.is_active },
+        previous: {
+          is_enabled: current.is_enabled,
+          is_active: current.is_active,
+        },
         updated: dto,
       },
     });
@@ -4486,7 +4602,8 @@ export class PaymentOrdersService {
       .delete()
       .eq('id', overrideId);
 
-    if (error) throw new BadRequestException('No se pudo eliminar el override de flujo');
+    if (error)
+      throw new BadRequestException('No se pudo eliminar el override de flujo');
 
     await this.supabase.from('audit_logs').insert({
       actor_id: actorId,
@@ -4516,11 +4633,19 @@ export class PaymentOrdersService {
     staffNotes?: string,
   ) {
     // 1. Aprobar en la tabla (lock optimista)
-    const { review, payload } = await this.orderReviewService.approveReview(reviewId, actorId, staffNotes);
+    const { review, payload } = await this.orderReviewService.approveReview(
+      reviewId,
+      actorId,
+      staffNotes,
+    );
 
     const flowType = review.flow_type;
     const interbankFlows = [
-      'bolivia_to_world', 'bolivia_to_wallet', 'wallet_to_wallet', 'world_to_bolivia', 'world_to_wallet',
+      'bolivia_to_world',
+      'bolivia_to_wallet',
+      'wallet_to_wallet',
+      'world_to_bolivia',
+      'world_to_wallet',
     ];
 
     let order: Record<string, unknown>;
@@ -4529,21 +4654,35 @@ export class PaymentOrdersService {
     //    Se usa un método privado interno que no revisa el límite superior.
     try {
       if (interbankFlows.includes(flowType)) {
-        order = await this.createInterbankOrderBypassLimit(review.user_id, payload as unknown as CreateInterbankOrderDto);
+        order = await this.createInterbankOrderBypassLimit(
+          review.user_id,
+          payload as unknown as CreateInterbankOrderDto,
+        );
       } else {
-        order = await this.createWalletRampOrderBypassLimit(review.user_id, payload as unknown as CreateWalletRampOrderDto);
+        order = await this.createWalletRampOrderBypassLimit(
+          review.user_id,
+          payload as unknown as CreateWalletRampOrderDto,
+        );
       }
     } catch (err) {
       // Revertir la aprobación a pending_review para que pueda reintentarse
       await this.supabase
         .from('order_review_requests')
-        .update({ status: 'pending_review', reviewed_by: null, reviewed_at: null })
+        .update({
+          status: 'pending_review',
+          reviewed_by: null,
+          reviewed_at: null,
+        })
         .eq('id', reviewId);
       await this.supabase.from('audit_logs').insert({
         performed_by: actorId,
         action: 'APPROVE_REVIEW_ROLLBACK',
         table_name: 'order_review_requests',
-        new_values: { id: reviewId, status: 'pending_review', error: (err as Error)?.message ?? String(err) },
+        new_values: {
+          id: reviewId,
+          status: 'pending_review',
+          error: (err as Error)?.message ?? String(err),
+        },
         source: 'admin_panel',
       });
       throw err;
@@ -4567,7 +4706,10 @@ export class PaymentOrdersService {
   }
 
   // Versión de createInterbankOrder que omite el check de límite máximo.
-  private async createInterbankOrderBypassLimit(userId: string, dto: CreateInterbankOrderDto) {
+  private async createInterbankOrderBypassLimit(
+    userId: string,
+    dto: CreateInterbankOrderDto,
+  ) {
     switch (dto.flow_type) {
       case InterbankFlowType.BOLIVIA_TO_WORLD:
         return this.createBoliviaToWorld(userId, dto);
@@ -4585,7 +4727,10 @@ export class PaymentOrdersService {
   }
 
   // Versión de createWalletRampOrder que omite el check de límite máximo.
-  private async createWalletRampOrderBypassLimit(userId: string, dto: CreateWalletRampOrderDto) {
+  private async createWalletRampOrderBypassLimit(
+    userId: string,
+    dto: CreateWalletRampOrderDto,
+  ) {
     switch (dto.flow_type) {
       case WalletRampFlowType.FIAT_BO_TO_BRIDGE_WALLET:
         return this.createFiatBoToBridgeWallet(userId, dto);

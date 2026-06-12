@@ -8,7 +8,13 @@ import { OrdersModule } from '../orders/orders.module';
 import { AdminModule } from '../admin/admin.module';
 
 @Module({
-  imports: [BridgeModule, WalletsModule, forwardRef(() => ComplianceModule), OrdersModule, AdminModule],
+  imports: [
+    BridgeModule,
+    WalletsModule,
+    forwardRef(() => ComplianceModule),
+    OrdersModule,
+    AdminModule,
+  ],
   controllers: [WebhooksController],
   providers: [WebhooksService],
 })

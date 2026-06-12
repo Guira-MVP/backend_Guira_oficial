@@ -14,6 +14,7 @@ describe('PaymentOrdersService bridge deposit collision guard', () => {
       {} as any,
       {} as any,
       {} as any, // ordersGateway
+      {} as any, // emailService
     );
 
   const createCollisionQuery = (conflicting: unknown) => {
@@ -61,11 +62,7 @@ describe('PaymentOrdersService bridge deposit collision guard', () => {
     const service = createService({ from: jest.fn(() => query) }) as any;
 
     await expect(
-      service.assertNoConflictingBridgeDepositOrder(
-        'user-1',
-        'usdt',
-        'tron',
-      ),
+      service.assertNoConflictingBridgeDepositOrder('user-1', 'usdt', 'tron'),
     ).resolves.toBeUndefined();
   });
 
@@ -118,6 +115,7 @@ describe('PaymentOrdersService bridge deposit collision guard', () => {
       {} as any,
       {} as any,
       {} as any, // ordersGateway
+      {} as any, // emailService
     ) as any;
     const guard = jest
       .spyOn(service, 'assertNoConflictingBridgeDepositOrder')

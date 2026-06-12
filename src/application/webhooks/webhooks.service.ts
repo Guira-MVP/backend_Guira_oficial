@@ -9,6 +9,7 @@ import { WalletsService } from '../wallets/wallets.service';
 import { ComplianceActionsService } from '../compliance/compliance-actions.service';
 import { OrdersGateway } from '../orders/orders.gateway';
 import { AdminGateway } from '../admin/admin.gateway';
+import { EmailService } from '../email/email.service';
 
 interface SinkEventDto {
   provider: string;
@@ -38,7 +39,57 @@ export class WebhooksService {
     private readonly complianceActions: ComplianceActionsService,
     private readonly ordersGateway: OrdersGateway,
     private readonly adminGateway: AdminGateway,
+    private readonly emailService: EmailService,
   ) {}
+
+  /**
+   * Envía el correo de notificación cuando una orden ("expediente") llega a un
+   * estado final (completed/failed) vía webhook de Bridge. Fire-and-forget:
+   * nunca lanza, solo loggea.
+   */
+  private async notifyOrderFinalStatusEmail(
+    order: {
+      id: string;
+      user_id: string;
+      amount: number | string | null;
+      currency: string | null;
+      deposit_reference_code?: string | null;
+    },
+    status: 'completed' | 'failed',
+  ): Promise<void> {
+    try {
+      const { data: profile } = await this.supabase
+        .from('profiles')
+        .select('full_name, email')
+        .eq('id', order.user_id)
+        .maybeSingle();
+
+      if (!profile?.email) return;
+
+      const details = {
+        amount: order.amount ?? 0,
+        currency: (order.currency ?? '').toUpperCase(),
+        reference: order.deposit_reference_code ?? order.id,
+      };
+      const recipient = {
+        email: profile.email,
+        name: profile.full_name ?? undefined,
+      };
+
+      if (status === 'completed') {
+        await this.emailService.sendPaymentOrderCompletedEmail(
+          recipient,
+          details,
+        );
+      } else {
+        await this.emailService.sendPaymentOrderFailedEmail(recipient, details);
+      }
+    } catch (err) {
+      this.logger.error(
+        `Error enviando email de orden ${status} (${order.id}): ${(err as Error).message}`,
+      );
+    }
+  }
 
   // ═══════════════════════════════════════════════
   //  WS HELPER — Emite hacia usuario Y staff
@@ -163,8 +214,10 @@ export class WebhooksService {
     // La RPC usa SELECT ... FOR UPDATE SKIP LOCKED: dos ticks del CRON que se
     // solapen nunca obtendrán el mismo evento, eliminando la race condition que
     // podría duplicar wallets u otras operaciones idempotentes.
-    const { data: events, error } = await this.supabase
-      .rpc('claim_pending_webhooks', { batch_size: 50 });
+    const { data: events, error } = await this.supabase.rpc(
+      'claim_pending_webhooks',
+      { batch_size: 50 },
+    );
 
     if (error) {
       this.logger.error(`CRON error al reclamar webhooks: ${error.message}`);
@@ -389,12 +442,16 @@ export class WebhooksService {
 
       case 'virtual_account.activity.activation':
       case 'virtual_account.activation':
-        this.logger.log(`VA activada: ${payload?.event_object_id ?? 'unknown'}`);
+        this.logger.log(
+          `VA activada: ${payload?.event_object_id ?? 'unknown'}`,
+        );
         break;
 
       case 'virtual_account.activity.deactivation':
       case 'virtual_account.deactivation':
-        this.logger.log(`VA desactivada: ${payload?.event_object_id ?? 'unknown'}`);
+        this.logger.log(
+          `VA desactivada: ${payload?.event_object_id ?? 'unknown'}`,
+        );
         break;
 
       // Bridge envía el sub-tipo de actividad dentro del payload (event_object.type)
@@ -630,7 +687,8 @@ export class WebhooksService {
       // Solo actuamos si el perfil ya fue enviado a Bridge (pending_bridge),
       // para distinguir del estado transitorio inicial de creación.
       if (profile.onboarding_status === 'pending_bridge') {
-        const { issueSet, additionalRequirements } = this.extractEndorsementIssues(eventObject);
+        const { issueSet, additionalRequirements } =
+          this.extractEndorsementIssues(eventObject);
 
         const hasBlockingIssues =
           issueSet.size > 0 ||
@@ -669,9 +727,10 @@ export class WebhooksService {
   private extractEndorsementIssues(
     eventObject: Record<string, unknown> | undefined,
   ): { issueSet: Set<string>; additionalRequirements: string[] } {
-    const endorsements = (
-      eventObject?.endorsements as Array<Record<string, unknown>> | undefined
-    ) ?? [];
+    const endorsements =
+      (eventObject?.endorsements as
+        | Array<Record<string, unknown>>
+        | undefined) ?? [];
 
     // Extraer issues de cada endorsement (deduplicados)
     const issueSet = new Set<string>();
@@ -685,7 +744,9 @@ export class WebhooksService {
             issueSet.add(issue);
           } else if (typeof issue === 'object' && issue !== null) {
             // Bridge usa formato: { "acting_as_intermediary": ["incomplete_sof_field"] }
-            for (const [key, val] of Object.entries(issue as Record<string, unknown>)) {
+            for (const [key, val] of Object.entries(
+              issue as Record<string, unknown>,
+            )) {
               if (Array.isArray(val)) {
                 val.forEach((v) => issueSet.add(`${key}: ${v}`));
               } else {
@@ -699,7 +760,9 @@ export class WebhooksService {
 
     const additionalRequirements: string[] = [];
     for (const endorsement of endorsements) {
-      const addReqs = endorsement.additional_requirements as string[] | undefined;
+      const addReqs = endorsement.additional_requirements as
+        | string[]
+        | undefined;
       if (Array.isArray(addReqs)) {
         addReqs.forEach((r) => additionalRequirements.push(r));
       }
@@ -728,7 +791,12 @@ export class WebhooksService {
       .from('kyc_applications')
       .select('observations')
       .eq('user_id', profile.id)
-      .in('status', ['sent_to_bridge', 'submitted', 'under_review', 'needs_review'])
+      .in('status', [
+        'sent_to_bridge',
+        'submitted',
+        'under_review',
+        'needs_review',
+      ])
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -987,9 +1055,12 @@ export class WebhooksService {
     payload: Record<string, unknown>,
   ): Promise<void> {
     // FIX C-2: event_object es la fuente de datos para eventos VA
-    const data = (payload?.event_object ??
-      payload?.data) as Record<string, unknown>;
-    if (!data) throw new Error('VA funds_received: payload sin event_object/data');
+    const data = (payload?.event_object ?? payload?.data) as Record<
+      string,
+      unknown
+    >;
+    if (!data)
+      throw new Error('VA funds_received: payload sin event_object/data');
 
     const vaId = data.virtual_account_id as string;
     const depositId = (data.deposit_id as string) ?? null;
@@ -1057,12 +1128,25 @@ export class WebhooksService {
     // 5. Bifurcar: external sweep vs deposito interno
     if (va.is_external_sweep) {
       await this.handleExternalSweepDeposit(
-        va, amount, feeAmount, netAmount, currency, senderName, payload, depositId,
+        va,
+        amount,
+        feeAmount,
+        netAmount,
+        currency,
+        senderName,
+        payload,
+        depositId,
       );
     } else {
       await this.handleInternalDepositPending(
-        va, amount, feeAmount, netAmount, currency,
-        senderName, bridgeEventId, depositId,
+        va,
+        amount,
+        feeAmount,
+        netAmount,
+        currency,
+        senderName,
+        bridgeEventId,
+        depositId,
       );
     }
   }
@@ -1113,7 +1197,9 @@ export class WebhooksService {
         fee_amount: feeAmount,
         net_amount: netAmount,
         currency: ((va.destination_currency as string) ?? 'USDC').toUpperCase(),
-        source_currency: ((va.source_currency as string) ?? currency).toUpperCase(),
+        source_currency: (
+          (va.source_currency as string) ?? currency
+        ).toUpperCase(),
         // Depósito fiat → stablecoin es a la par; el webhook payment_processed
         // sobreescribe con receipt.exchange_rate cuando Bridge confirma.
         exchange_rate_applied: 1.0,
@@ -1294,7 +1380,10 @@ export class WebhooksService {
   private async handleVaPaymentSubmitted(
     payload: Record<string, unknown>,
   ): Promise<void> {
-    const data = (payload?.event_object ?? payload?.data) as Record<string, unknown>;
+    const data = (payload?.event_object ?? payload?.data) as Record<
+      string,
+      unknown
+    >;
     const depositId = (data?.deposit_id as string) ?? null;
     const vaId = data?.virtual_account_id as string;
 
@@ -1315,7 +1404,11 @@ export class WebhooksService {
         .from('payment_orders')
         .update({ va_deposit_status: 'payment_submitted' })
         .eq('deposit_id', depositId)
-        .not('status', 'in', '("completed","refunded","cancelled","swept_external")');
+        .not(
+          'status',
+          'in',
+          '("completed","refunded","cancelled","swept_external")',
+        );
     }
   }
 
@@ -1327,8 +1420,12 @@ export class WebhooksService {
   private async handleVaPaymentProcessed(
     payload: Record<string, unknown>,
   ): Promise<void> {
-    const data = (payload?.event_object ?? payload?.data) as Record<string, unknown>;
-    if (!data) throw new Error('VA payment_processed: payload sin event_object/data');
+    const data = (payload?.event_object ?? payload?.data) as Record<
+      string,
+      unknown
+    >;
+    if (!data)
+      throw new Error('VA payment_processed: payload sin event_object/data');
 
     const depositId = (data.deposit_id as string) ?? null;
     const vaId = data.virtual_account_id as string;
@@ -1348,7 +1445,8 @@ export class WebhooksService {
         : data.developer_fee_amount != null
           ? parseFloat(data.developer_fee_amount as string)
           : null;
-    const destinationNetwork = (data.destination_payment_rail as string) ?? null;
+    const destinationNetwork =
+      (data.destination_payment_rail as string) ?? null;
     const destinationCurrency = (data.currency as string) ?? null;
     // Tasa de cambio de Bridge (receipt.exchange_rate). En va_deposit la conversión
     // fiat → stablecoin es a la par, por lo que el fallback es 1.0 si Bridge no la envía.
@@ -1357,7 +1455,9 @@ export class WebhooksService {
         ? parseFloat(receipt.exchange_rate as string)
         : 1.0;
 
-    this.logger.log(`VA payment_processed: depositId=${depositId} va=${vaId} tx=${txHash ?? 'n/a'}`);
+    this.logger.log(
+      `VA payment_processed: depositId=${depositId} va=${vaId} tx=${txHash ?? 'n/a'}`,
+    );
 
     // Registrar evento
     await this.supabase.from('bridge_virtual_account_events').insert({
@@ -1387,7 +1487,10 @@ export class WebhooksService {
         .eq('status', 'completed')
         .maybeSingle();
 
-      if (completedOrder && completedOrder.va_deposit_status !== 'payment_processed') {
+      if (
+        completedOrder &&
+        completedOrder.va_deposit_status !== 'payment_processed'
+      ) {
         await this.supabase
           .from('payment_orders')
           .update({ va_deposit_status: 'payment_processed' })
@@ -1411,7 +1514,8 @@ export class WebhooksService {
     }
 
     // Bridge final_amount es el monto que realmente llega al wallet (autoridad)
-    const creditAmount = bridgeFinalAmount ?? parseFloat(String(order.net_amount));
+    const creditAmount =
+      bridgeFinalAmount ?? parseFloat(String(order.net_amount));
 
     // Acreditar balance: INSERT ledger_entry settled (trigger actualiza balances)
     await this.supabase.from('ledger_entries').insert({
@@ -1483,14 +1587,19 @@ export class WebhooksService {
   private async handleVaFundsScheduled(
     payload: Record<string, unknown>,
   ): Promise<void> {
-    const data = (payload?.event_object ?? payload?.data) as Record<string, unknown>;
+    const data = (payload?.event_object ?? payload?.data) as Record<
+      string,
+      unknown
+    >;
     const vaId = data?.virtual_account_id as string;
     const depositId = (data?.deposit_id as string) ?? null;
     const amount = parseFloat((data?.amount as string) ?? '0');
     const source = data?.source as Record<string, unknown> | undefined;
     const estimatedArrival = (source?.estimated_arrival_date as string) ?? null;
 
-    this.logger.log(`VA funds_scheduled: va=${vaId} amount=${amount} eta=${estimatedArrival}`);
+    this.logger.log(
+      `VA funds_scheduled: va=${vaId} amount=${amount} eta=${estimatedArrival}`,
+    );
 
     await this.supabase.from('bridge_virtual_account_events').insert({
       bridge_virtual_account_id: vaId,
@@ -1531,12 +1640,17 @@ export class WebhooksService {
   private async handleVaInReview(
     payload: Record<string, unknown>,
   ): Promise<void> {
-    const data = (payload?.event_object ?? payload?.data) as Record<string, unknown>;
+    const data = (payload?.event_object ?? payload?.data) as Record<
+      string,
+      unknown
+    >;
     const vaId = data?.virtual_account_id as string;
     const depositId = (data?.deposit_id as string) ?? null;
     const amount = parseFloat((data?.amount as string) ?? '0');
 
-    this.logger.warn(`VA in_review: va=${vaId} depositId=${depositId} amount=${amount}`);
+    this.logger.warn(
+      `VA in_review: va=${vaId} depositId=${depositId} amount=${amount}`,
+    );
 
     await this.supabase.from('bridge_virtual_account_events').insert({
       bridge_virtual_account_id: vaId,
@@ -1579,7 +1693,10 @@ export class WebhooksService {
   private async handleVaRefundInFlight(
     payload: Record<string, unknown>,
   ): Promise<void> {
-    const data = (payload?.event_object ?? payload?.data) as Record<string, unknown>;
+    const data = (payload?.event_object ?? payload?.data) as Record<
+      string,
+      unknown
+    >;
     const vaId = data?.virtual_account_id as string;
     const depositId = (data?.deposit_id as string) ?? null;
     const amount = parseFloat((data?.amount as string) ?? '0');
@@ -1627,14 +1744,19 @@ export class WebhooksService {
   private async handleVaRefunded(
     payload: Record<string, unknown>,
   ): Promise<void> {
-    const data = (payload?.event_object ?? payload?.data) as Record<string, unknown>;
+    const data = (payload?.event_object ?? payload?.data) as Record<
+      string,
+      unknown
+    >;
     if (!data) throw new Error('VA refunded: payload sin event_object/data');
 
     const vaId = data.virtual_account_id as string;
     const depositId = (data.deposit_id as string) ?? null;
     const amount = parseFloat((data.amount as string) ?? '0');
 
-    this.logger.warn(`VA refunded: va=${vaId} depositId=${depositId} amount=${amount}`);
+    this.logger.warn(
+      `VA refunded: va=${vaId} depositId=${depositId} amount=${amount}`,
+    );
 
     await this.supabase.from('bridge_virtual_account_events').insert({
       bridge_virtual_account_id: vaId,
@@ -1649,12 +1771,16 @@ export class WebhooksService {
     // Buscar la payment_order asociada
     const { data: order } = await this.supabase
       .from('payment_orders')
-      .select('id, user_id, wallet_id, net_amount, currency, status, va_deposit_status')
+      .select(
+        'id, user_id, wallet_id, net_amount, currency, status, va_deposit_status',
+      )
       .eq('deposit_id', depositId ?? '')
       .maybeSingle();
 
     if (!order) {
-      this.logger.warn(`VA refunded: no se encontro order para deposit_id=${depositId}`);
+      this.logger.warn(
+        `VA refunded: no se encontro order para deposit_id=${depositId}`,
+      );
       return;
     }
 
@@ -1718,12 +1844,17 @@ export class WebhooksService {
   private async handleVaRefundFailed(
     payload: Record<string, unknown>,
   ): Promise<void> {
-    const data = (payload?.event_object ?? payload?.data) as Record<string, unknown>;
+    const data = (payload?.event_object ?? payload?.data) as Record<
+      string,
+      unknown
+    >;
     const vaId = data?.virtual_account_id as string;
     const depositId = (data?.deposit_id as string) ?? null;
     const amount = parseFloat((data?.amount as string) ?? '0');
 
-    this.logger.error(`VA refund_failed: va=${vaId} depositId=${depositId} amount=${amount}`);
+    this.logger.error(
+      `VA refund_failed: va=${vaId} depositId=${depositId} amount=${amount}`,
+    );
 
     await this.supabase.from('bridge_virtual_account_events').insert({
       bridge_virtual_account_id: vaId,
@@ -1760,7 +1891,10 @@ export class WebhooksService {
   private async handleVaMicrodeposit(
     payload: Record<string, unknown>,
   ): Promise<void> {
-    const data = (payload?.event_object ?? payload?.data) as Record<string, unknown>;
+    const data = (payload?.event_object ?? payload?.data) as Record<
+      string,
+      unknown
+    >;
     const vaId = data?.virtual_account_id as string;
     const amount = parseFloat((data?.amount as string) ?? '0');
 
@@ -1787,7 +1921,10 @@ export class WebhooksService {
   private async handleVaAccountUpdate(
     payload: Record<string, unknown>,
   ): Promise<void> {
-    const data = (payload?.event_object ?? payload?.data) as Record<string, unknown>;
+    const data = (payload?.event_object ?? payload?.data) as Record<
+      string,
+      unknown
+    >;
     const vaId = (data?.id as string) ?? (data?.virtual_account_id as string);
     const newStatus = (data?.status as string) ?? null;
 
@@ -1808,7 +1945,6 @@ export class WebhooksService {
       source: 'webhook',
     });
   }
-
 
   // ═══════════════════════════════════════════════
 
@@ -1925,7 +2061,7 @@ export class WebhooksService {
     const { data: paymentOrder } = await this.supabase
       .from('payment_orders')
       .select(
-        'id, user_id, wallet_id, flow_type, amount, fee_amount, amount_destination, currency, source_currency, destination_currency',
+        'id, user_id, wallet_id, flow_type, amount, fee_amount, amount_destination, currency, source_currency, destination_currency, deposit_reference_code',
       )
       .eq('bridge_transfer_id', bridgeTransferId)
       .in('status', [
@@ -2003,7 +2139,10 @@ export class WebhooksService {
             source_tx_hash: sourceTxHash,
             receipt_url: receiptUrl,
             provider_reference:
-              traceNumber ?? destinationTxHash ?? context?.providerEventId ?? null,
+              traceNumber ??
+              destinationTxHash ??
+              context?.providerEventId ??
+              null,
             bridge_event_id: context?.providerEventId ?? null,
             source_address: sourceAddress,
             source_network: sourceNetwork,
@@ -2028,6 +2167,8 @@ export class WebhooksService {
               : {}),
           })
           .eq('id', paymentOrder.id);
+
+        void this.notifyOrderFinalStatusEmail(paymentOrder, 'completed');
 
         // WS: notificar al usuario y staff que la transferencia fue completada
         this.ordersGateway.emitOrderUpdated(paymentOrder.user_id, {
@@ -2245,7 +2386,9 @@ export class WebhooksService {
     //    (doble liberación produce reserved_amount negativo).
     const { data: existingTransfer } = await this.supabase
       .from('bridge_transfers')
-      .select('id, user_id, payout_request_id, amount, destination_currency, status')
+      .select(
+        'id, user_id, payout_request_id, amount, destination_currency, status',
+      )
       .eq('bridge_transfer_id', bridgeTransferId)
       .maybeSingle();
 
@@ -2256,7 +2399,11 @@ export class WebhooksService {
       );
       await this.supabase
         .from('bridge_transfers')
-        .update({ bridge_state: 'failed', bridge_raw_response: data, updated_at: new Date().toISOString() })
+        .update({
+          bridge_state: 'failed',
+          bridge_raw_response: data,
+          updated_at: new Date().toISOString(),
+        })
         .eq('bridge_transfer_id', bridgeTransferId);
       return;
     }
@@ -2317,7 +2464,9 @@ export class WebhooksService {
     // 'pending' incluido por paridad con handleTransferComplete (FIX #3 equivalente).
     const { data: failedOrder } = await this.supabase
       .from('payment_orders')
-      .select('id, user_id, wallet_id, amount, fee_amount, currency, flow_type')
+      .select(
+        'id, user_id, wallet_id, amount, fee_amount, currency, flow_type, deposit_reference_code',
+      )
       .eq('bridge_transfer_id', bridgeTransferId)
       .in('status', ['pending', 'processing', 'created', 'waiting_deposit'])
       .maybeSingle();
@@ -2350,6 +2499,8 @@ export class WebhooksService {
           failure_reason: `Bridge transfer ${bridgeTransferId} falló`,
         })
         .eq('id', failedOrder.id);
+
+      void this.notifyOrderFinalStatusEmail(failedOrder, 'failed');
 
       // WS: notificar al usuario y staff que la orden falló
       this.ordersGateway.emitOrderUpdated(failedOrder.user_id, {
@@ -2785,7 +2936,12 @@ export class WebhooksService {
 
             if (matched) {
               // Vincular y completar en un solo paso
-              await this.completeDrainOrder(matched, drainId, receipt, depositTxHash);
+              await this.completeDrainOrder(
+                matched,
+                drainId,
+                receipt,
+                depositTxHash,
+              );
               return;
             }
           }
@@ -2815,7 +2971,12 @@ export class WebhooksService {
           });
 
           if (matchedByAddr) {
-            await this.completeDrainOrder(matchedByAddr, drainId, receipt, depositTxHash);
+            await this.completeDrainOrder(
+              matchedByAddr,
+              drainId,
+              receipt,
+              depositTxHash,
+            );
             return;
           }
         }

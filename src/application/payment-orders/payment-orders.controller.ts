@@ -25,7 +25,10 @@ import {
 import { CurrentUser } from '../../core/decorators/current-user.decorator';
 import { Roles } from '../../core/decorators/roles.decorator';
 import { RolesGuard } from '../../core/guards/roles.guard';
-import { Public, type AuthenticatedUser } from '../../core/guards/supabase-auth.guard';
+import {
+  Public,
+  type AuthenticatedUser,
+} from '../../core/guards/supabase-auth.guard';
 import { PaymentOrdersService } from './payment-orders.service';
 import { OrderReviewService } from './order-review.service';
 import { ExchangeRatesService } from '../exchange-rates/exchange-rates.service';
@@ -53,7 +56,10 @@ import {
   FIAT_BO_EXCLUDED_SOURCE_CURRENCIES,
 } from '../../common/constants/bridge-route-catalog.constants';
 import { getValidSourceRoutes } from '../../common/constants/transfer-route-catalog.constants';
-import { GOVERNED_FLOWS, isGovernedFlow } from '../../common/constants/flow-access.constants';
+import {
+  GOVERNED_FLOWS,
+  isGovernedFlow,
+} from '../../common/constants/flow-access.constants';
 
 // ═══════════════════════════════════════════════
 //  USER CONTROLLER — /payment-orders
@@ -85,9 +91,16 @@ export class PaymentOrdersController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     const reviewContext = (dto as any).client_reason
-      ? { clientReason: (dto as any).client_reason, documentUrl: dto.supporting_document_url }
+      ? {
+          clientReason: (dto as any).client_reason,
+          documentUrl: dto.supporting_document_url,
+        }
       : undefined;
-    return this.paymentOrdersService.createInterbankOrder(user.id, dto, reviewContext);
+    return this.paymentOrdersService.createInterbankOrder(
+      user.id,
+      dto,
+      reviewContext,
+    );
   }
 
   @Post('wallet-ramp')
@@ -98,9 +111,16 @@ export class PaymentOrdersController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     const reviewContext = (dto as any).client_reason
-      ? { clientReason: (dto as any).client_reason, documentUrl: dto.supporting_document_url }
+      ? {
+          clientReason: (dto as any).client_reason,
+          documentUrl: dto.supporting_document_url,
+        }
       : undefined;
-    return this.paymentOrdersService.createWalletRampOrder(user.id, dto, reviewContext);
+    return this.paymentOrdersService.createWalletRampOrder(
+      user.id,
+      dto,
+      reviewContext,
+    );
   }
 
   // ── Consultas ──
@@ -134,7 +154,8 @@ export class PaymentOrdersController {
 
   @Get('limits/:flow_type')
   @ApiOperation({
-    summary: 'Límites de monto (min/max USD) para un flow_type — incluye override personal si existe',
+    summary:
+      'Límites de monto (min/max USD) para un flow_type — incluye override personal si existe',
   })
   getPaymentLimits(
     @Param('flow_type') flow_type: string,
@@ -208,11 +229,33 @@ export class PaymentOrdersController {
   }
 
   @Get('export')
-  @ApiOperation({ summary: 'Exportar historial de expedientes a Excel (respeta filtros activos)' })
-  @ApiQuery({ name: 'format', required: true, enum: ['excel'], description: 'Formato del archivo de exportación' })
-  @ApiQuery({ name: 'status', required: false, description: 'Filtrar por estado (si se omite, exporta todos)' })
-  @ApiQuery({ name: 'year', required: false, type: Number, description: 'Gestión (año)' })
-  @ApiQuery({ name: 'month', required: false, type: Number, description: 'Mes (1-12)' })
+  @ApiOperation({
+    summary:
+      'Exportar historial de expedientes a Excel (respeta filtros activos)',
+  })
+  @ApiQuery({
+    name: 'format',
+    required: true,
+    enum: ['excel'],
+    description: 'Formato del archivo de exportación',
+  })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    description: 'Filtrar por estado (si se omite, exporta todos)',
+  })
+  @ApiQuery({
+    name: 'year',
+    required: false,
+    type: Number,
+    description: 'Gestión (año)',
+  })
+  @ApiQuery({
+    name: 'month',
+    required: false,
+    type: Number,
+    description: 'Mes (1-12)',
+  })
   async exportOrders(
     @CurrentUser() user: AuthenticatedUser,
     @Query('format') format: string,
@@ -236,13 +279,18 @@ export class PaymentOrdersController {
     });
 
     // Resolver nombres de proveedores
-    const supplierIds = [...new Set(orders.map((o: any) => o.supplier_id).filter(Boolean))];
-    const suppliers = await this.suppliersService.findByIds(supplierIds as string[], user.id);
+    const supplierIds = [
+      ...new Set(orders.map((o: any) => o.supplier_id).filter(Boolean)),
+    ];
+    const suppliers = await this.suppliersService.findByIds(
+      supplierIds as string[],
+      user.id,
+    );
 
     // Obtener perfil del cliente y teléfono
     const profile = await this.profilesService.findOne(user.id);
     const phone = await this.profilesService.getClientPhone(user.id);
-    
+
     const client = {
       id: profile.id,
       full_name: profile.full_name ?? null,
@@ -252,8 +300,14 @@ export class PaymentOrdersController {
 
     const filters = { status, year: parsedYear, month: parsedMonth };
     const dateStr = new Date().toISOString().slice(0, 10);
-    const buffer = await this.exportService.generateExcel(orders, suppliers, client, filters);
-    const contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    const buffer = await this.exportService.generateExcel(
+      orders,
+      suppliers,
+      client,
+      filters,
+    );
+    const contentType =
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
     const filename = `expedientes-${dateStr}.xlsx`;
 
     res.set({
@@ -275,10 +329,10 @@ export class PaymentOrdersController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     const supplier = await this.suppliersService.findOne(supplierId, user.id);
-    const destNetwork = (supplier as any)?.bank_details?.wallet_network as
+    const destNetwork = supplier?.bank_details?.wallet_network as
       | string
       | undefined;
-    const destCurrency = (supplier as any)?.bank_details?.wallet_currency as
+    const destCurrency = supplier?.bank_details?.wallet_currency as
       | string
       | undefined;
 
@@ -301,7 +355,10 @@ export class PaymentOrdersController {
   }
 
   @Get('my-flow-stats')
-  @ApiOperation({ summary: 'Flujos interbank del usuario agrupados por moneda (mapa del dashboard)' })
+  @ApiOperation({
+    summary:
+      'Flujos interbank del usuario agrupados por moneda (mapa del dashboard)',
+  })
   @ApiQuery({ name: 'month', required: false })
   getMyFlowStats(
     @CurrentUser() user: AuthenticatedUser,
@@ -311,7 +368,9 @@ export class PaymentOrdersController {
   }
 
   @Get('my-flow-months')
-  @ApiOperation({ summary: 'Meses con transacciones interbank completadas del usuario' })
+  @ApiOperation({
+    summary: 'Meses con transacciones interbank completadas del usuario',
+  })
   getMyFlowMonths(@CurrentUser() user: AuthenticatedUser) {
     return this.paymentOrdersService.getMyFlowMonths(user.id);
   }
@@ -357,13 +416,21 @@ export class PaymentOrdersController {
     let clientWallet = null;
     if (order.wallet_id) {
       try {
-        clientWallet = await this.walletsService.findOne(order.wallet_id, order.user_id);
+        clientWallet = await this.walletsService.findOne(
+          order.wallet_id,
+          order.user_id,
+        );
       } catch (e) {
         // Ignorar si no se encuentra
       }
     }
 
-    const buffer = await this.pdfService.generatePaymentPdf(order, supplier, client, clientWallet);
+    const buffer = await this.pdfService.generatePaymentPdf(
+      order,
+      supplier,
+      client,
+      clientWallet,
+    );
 
     res.set({
       'Content-Type': 'application/pdf',
@@ -413,7 +480,9 @@ export class PaymentOrdersController {
   // ── Solicitudes de revisión por exceso de límite (cliente) ──
 
   @Get('review-requests')
-  @ApiOperation({ summary: 'Listar mis solicitudes de revisión por exceso de límite' })
+  @ApiOperation({
+    summary: 'Listar mis solicitudes de revisión por exceso de límite',
+  })
   getMyReviews(@CurrentUser() user: AuthenticatedUser) {
     return this.orderReviewService.getMyReviews(user.id);
   }
@@ -504,7 +573,9 @@ export class AdminPaymentOrdersController {
 
   @Get('global-flow-stats')
   @Roles('staff', 'admin', 'super_admin')
-  @ApiOperation({ summary: 'Flujos globales interbank agrupados por mes (mapa)' })
+  @ApiOperation({
+    summary: 'Flujos globales interbank agrupados por mes (mapa)',
+  })
   getGlobalFlowStats(@Query('month') month?: string) {
     return this.paymentOrdersService.getGlobalFlowStats(month);
   }
@@ -580,7 +651,9 @@ export class AdminPaymentOrdersController {
       return this.psavService.updateAccount(id, rest);
     }
     if (!dto.name || !dto.type || !dto.currency) {
-      throw new BadRequestException('name, type y currency son requeridos para crear una cuenta PSAV');
+      throw new BadRequestException(
+        'name, type y currency son requeridos para crear una cuenta PSAV',
+      );
     }
     return this.psavService.createAccount({
       name: dto.name,
@@ -617,21 +690,29 @@ export class AdminPaymentOrdersController {
 
   @Patch('limits/:key')
   @Roles('admin', 'super_admin')
-  @ApiOperation({ summary: 'Actualizar un límite de monto por servicio (MIN_* o MAX_*_USD)' })
-  updateLimit(
-    @Param('key') key: string,
-    @Body() dto: { value: number },
-  ) {
+  @ApiOperation({
+    summary: 'Actualizar un límite de monto por servicio (MIN_* o MAX_*_USD)',
+  })
+  updateLimit(@Param('key') key: string, @Body() dto: { value: number }) {
     const ALLOWED_LIMIT_KEYS = new Set([
-      'MIN_BOLIVIA_TO_WORLD_USD',        'MAX_BOLIVIA_TO_WORLD_USD',
-      'MIN_BOLIVIA_TO_WALLET_USD',       'MAX_BOLIVIA_TO_WALLET_USD',
-      'MIN_WALLET_TO_WALLET_USD',        'MAX_WALLET_TO_WALLET_USD',
-      'MIN_WORLD_TO_BOLIVIA_USD',        'MAX_WORLD_TO_BOLIVIA_USD',
-      'MIN_FIAT_BO_TO_BRIDGE_WALLET_USD','MAX_FIAT_BO_TO_BRIDGE_WALLET_USD',
-      'MIN_CRYPTO_TO_BRIDGE_WALLET_USD', 'MAX_CRYPTO_TO_BRIDGE_WALLET_USD',
-      'MIN_BRIDGE_WALLET_TO_FIAT_BO_USD','MAX_BRIDGE_WALLET_TO_FIAT_BO_USD',
-      'MIN_BRIDGE_WALLET_TO_FIAT_US_USD','MAX_BRIDGE_WALLET_TO_FIAT_US_USD',
-      'MIN_BRIDGE_WALLET_TO_CRYPTO_USD', 'MAX_BRIDGE_WALLET_TO_CRYPTO_USD',
+      'MIN_BOLIVIA_TO_WORLD_USD',
+      'MAX_BOLIVIA_TO_WORLD_USD',
+      'MIN_BOLIVIA_TO_WALLET_USD',
+      'MAX_BOLIVIA_TO_WALLET_USD',
+      'MIN_WALLET_TO_WALLET_USD',
+      'MAX_WALLET_TO_WALLET_USD',
+      'MIN_WORLD_TO_BOLIVIA_USD',
+      'MAX_WORLD_TO_BOLIVIA_USD',
+      'MIN_FIAT_BO_TO_BRIDGE_WALLET_USD',
+      'MAX_FIAT_BO_TO_BRIDGE_WALLET_USD',
+      'MIN_CRYPTO_TO_BRIDGE_WALLET_USD',
+      'MAX_CRYPTO_TO_BRIDGE_WALLET_USD',
+      'MIN_BRIDGE_WALLET_TO_FIAT_BO_USD',
+      'MAX_BRIDGE_WALLET_TO_FIAT_BO_USD',
+      'MIN_BRIDGE_WALLET_TO_FIAT_US_USD',
+      'MAX_BRIDGE_WALLET_TO_FIAT_US_USD',
+      'MIN_BRIDGE_WALLET_TO_CRYPTO_USD',
+      'MAX_BRIDGE_WALLET_TO_CRYPTO_USD',
     ]);
     if (!ALLOWED_LIMIT_KEYS.has(key)) {
       throw new BadRequestException(`Clave de límite no permitida: ${key}`);
@@ -655,7 +736,8 @@ export class AdminPaymentOrdersController {
   @Roles('admin', 'super_admin')
   @ApiOperation({ summary: 'Crear override de límite para un cliente VIP' })
   createLimitOverride(
-    @Body() dto: {
+    @Body()
+    dto: {
       user_id: string;
       flow_type: string;
       min_usd?: number | null;
@@ -674,10 +756,14 @@ export class AdminPaymentOrdersController {
 
   @Patch('limit-overrides/:id')
   @Roles('admin', 'super_admin')
-  @ApiOperation({ summary: 'Actualizar override de límite (valores, is_active, valid_until, notes)' })
+  @ApiOperation({
+    summary:
+      'Actualizar override de límite (valores, is_active, valid_until, notes)',
+  })
   updateLimitOverride(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @Body() dto: {
+    @Body()
+    dto: {
       min_usd?: number | null;
       max_usd?: number | null;
       is_active?: boolean;
@@ -691,7 +777,9 @@ export class AdminPaymentOrdersController {
 
   @Delete('limit-overrides/:id')
   @Roles('super_admin')
-  @ApiOperation({ summary: 'Eliminar override de límite permanentemente (solo super_admin)' })
+  @ApiOperation({
+    summary: 'Eliminar override de límite permanentemente (solo super_admin)',
+  })
   deleteLimitOverride(
     @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() actor: AuthenticatedUser,
@@ -717,9 +805,12 @@ export class AdminPaymentOrdersController {
 
   @Post('flow-overrides')
   @Roles('admin', 'super_admin')
-  @ApiOperation({ summary: 'Forzar visibilidad (on/off) de un flujo para un cliente' })
+  @ApiOperation({
+    summary: 'Forzar visibilidad (on/off) de un flujo para un cliente',
+  })
   createFlowOverride(
-    @Body() dto: {
+    @Body()
+    dto: {
       user_id: string;
       flow_type: string;
       is_enabled: boolean;
@@ -741,7 +832,9 @@ export class AdminPaymentOrdersController {
 
   @Patch('flow-overrides/:id')
   @Roles('admin', 'super_admin')
-  @ApiOperation({ summary: 'Actualizar override de flujo (is_enabled, is_active, notes)' })
+  @ApiOperation({
+    summary: 'Actualizar override de flujo (is_enabled, is_active, notes)',
+  })
   updateFlowOverride(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: { is_enabled?: boolean; is_active?: boolean; notes?: string },
@@ -752,7 +845,9 @@ export class AdminPaymentOrdersController {
 
   @Delete('flow-overrides/:id')
   @Roles('super_admin')
-  @ApiOperation({ summary: 'Eliminar override de flujo permanentemente (solo super_admin)' })
+  @ApiOperation({
+    summary: 'Eliminar override de flujo permanentemente (solo super_admin)',
+  })
   deleteFlowOverride(
     @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() actor: AuthenticatedUser,
@@ -793,7 +888,9 @@ export class AdminPaymentOrdersController {
 
   @Get('order-reviews')
   @Roles('staff', 'admin', 'super_admin')
-  @ApiOperation({ summary: 'Listar solicitudes de revisión por exceso de límite' })
+  @ApiOperation({
+    summary: 'Listar solicitudes de revisión por exceso de límite',
+  })
   @ApiQuery({ name: 'status', required: false })
   @ApiQuery({ name: 'flow_type', required: false })
   @ApiQuery({ name: 'page', required: false, type: Number })
@@ -823,13 +920,19 @@ export class AdminPaymentOrdersController {
 
   @Post('order-reviews/:id/approve')
   @Roles('admin', 'super_admin')
-  @ApiOperation({ summary: 'Aprobar solicitud: crea el expediente y lo vincula' })
+  @ApiOperation({
+    summary: 'Aprobar solicitud: crea el expediente y lo vincula',
+  })
   approveOrderReview(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: { staff_notes?: string },
     @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.paymentOrdersService.createOrderFromReview(id, actor.id, dto.staff_notes);
+    return this.paymentOrdersService.createOrderFromReview(
+      id,
+      actor.id,
+      dto.staff_notes,
+    );
   }
 
   @Post('order-reviews/:id/reject')
@@ -841,7 +944,9 @@ export class AdminPaymentOrdersController {
     @CurrentUser() actor: AuthenticatedUser,
   ) {
     if (!dto.staff_notes || dto.staff_notes.trim().length < 10) {
-      throw new BadRequestException('staff_notes es obligatorio (mínimo 10 caracteres)');
+      throw new BadRequestException(
+        'staff_notes es obligatorio (mínimo 10 caracteres)',
+      );
     }
     return this.orderReviewService.rejectReview(id, actor.id, dto.staff_notes);
   }

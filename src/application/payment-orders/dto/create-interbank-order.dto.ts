@@ -30,7 +30,11 @@ export class CreateInterbankOrderDto {
   @IsEnum(InterbankFlowType)
   flow_type: InterbankFlowType;
 
-  @ApiPropertyOptional({ example: 1000.0, description: 'Requerido para todos los flujos excepto wallet_to_wallet, donde el depósito es flexible.' })
+  @ApiPropertyOptional({
+    example: 1000.0,
+    description:
+      'Requerido para todos los flujos excepto wallet_to_wallet, donde el depósito es flexible.',
+  })
   @ValidateIf((o) => o.flow_type !== InterbankFlowType.WALLET_TO_WALLET)
   @IsNumber()
   @Min(0.01)
@@ -44,11 +48,9 @@ export class CreateInterbankOrderDto {
 
   @ApiPropertyOptional({ example: 'usdc' })
   @ValidateIf((o) =>
-    [
-      'bolivia_to_world',
-      'wallet_to_wallet',
-      'bolivia_to_wallet',
-    ].includes(o.flow_type),
+    ['bolivia_to_world', 'wallet_to_wallet', 'bolivia_to_wallet'].includes(
+      o.flow_type,
+    ),
   )
   @Transform(({ value }) =>
     typeof value === 'string' ? value.toLowerCase() : value,

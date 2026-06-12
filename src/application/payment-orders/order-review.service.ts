@@ -45,7 +45,12 @@ export interface OrderReviewRequest {
   request_payload: Record<string, unknown>;
   client_reason: string;
   document_url: string | null;
-  status: 'pending_review' | 'approved' | 'rejected' | 'expired' | 'cancelled_by_user';
+  status:
+    | 'pending_review'
+    | 'approved'
+    | 'rejected'
+    | 'expired'
+    | 'cancelled_by_user';
   reviewed_by: string | null;
   reviewed_at: string | null;
   staff_notes: string | null;
@@ -81,7 +86,9 @@ export class OrderReviewService {
     }
 
     if (data && data.length > 0) {
-      this.logger.log(`⏰ ${data.length} solicitudes de revisión expiradas automáticamente`);
+      this.logger.log(
+        `⏰ ${data.length} solicitudes de revisión expiradas automáticamente`,
+      );
 
       const auditRows = data.map((row: { id: string }) => ({
         performed_by: null,
@@ -90,16 +97,22 @@ export class OrderReviewService {
         new_values: { id: row.id, status: 'expired' },
         source: 'cron',
       }));
-      const { error: auditError } = await this.supabase.from('audit_logs').insert(auditRows);
+      const { error: auditError } = await this.supabase
+        .from('audit_logs')
+        .insert(auditRows);
       if (auditError) {
-        this.logger.error(`Error registrando expiración en audit_logs: ${auditError.message}`);
+        this.logger.error(
+          `Error registrando expiración en audit_logs: ${auditError.message}`,
+        );
       }
     }
   }
 
   // ── Crear solicitud ───────────────────────────────────────────
 
-  async createReviewRequest(payload: CreateReviewRequestPayload): Promise<OrderReviewRequest> {
+  async createReviewRequest(
+    payload: CreateReviewRequestPayload,
+  ): Promise<OrderReviewRequest> {
     // Verificar que no haya otra solicitud activa para el mismo usuario + flow_type
     const { data: existing } = await this.supabase
       .from('order_review_requests')
@@ -111,7 +124,8 @@ export class OrderReviewService {
 
     if (existing) {
       throw new ConflictException({
-        message: 'Ya tienes una solicitud de revisión pendiente para este servicio',
+        message:
+          'Ya tienes una solicitud de revisión pendiente para este servicio',
         review_id: existing.id,
       });
     }
@@ -124,8 +138,11 @@ export class OrderReviewService {
       .single();
 
     const parsedHours = parseInt(setting?.value ?? '48', 10);
-    const expiryHours = isNaN(parsedHours) || parsedHours <= 0 ? 48 : parsedHours;
-    const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000).toISOString();
+    const expiryHours =
+      isNaN(parsedHours) || parsedHours <= 0 ? 48 : parsedHours;
+    const expiresAt = new Date(
+      Date.now() + expiryHours * 60 * 60 * 1000,
+    ).toISOString();
 
     const { data, error } = await this.supabase
       .from('order_review_requests')
@@ -163,7 +180,9 @@ export class OrderReviewService {
       source: 'client',
     });
 
-    this.logger.log(`📋 Review request creada: ${data.id} — ${payload.flowType} $${payload.amount} ${payload.currency} (excede $${payload.limitUsd} USD)`);
+    this.logger.log(
+      `📋 Review request creada: ${data.id} — ${payload.flowType} $${payload.amount} ${payload.currency} (excede $${payload.limitUsd} USD)`,
+    );
     return data as OrderReviewRequest;
   }
 
@@ -180,7 +199,10 @@ export class OrderReviewService {
     return (data ?? []) as OrderReviewRequest[];
   }
 
-  async getMyReview(userId: string, reviewId: string): Promise<OrderReviewRequest> {
+  async getMyReview(
+    userId: string,
+    reviewId: string,
+  ): Promise<OrderReviewRequest> {
     const { data, error } = await this.supabase
       .from('order_review_requests')
       .select('*')
@@ -188,7 +210,8 @@ export class OrderReviewService {
       .eq('user_id', userId)
       .single();
 
-    if (error || !data) throw new NotFoundException('Solicitud de revisión no encontrada');
+    if (error || !data)
+      throw new NotFoundException('Solicitud de revisión no encontrada');
     return data as OrderReviewRequest;
   }
 
@@ -200,9 +223,12 @@ export class OrderReviewService {
       .eq('user_id', userId)
       .single();
 
-    if (fetchErr || !review) throw new NotFoundException('Solicitud de revisión no encontrada');
+    if (fetchErr || !review)
+      throw new NotFoundException('Solicitud de revisión no encontrada');
     if (review.status !== 'pending_review') {
-      throw new BadRequestException('Solo se pueden cancelar solicitudes en estado pendiente');
+      throw new BadRequestException(
+        'Solo se pueden cancelar solicitudes en estado pendiente',
+      );
     }
 
     const { error } = await this.supabase
@@ -257,7 +283,9 @@ export class OrderReviewService {
         .select('id, full_name, email')
         .in('id', userIds);
       const profileMap = new Map((profiles ?? []).map((p: any) => [p.id, p]));
-      rows.forEach((r: any) => { r.profiles = profileMap.get(r.user_id) ?? null; });
+      rows.forEach((r: any) => {
+        r.profiles = profileMap.get(r.user_id) ?? null;
+      });
     }
 
     return { data: rows, total: count ?? 0 };
@@ -270,9 +298,10 @@ export class OrderReviewService {
       .eq('id', reviewId)
       .single();
 
-    if (error || !data) throw new NotFoundException('Solicitud de revisión no encontrada');
+    if (error || !data)
+      throw new NotFoundException('Solicitud de revisión no encontrada');
 
-    const row = data as any;
+    const row = data;
     const { data: profile } = await this.supabase
       .from('profiles')
       .select('id, full_name, email')
@@ -320,18 +349,26 @@ export class OrderReviewService {
     });
 
     this.logger.log(`✅ Review request ${reviewId} aprobada por ${actorId}`);
-    return { review: updated as OrderReviewRequest, payload: updated.request_payload as Record<string, unknown> };
+    return {
+      review: updated as OrderReviewRequest,
+      payload: updated.request_payload as Record<string, unknown>,
+    };
   }
 
   // Vincula el payment_order_id generado tras aprobar
-  async linkPaymentOrder(reviewId: string, paymentOrderId: string): Promise<void> {
+  async linkPaymentOrder(
+    reviewId: string,
+    paymentOrderId: string,
+  ): Promise<void> {
     const { error } = await this.supabase
       .from('order_review_requests')
       .update({ payment_order_id: paymentOrderId })
       .eq('id', reviewId);
 
     if (error) {
-      throw new BadRequestException(`Error vinculando expediente a la revisión: ${error.message}`);
+      throw new BadRequestException(
+        `Error vinculando expediente a la revisión: ${error.message}`,
+      );
     }
   }
 
@@ -380,7 +417,9 @@ export class OrderReviewService {
         referenceId: reviewId,
       });
     } catch (notifErr) {
-      this.logger.error(`Error notificando rechazo al cliente (review ${reviewId}): ${(notifErr as Error)?.message}`);
+      this.logger.error(
+        `Error notificando rechazo al cliente (review ${reviewId}): ${(notifErr as Error)?.message}`,
+      );
     }
 
     this.logger.log(`❌ Review request ${reviewId} rechazada por ${actorId}`);

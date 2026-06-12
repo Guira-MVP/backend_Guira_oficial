@@ -10,6 +10,10 @@ import {
   buildComplianceIncompleteEmail,
   buildComplianceRejectedEmail,
 } from './email-templates/compliance.templates';
+import {
+  buildPaymentOrderCompletedEmail,
+  buildPaymentOrderFailedEmail,
+} from './email-templates/payment-order.templates';
 
 export interface EmailRecipient {
   email: string;
@@ -24,6 +28,12 @@ export interface SendEmailParams {
   cc?: EmailRecipient[];
   bcc?: EmailRecipient[];
   clientReference?: string;
+}
+
+export interface PaymentOrderEmailDetails {
+  amount: number | string;
+  currency: string;
+  reference: string;
 }
 
 /**
@@ -137,6 +147,30 @@ export class EmailService {
       reason: details.reason,
       requiredActions: details.requiredActions,
       fieldObservations: details.fieldObservations,
+    });
+    return this.sendEmail({ to, subject, html, text });
+  }
+
+  // ── Correos de órdenes de pago ("expedientes") ────────────────────
+
+  async sendPaymentOrderCompletedEmail(
+    to: EmailRecipient,
+    details: PaymentOrderEmailDetails,
+  ): Promise<boolean> {
+    const { subject, html, text } = buildPaymentOrderCompletedEmail({
+      name: to.name,
+      ...details,
+    });
+    return this.sendEmail({ to, subject, html, text });
+  }
+
+  async sendPaymentOrderFailedEmail(
+    to: EmailRecipient,
+    details: PaymentOrderEmailDetails,
+  ): Promise<boolean> {
+    const { subject, html, text } = buildPaymentOrderFailedEmail({
+      name: to.name,
+      ...details,
     });
     return this.sendEmail({ to, subject, html, text });
   }
