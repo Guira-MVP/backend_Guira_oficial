@@ -616,18 +616,20 @@ export class ComplianceActionsService {
   }
 
   /**
-   * Llamado por el webhook handler cuando Bridge devuelve status = 'incomplete'.
-   * Registra el evento en el historial del compliance review, notifica al staff
-   * (con motivos específicos) y deja el review ABIERTO para que el staff actúe.
+   * Llamado por el webhook handler cuando Bridge devuelve status = 'incomplete'
+   * o 'under_review' con issues bloqueantes. Registra el evento en el historial
+   * del compliance review, notifica al staff (con motivos específicos) y deja
+   * el review ABIERTO para que el staff actúe.
    */
   async handleBridgeIncomplete(
     userId: string,
     bridgeCustomerId: string,
     issues: string[],
     additionalRequirements: string[],
+    bridgeStatus: 'incomplete' | 'under_review' = 'incomplete',
   ): Promise<void> {
     this.logger.warn(
-      `Bridge marcó cuenta como incomplete para user ${userId} — issues: ${issues.join(', ')}`,
+      `Bridge marcó cuenta como ${bridgeStatus} para user ${userId} — issues: ${issues.join(', ')}`,
     );
 
     const { data: profile } = await this.supabase
@@ -667,13 +669,14 @@ export class ComplianceActionsService {
     }
 
     // 2. Registrar evento inmutable en el historial del compliance review
+    const decision = bridgeStatus === 'under_review' ? 'BRIDGE_UNDER_REVIEW' : 'BRIDGE_INCOMPLETE';
     const review = await this.findOpenReviewForUser(userId);
     if (review) {
       await this.supabase.from('compliance_review_events').insert({
         review_id: review.id,
         actor_id: userId,
-        decision: 'BRIDGE_INCOMPLETE',
-        reason: `Bridge devolvió status=incomplete — Issues: ${issues.join(', ')}${additionalRequirements.length ? `. Req adicionales: ${additionalRequirements.join(', ')}` : ''}`,
+        decision,
+        reason: `Bridge devolvió status=${bridgeStatus} — Issues: ${issues.join(', ')}${additionalRequirements.length ? `. Req adicionales: ${additionalRequirements.join(', ')}` : ''}`,
         metadata: {
           bridge_issues: issues,
           additional_requirements: additionalRequirements,
@@ -690,12 +693,17 @@ export class ComplianceActionsService {
       .in('role', ['staff', 'admin', 'super_admin'])
       .eq('is_active', true);
 
+    const staffTitle = bridgeStatus === 'under_review'
+      ? 'Bridge dejó la verificación en revisión — acción requerida'
+      : 'KYC incompleto en Bridge — acción requerida';
+    const staffStatusLabel = bridgeStatus === 'under_review' ? 'en revisión con observaciones' : 'incompleta';
+
     for (const staff of staffUsers ?? []) {
       await this.supabase.from('notifications').insert({
         user_id: staff.id,
         type: 'compliance_alert',
-        title: 'KYC incompleto en Bridge — acción requerida',
-        message: `Bridge marcó la verificación de ${clientName} como incompleta. Issues: ${issues.join(', ')}${additionalRequirements.length ? `. Req adicionales: ${additionalRequirements.join(', ')}` : ''}.`,
+        title: staffTitle,
+        message: `Bridge marcó la verificación de ${clientName} como ${staffStatusLabel}. Issues: ${issues.join(', ')}${additionalRequirements.length ? `. Req adicionales: ${additionalRequirements.join(', ')}` : ''}.`,
         reference_type: 'kyc_application',
       });
     }
@@ -721,10 +729,10 @@ export class ComplianceActionsService {
     await this.supabase.from('audit_logs').insert({
       performed_by: userId,
       role: 'system',
-      action: 'BRIDGE_INCOMPLETE',
+      action: decision,
       table_name: 'profiles',
       record_id: userId,
-      reason: `Bridge webhook reportó status=incomplete — Issues: ${issues.join(', ')}`,
+      reason: `Bridge webhook reportó status=${bridgeStatus} — Issues: ${issues.join(', ')}`,
       new_values: {
         bridge_issues: issues,
         additional_requirements: additionalRequirements,

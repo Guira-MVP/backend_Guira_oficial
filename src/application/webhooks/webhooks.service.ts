@@ -624,105 +624,35 @@ export class WebhooksService {
         customerId,
         rejectionReasons,
       );
-    } else if (newStatus === 'incomplete') {
-      // ── KYC INCOMPLETO EN BRIDGE ──
+    } else if (newStatus === 'incomplete' || newStatus === 'under_review') {
+      // ── KYC INCOMPLETO / EN REVISIÓN EN BRIDGE ──
       // Bridge reporta issues que requieren atención del staff.
       // Solo actuamos si el perfil ya fue enviado a Bridge (pending_bridge),
       // para distinguir del estado transitorio inicial de creación.
       if (profile.onboarding_status === 'pending_bridge') {
-        const endorsements = (
-          eventObject?.endorsements as Array<Record<string, unknown>> | undefined
-        ) ?? [];
+        const { issueSet, additionalRequirements } = this.extractEndorsementIssues(eventObject);
 
-        // Extraer issues de cada endorsement (deduplicados)
-        const issueSet = new Set<string>();
-        for (const endorsement of endorsements) {
-          const requirements = endorsement.requirements as
-            | Record<string, unknown>
-            | undefined;
-          if (requirements && Array.isArray(requirements.issues)) {
-            for (const issue of requirements.issues) {
-              if (typeof issue === 'string') {
-                issueSet.add(issue);
-              } else if (typeof issue === 'object' && issue !== null) {
-                // Bridge usa formato: { "acting_as_intermediary": ["incomplete_sof_field"] }
-                for (const [key, val] of Object.entries(issue as Record<string, unknown>)) {
-                  if (Array.isArray(val)) {
-                    val.forEach((v) => issueSet.add(`${key}: ${v}`));
-                  } else {
-                    issueSet.add(`${key}: ${String(val)}`);
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        const additionalRequirements: string[] = [];
-        for (const endorsement of endorsements) {
-          const addReqs = endorsement.additional_requirements as string[] | undefined;
-          if (Array.isArray(addReqs)) {
-            addReqs.forEach((r) => additionalRequirements.push(r));
-          }
-        }
-
-        const hasBlockingIssues = issueSet.size > 0 || additionalRequirements.includes('kyc_approval');
+        const hasBlockingIssues =
+          issueSet.size > 0 ||
+          additionalRequirements.includes('kyc_approval') ||
+          additionalRequirements.includes('pending_rfi');
 
         if (hasBlockingIssues) {
-          const issuesList = [...issueSet];
-          const observationsPayload = {
-            bridge_status: 'incomplete',
-            issues: issuesList,
-            additional_requirements: additionalRequirements,
-            detected_at: new Date().toISOString(),
-          };
-
-          this.logger.warn(
-            `customer.updated: customer ${customerId} → incomplete con issues bloqueantes: ${issuesList.join(', ')}`,
-          );
-
-          // Marcar perfil como kyc_issues para que sea visible en el dashboard
-          await this.supabase
-            .from('profiles')
-            .update({ onboarding_status: 'kyc_issues' })
-            .eq('id', profile.id);
-
-          // WS: notificar al cliente y al staff que hay issues en su verificación
-          await this.emitProfileStatusAndUserUpdate(profile.id, 'kyc_issues');
-
-          // Guardar los issues en el KYC application
-          await this.supabase
-            .from('kyc_applications')
-            .update({
-              observations: JSON.stringify(observationsPayload),
-              updated_at: new Date().toISOString(),
-            })
-            .eq('user_id', profile.id)
-            .in('status', ['sent_to_bridge', 'submitted', 'under_review']);
-
-          // Delegar al ComplianceActionsService:
-          // - registra evento en historial del compliance review
-          // - notifica a cada miembro del staff (con detalle de issues)
-          // - notifica al cliente con mensaje genérico
-          // - inserta audit_log permanente
-          await this.complianceActions.handleBridgeIncomplete(
-            profile.id,
+          await this.applyBridgeBlockingIssues(
+            profile,
             customerId,
-            issuesList,
+            [...issueSet],
             additionalRequirements,
-          );
-
-          this.logger.warn(
-            `⚠️ customer.updated: perfil ${profile.id} marcado como kyc_issues. Staff notificado vía compliance review.`,
+            newStatus,
           );
         } else {
           this.logger.log(
-            `customer.updated: customer ${customerId} → incomplete (transitorio, sin issues bloqueantes)`,
+            `customer.updated: customer ${customerId} → ${newStatus} (transitorio, sin issues bloqueantes)`,
           );
         }
       } else {
         this.logger.log(
-          `customer.updated: customer ${customerId} → incomplete (onboarding_status=${profile.onboarding_status}, sin acción)`,
+          `customer.updated: customer ${customerId} → ${newStatus} (onboarding_status=${profile.onboarding_status}, sin acción)`,
         );
       }
     } else {
@@ -730,6 +660,150 @@ export class WebhooksService {
         `customer.updated: status=${newStatus} para customer ${customerId} — sin acción final`,
       );
     }
+  }
+
+  /**
+   * Extrae los issues bloqueantes y los additional_requirements de los
+   * endorsements de un customer.updated (usado para status 'incomplete' y 'under_review').
+   */
+  private extractEndorsementIssues(
+    eventObject: Record<string, unknown> | undefined,
+  ): { issueSet: Set<string>; additionalRequirements: string[] } {
+    const endorsements = (
+      eventObject?.endorsements as Array<Record<string, unknown>> | undefined
+    ) ?? [];
+
+    // Extraer issues de cada endorsement (deduplicados)
+    const issueSet = new Set<string>();
+    for (const endorsement of endorsements) {
+      const requirements = endorsement.requirements as
+        | Record<string, unknown>
+        | undefined;
+      if (requirements && Array.isArray(requirements.issues)) {
+        for (const issue of requirements.issues) {
+          if (typeof issue === 'string') {
+            issueSet.add(issue);
+          } else if (typeof issue === 'object' && issue !== null) {
+            // Bridge usa formato: { "acting_as_intermediary": ["incomplete_sof_field"] }
+            for (const [key, val] of Object.entries(issue as Record<string, unknown>)) {
+              if (Array.isArray(val)) {
+                val.forEach((v) => issueSet.add(`${key}: ${v}`));
+              } else {
+                issueSet.add(`${key}: ${String(val)}`);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    const additionalRequirements: string[] = [];
+    for (const endorsement of endorsements) {
+      const addReqs = endorsement.additional_requirements as string[] | undefined;
+      if (Array.isArray(addReqs)) {
+        addReqs.forEach((r) => additionalRequirements.push(r));
+      }
+    }
+
+    return { issueSet, additionalRequirements };
+  }
+
+  /**
+   * Marca el perfil como 'kyc_issues', persiste los issues reportados por Bridge
+   * en la kyc_application y delega al ComplianceActionsService para registrar
+   * el evento en el historial del compliance review y notificar al staff.
+   *
+   * Idempotente: si los mismos issues ya fueron registrados (p.ej. tras un
+   * "Re-enviar a Bridge" que produjo la misma respuesta), no duplica el
+   * evento ni las notificaciones.
+   */
+  private async applyBridgeBlockingIssues(
+    profile: { id: string; onboarding_status: string | null },
+    customerId: string,
+    issuesList: string[],
+    additionalRequirements: string[],
+    bridgeStatus: 'incomplete' | 'under_review',
+  ): Promise<void> {
+    const { data: kycApp } = await this.supabase
+      .from('kyc_applications')
+      .select('observations')
+      .eq('user_id', profile.id)
+      .in('status', ['sent_to_bridge', 'submitted', 'under_review', 'needs_review'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const previousIssues = this.parsePreviousBridgeIssues(kycApp?.observations);
+    if (previousIssues && this.sameIssueSet(previousIssues, issuesList)) {
+      this.logger.log(
+        `customer.updated: customer ${customerId} → ${bridgeStatus} con los mismos issues ya registrados (${issuesList.join(', ')}), sin duplicar evento/notificación`,
+      );
+      return;
+    }
+
+    const observationsPayload = {
+      bridge_status: bridgeStatus,
+      issues: issuesList,
+      additional_requirements: additionalRequirements,
+      detected_at: new Date().toISOString(),
+    };
+
+    this.logger.warn(
+      `customer.updated: customer ${customerId} → ${bridgeStatus} con issues bloqueantes: ${issuesList.join(', ')}`,
+    );
+
+    // Marcar perfil como kyc_issues para que sea visible en el dashboard
+    await this.supabase
+      .from('profiles')
+      .update({ onboarding_status: 'kyc_issues' })
+      .eq('id', profile.id);
+
+    // WS: notificar al cliente y al staff que hay issues en su verificación
+    await this.emitProfileStatusAndUserUpdate(profile.id, 'kyc_issues');
+
+    // Guardar los issues en el KYC application
+    await this.supabase
+      .from('kyc_applications')
+      .update({
+        observations: JSON.stringify(observationsPayload),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', profile.id)
+      .in('status', ['sent_to_bridge', 'submitted', 'under_review']);
+
+    // Delegar al ComplianceActionsService:
+    // - registra evento en historial del compliance review
+    // - notifica a cada miembro del staff (con detalle de issues)
+    // - notifica al cliente con mensaje genérico
+    // - inserta audit_log permanente
+    await this.complianceActions.handleBridgeIncomplete(
+      profile.id,
+      customerId,
+      issuesList,
+      additionalRequirements,
+      bridgeStatus,
+    );
+
+    this.logger.warn(
+      `⚠️ customer.updated: perfil ${profile.id} marcado como kyc_issues (bridge_status=${bridgeStatus}). Staff notificado vía compliance review.`,
+    );
+  }
+
+  private parsePreviousBridgeIssues(observations: unknown): string[] | null {
+    if (typeof observations !== 'string' || !observations) return null;
+    try {
+      const parsed = JSON.parse(observations) as { issues?: unknown };
+      return Array.isArray(parsed.issues) ? (parsed.issues as string[]) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private sameIssueSet(a: string[], b: string[]): boolean {
+    if (a.length !== b.length) return false;
+    const sortedA = [...a].slice().sort();
+    const sortedB = [...b].slice().sort();
+    return sortedA.every((val, idx) => val === sortedB[idx]);
   }
 
   // ═══════════════════════════════════════════════

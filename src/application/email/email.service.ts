@@ -1,6 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { ZeptoMailClient } from './zeptomail.client';
 import { ZeptoMailRecipient } from './zeptomail.types';
+import { FOOTER_WAVE_CID } from './email-templates/base-layout.template';
 import {
   buildComplianceApprovedEmail,
   buildComplianceCorrectionsRequestedEmail,
@@ -33,6 +36,7 @@ export interface SendEmailParams {
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
+  private readonly footerWaveBase64 = this.loadFooterWave();
 
   constructor(private readonly zeptoMail: ZeptoMailClient) {}
 
@@ -42,6 +46,21 @@ export class EmailService {
 
   private toRecipient(r: EmailRecipient): ZeptoMailRecipient {
     return { email_address: { address: r.email, name: r.name } };
+  }
+
+  private loadFooterWave(): string | undefined {
+    const assetPath = path.join(
+      process.cwd(),
+      'assets',
+      'email-footer-wave.png',
+    );
+
+    try {
+      return fs.readFileSync(assetPath).toString('base64');
+    } catch {
+      this.logger.warn(`No se pudo cargar la onda del footer: ${assetPath}`);
+      return undefined;
+    }
   }
 
   async sendEmail(params: SendEmailParams): Promise<boolean> {
@@ -63,6 +82,15 @@ export class EmailService {
         track_opens: false,
         track_clicks: false,
         client_reference: params.clientReference,
+        inline_images: this.footerWaveBase64
+          ? [
+              {
+                content: this.footerWaveBase64,
+                mime_type: 'image/png',
+                cid: FOOTER_WAVE_CID,
+              },
+            ]
+          : undefined,
       });
       return true;
     } catch (err) {

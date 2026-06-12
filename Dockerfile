@@ -36,6 +36,7 @@ RUN npm ci --omit=dev
 
 # Mover el build compilado desde la etapa builder
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/assets ./assets
 
 # Usuario no root por temas de seguridad
 USER node

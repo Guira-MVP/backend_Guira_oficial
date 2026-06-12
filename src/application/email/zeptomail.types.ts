@@ -7,6 +7,12 @@ export interface ZeptoMailRecipient {
   email_address: ZeptoMailAddress;
 }
 
+export interface ZeptoMailInlineImage {
+  content: string;
+  mime_type: string;
+  cid: string;
+}
+
 export interface ZeptoMailSendRequest {
   from: ZeptoMailAddress;
   to: ZeptoMailRecipient[];
@@ -19,6 +25,7 @@ export interface ZeptoMailSendRequest {
   track_clicks?: boolean;
   track_opens?: boolean;
   client_reference?: string;
+  inline_images?: ZeptoMailInlineImage[];
 }
 
 export interface ZeptoMailSuccessResponse {
