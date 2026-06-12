@@ -2,6 +2,8 @@ import {
   escapeHtml,
   greetingName,
   renderEmailLayout,
+  renderEyebrowHeading,
+  renderListSection,
 } from './base-layout.template';
 
 export interface ComplianceEmailContent {
@@ -31,6 +33,7 @@ export function buildComplianceApprovedEmail(
     title: subject,
     previewText: message,
     bodyHtml: `
+      ${renderEyebrowHeading('Verificación completada', '¡Tu cuenta está verificada!')}
       <p style="margin:0 0 16px;">${intro}</p>
       <p style="margin:0 0 16px;">${message}</p>
       <p style="margin:0;">Gracias por confiar en Guira.</p>
@@ -54,6 +57,30 @@ export function buildComplianceRejectedEmail(
     title: subject,
     previewText: message,
     bodyHtml: `
+      ${renderEyebrowHeading('Verificación de identidad', 'Encontramos observaciones en tu verificación')}
+      <p style="margin:0 0 16px;">${intro}</p>
+      <p style="margin:0;">${message}</p>
+    `,
+  });
+
+  const text = `${intro}\n\n${message}`;
+
+  return { subject, html, text };
+}
+
+export function buildComplianceIncompleteEmail(
+  params: ComplianceEmailParams,
+): ComplianceEmailContent {
+  const subject = 'Tu verificación en Guira requiere información adicional';
+  const intro = greeting(params.name);
+  const message =
+    'Tu verificación está siendo revisada y se necesita información adicional. Nuestro equipo de soporte se pondrá en contacto contigo pronto.';
+
+  const html = renderEmailLayout({
+    title: subject,
+    previewText: message,
+    bodyHtml: `
+      ${renderEyebrowHeading('Verificación de identidad', 'Necesitamos información adicional')}
       <p style="margin:0 0 16px;">${intro}</p>
       <p style="margin:0;">${message}</p>
     `,
@@ -79,42 +106,33 @@ export function buildComplianceCorrectionsRequestedEmail(
     'Hemos revisado tu expediente y necesitamos que realices algunas correcciones antes de continuar con la verificación.';
   const reason = params.reason.trim();
 
-  const requiredActionsHtml = params.requiredActions?.length
-    ? `
-      <p style="margin:16px 0 8px; font-weight:600;">Acciones requeridas:</p>
-      <ul style="margin:0 0 16px; padding-left:20px;">
-        ${params.requiredActions
-          .map((action) => `<li>${escapeHtml(action)}</li>`)
-          .join('')}
-      </ul>`
-    : '';
+  const requiredActionsHtml = renderListSection(
+    'Acciones requeridas',
+    (params.requiredActions ?? []).map((action) => escapeHtml(action)),
+  );
 
   const fieldObservationKeys = params.fieldObservations
     ? Object.keys(params.fieldObservations)
     : [];
-  const fieldObservationsHtml = fieldObservationKeys.length
-    ? `
-      <p style="margin:16px 0 8px; font-weight:600;">Campos a corregir:</p>
-      <ul style="margin:0 0 16px; padding-left:20px;">
-        ${fieldObservationKeys
-          .map((field) => {
-            const observation = params.fieldObservations![field];
-            return `<li>${escapeHtml(field)}: ${escapeHtml(observation)}</li>`;
-          })
-          .join('')}
-      </ul>`
-    : '';
+  const fieldObservationsHtml = renderListSection(
+    'Campos a corregir',
+    fieldObservationKeys.map((field) => {
+      const observation = params.fieldObservations![field];
+      return `<strong>${escapeHtml(field)}</strong> — ${escapeHtml(observation)}`;
+    }),
+  );
 
   const html = renderEmailLayout({
     title: subject,
     previewText: message,
     bodyHtml: `
+      ${renderEyebrowHeading('Onboarding · Guira', 'Tu expediente necesita correcciones')}
       <p style="margin:0 0 16px;">${intro}</p>
       <p style="margin:0 0 16px;">${message}</p>
-      <p style="margin:0 0 16px;">${escapeHtml(reason)}</p>
+      <p style="margin:0;">${escapeHtml(reason)}</p>
       ${requiredActionsHtml}
       ${fieldObservationsHtml}
-      <p style="margin:0;">Inicia sesión en tu cuenta de Guira para corregir y reenviar tu información.</p>
+      <p style="margin:28px 0 0;">Inicia sesión en tu cuenta de Guira para corregir y reenviar tu información.</p>
     `,
   });
 
@@ -128,28 +146,6 @@ export function buildComplianceCorrectionsRequestedEmail(
     : '';
 
   const text = `${intro}\n\n${message}\n\n${reason}${requiredActionsText}${fieldObservationsText}\n\nInicia sesión en tu cuenta de Guira para corregir y reenviar tu información.`;
-
-  return { subject, html, text };
-}
-
-export function buildComplianceIncompleteEmail(
-  params: ComplianceEmailParams,
-): ComplianceEmailContent {
-  const subject = 'Tu verificación en Guira requiere información adicional';
-  const intro = greeting(params.name);
-  const message =
-    'Tu verificación está siendo revisada y se necesita información adicional. Nuestro equipo de soporte se pondrá en contacto contigo pronto.';
-
-  const html = renderEmailLayout({
-    title: subject,
-    previewText: message,
-    bodyHtml: `
-      <p style="margin:0 0 16px;">${intro}</p>
-      <p style="margin:0;">${message}</p>
-    `,
-  });
-
-  const text = `${intro}\n\n${message}`;
 
   return { subject, html, text };
 }
