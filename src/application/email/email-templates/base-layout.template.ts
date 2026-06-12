@@ -19,6 +19,19 @@ export function greetingName(fullName?: string | null): string {
   return first ?? '';
 }
 
+/**
+ * Escapa caracteres HTML especiales para insertar texto dinámico
+ * (escrito por staff) de forma segura dentro del HTML del correo.
+ */
+export function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export interface EmailLayoutOptions {
   previewText?: string;
   title: string;

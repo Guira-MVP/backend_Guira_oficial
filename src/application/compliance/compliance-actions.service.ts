@@ -950,6 +950,20 @@ export class ComplianceActionsService {
         title: 'Se requieren correcciones',
         message: `Su expediente necesita correcciones. ${reason}${actionsMsg}${fieldsMsg}`,
       });
+
+      // 4.5 Notificar por correo al cliente
+      const { data: profile } = await this.supabase
+        .from('profiles')
+        .select('full_name, email')
+        .eq('id', userIdNotified)
+        .maybeSingle();
+
+      if (profile?.email) {
+        await this.emailService.sendComplianceCorrectionsRequestedEmail(
+          { email: profile.email, name: profile.full_name ?? undefined },
+          { reason, requiredActions, fieldObservations },
+        );
+      }
     }
 
     // 5. Audit log

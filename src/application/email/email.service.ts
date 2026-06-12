@@ -3,6 +3,7 @@ import { ZeptoMailClient } from './zeptomail.client';
 import { ZeptoMailRecipient } from './zeptomail.types';
 import {
   buildComplianceApprovedEmail,
+  buildComplianceCorrectionsRequestedEmail,
   buildComplianceIncompleteEmail,
   buildComplianceRejectedEmail,
 } from './email-templates/compliance.templates';
@@ -91,6 +92,23 @@ export class EmailService {
   async sendComplianceIncompleteEmail(to: EmailRecipient): Promise<boolean> {
     const { subject, html, text } = buildComplianceIncompleteEmail({
       name: to.name,
+    });
+    return this.sendEmail({ to, subject, html, text });
+  }
+
+  async sendComplianceCorrectionsRequestedEmail(
+    to: EmailRecipient,
+    details: {
+      reason: string;
+      requiredActions?: string[];
+      fieldObservations?: Record<string, string>;
+    },
+  ): Promise<boolean> {
+    const { subject, html, text } = buildComplianceCorrectionsRequestedEmail({
+      name: to.name,
+      reason: details.reason,
+      requiredActions: details.requiredActions,
+      fieldObservations: details.fieldObservations,
     });
     return this.sendEmail({ to, subject, html, text });
   }

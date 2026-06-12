@@ -1,4 +1,8 @@
-import { greetingName, renderEmailLayout } from './base-layout.template';
+import {
+  escapeHtml,
+  greetingName,
+  renderEmailLayout,
+} from './base-layout.template';
 
 export interface ComplianceEmailContent {
   subject: string;
@@ -56,6 +60,74 @@ export function buildComplianceRejectedEmail(
   });
 
   const text = `${intro}\n\n${message}`;
+
+  return { subject, html, text };
+}
+
+interface ComplianceCorrectionsRequestedParams extends ComplianceEmailParams {
+  reason: string;
+  requiredActions?: string[];
+  fieldObservations?: Record<string, string>;
+}
+
+export function buildComplianceCorrectionsRequestedEmail(
+  params: ComplianceCorrectionsRequestedParams,
+): ComplianceEmailContent {
+  const subject = 'Tu expediente en Guira necesita correcciones';
+  const intro = greeting(params.name);
+  const message =
+    'Hemos revisado tu expediente y necesitamos que realices algunas correcciones antes de continuar con la verificación.';
+  const reason = params.reason.trim();
+
+  const requiredActionsHtml = params.requiredActions?.length
+    ? `
+      <p style="margin:16px 0 8px; font-weight:600;">Acciones requeridas:</p>
+      <ul style="margin:0 0 16px; padding-left:20px;">
+        ${params.requiredActions
+          .map((action) => `<li>${escapeHtml(action)}</li>`)
+          .join('')}
+      </ul>`
+    : '';
+
+  const fieldObservationKeys = params.fieldObservations
+    ? Object.keys(params.fieldObservations)
+    : [];
+  const fieldObservationsHtml = fieldObservationKeys.length
+    ? `
+      <p style="margin:16px 0 8px; font-weight:600;">Campos a corregir:</p>
+      <ul style="margin:0 0 16px; padding-left:20px;">
+        ${fieldObservationKeys
+          .map((field) => {
+            const observation = params.fieldObservations![field];
+            return `<li>${escapeHtml(field)}: ${escapeHtml(observation)}</li>`;
+          })
+          .join('')}
+      </ul>`
+    : '';
+
+  const html = renderEmailLayout({
+    title: subject,
+    previewText: message,
+    bodyHtml: `
+      <p style="margin:0 0 16px;">${intro}</p>
+      <p style="margin:0 0 16px;">${message}</p>
+      <p style="margin:0 0 16px;">${escapeHtml(reason)}</p>
+      ${requiredActionsHtml}
+      ${fieldObservationsHtml}
+      <p style="margin:0;">Inicia sesión en tu cuenta de Guira para corregir y reenviar tu información.</p>
+    `,
+  });
+
+  const requiredActionsText = params.requiredActions?.length
+    ? `\n\nAcciones requeridas:\n${params.requiredActions.map((a) => `- ${a}`).join('\n')}`
+    : '';
+  const fieldObservationsText = fieldObservationKeys.length
+    ? `\n\nCampos a corregir:\n${fieldObservationKeys
+        .map((field) => `- ${field}: ${params.fieldObservations![field]}`)
+        .join('\n')}`
+    : '';
+
+  const text = `${intro}\n\n${message}\n\n${reason}${requiredActionsText}${fieldObservationsText}\n\nInicia sesión en tu cuenta de Guira para corregir y reenviar tu información.`;
 
   return { subject, html, text };
 }
