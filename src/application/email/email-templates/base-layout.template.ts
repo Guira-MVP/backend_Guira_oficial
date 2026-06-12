@@ -14,6 +14,9 @@ export const BRAND = {
 export const LOGO_URL =
   'https://hhvkphzfaxlwguvzguxf.supabase.co/storage/v1/object/public/brand-assets/logo-guira-email.png';
 
+// URL de la aplicación Guira, usada en el botón de retorno al final de cada correo.
+export const APP_URL = 'https://app.guiracorp.com';
+
 const FONT_STACK =
   "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 

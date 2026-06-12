@@ -1,6 +1,8 @@
 import {
+  APP_URL,
   escapeHtml,
   greetingName,
+  renderButton,
   renderEmailLayout,
   renderEyebrowHeading,
   renderListSection,
@@ -37,6 +39,7 @@ export function buildComplianceApprovedEmail(
       <p style="margin:0 0 16px;">${intro}</p>
       <p style="margin:0 0 16px;">${message}</p>
       <p style="margin:0;">Gracias por confiar en Guira.</p>
+      ${renderButton('Ir a Guira', APP_URL)}
     `,
   });
 
@@ -60,6 +63,7 @@ export function buildComplianceRejectedEmail(
       ${renderEyebrowHeading('Verificación de identidad', 'Encontramos observaciones en tu verificación')}
       <p style="margin:0 0 16px;">${intro}</p>
       <p style="margin:0;">${message}</p>
+      ${renderButton('Ir a Guira', APP_URL)}
     `,
   });
 
@@ -83,6 +87,7 @@ export function buildComplianceIncompleteEmail(
       ${renderEyebrowHeading('Verificación de identidad', 'Necesitamos información adicional')}
       <p style="margin:0 0 16px;">${intro}</p>
       <p style="margin:0;">${message}</p>
+      ${renderButton('Ir a Guira', APP_URL)}
     `,
   });
 
@@ -133,6 +138,7 @@ export function buildComplianceCorrectionsRequestedEmail(
       ${requiredActionsHtml}
       ${fieldObservationsHtml}
       <p style="margin:28px 0 0;">Inicia sesión en tu cuenta de Guira para corregir y reenviar tu información.</p>
+      ${renderButton('Ir a Guira', APP_URL)}
     `,
   });
 
