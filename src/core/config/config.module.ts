@@ -59,6 +59,24 @@ if (fs.existsSync(RENDER_SECRETS_PATH)) {
           then: Joi.string().required(),
           otherwise: Joi.string().allow('').default(''),
         }),
+
+        // ZeptoMail (Email Transaccional)
+        // En producción ZEPTOMAIL_TOKEN y EMAIL_FROM_ADDRESS son OBLIGATORIAS.
+        ZEPTOMAIL_TOKEN: Joi.when('NODE_ENV', {
+          is: 'production',
+          then: Joi.string().required(),
+          otherwise: Joi.string().allow('').default(''),
+        }),
+        ZEPTOMAIL_API_URL: Joi.string()
+          .uri()
+          .allow('')
+          .default('https://api.zeptomail.com/v1.1/email'),
+        EMAIL_FROM_ADDRESS: Joi.when('NODE_ENV', {
+          is: 'production',
+          then: Joi.string().email().required(),
+          otherwise: Joi.string().allow('').default(''),
+        }),
+        EMAIL_FROM_NAME: Joi.string().allow('').default('Guira'),
       }),
     }),
   ],

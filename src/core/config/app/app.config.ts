@@ -14,6 +14,10 @@ export interface AppConfig {
   bridgeApiKey: string;
   bridgeApiUrl: string;
   bridgeWebhookPublicKey: string;
+  zeptoMailToken: string;
+  zeptoMailApiUrl: string;
+  emailFromAddress: string;
+  emailFromName: string;
 }
 
 export default registerAs(
@@ -29,5 +33,10 @@ export default registerAs(
     bridgeApiKey: process.env.BRIDGE_API_KEY ?? '',
     bridgeApiUrl: process.env.BRIDGE_API_URL ?? '',
     bridgeWebhookPublicKey: process.env.BRIDGE_WEBHOOK_PUBLIC_KEY ?? '',
+    zeptoMailToken: process.env.ZEPTOMAIL_TOKEN ?? '',
+    zeptoMailApiUrl:
+      process.env.ZEPTOMAIL_API_URL ?? 'https://api.zeptomail.com/v1.1/email',
+    emailFromAddress: process.env.EMAIL_FROM_ADDRESS ?? '',
+    emailFromName: process.env.EMAIL_FROM_NAME ?? 'Guira',
   }),
 );

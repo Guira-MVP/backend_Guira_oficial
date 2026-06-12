@@ -10,6 +10,7 @@ import { BridgeModule } from './bridge/bridge.module';
 import { SuppliersModule } from './suppliers/suppliers.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { EmailModule } from './email/email.module';
 import { AdminModule } from './admin/admin.module';
 import { SupportModule } from './support/support.module';
 import { PaymentOrdersModule } from './payment-orders/payment-orders.module';
@@ -35,6 +36,7 @@ import { OrdersModule } from './orders/orders.module';
     SuppliersModule,
     WebhooksModule,
     NotificationsModule,
+    EmailModule,
     AdminModule,
     SupportModule,
     PaymentOrdersModule,

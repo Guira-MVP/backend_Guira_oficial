@@ -9,6 +9,7 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
 import { BridgeService } from '../bridge/bridge.service';
 import { BridgeCustomerService } from '../onboarding/bridge-customer.service';
+import { EmailService } from '../email/email.service';
 import { SetLimitsDto } from './dto/admin-compliance.dto';
 
 @Injectable()
@@ -19,6 +20,7 @@ export class ComplianceActionsService {
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly bridgeService: BridgeService,
     private readonly bridgeCustomerService: BridgeCustomerService,
+    private readonly emailService: EmailService,
   ) {}
 
   // ── REVIEWS (Lectura) ─────────────────────────────────────────────
@@ -473,6 +475,20 @@ export class ComplianceActionsService {
       reason: `Bridge webhook confirmó aprobación — customer: ${bridgeCustomerId}`,
       source: 'webhook',
     });
+
+    // 3. Notificar por email (no bloqueante — falla silenciosamente)
+    const { data: profile } = await this.supabase
+      .from('profiles')
+      .select('full_name, email')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (profile?.email) {
+      await this.emailService.sendComplianceApprovedEmail({
+        email: profile.email,
+        name: profile.full_name ?? undefined,
+      });
+    }
   }
 
   /**
@@ -574,6 +590,14 @@ export class ComplianceActionsService {
       message:
         'Se encontraron observaciones durante la verificación de tu identidad. Nuestro equipo de soporte se pondrá en contacto contigo para los próximos pasos.',
     });
+
+    // 5.5 Notificar por email — mensaje genérico (igual a la notificación in-app)
+    if (profile.email) {
+      await this.emailService.sendComplianceRejectedEmail({
+        email: profile.email,
+        name: profile.full_name ?? undefined,
+      });
+    }
 
     // 6. Audit log
     await this.supabase.from('audit_logs').insert({
@@ -684,6 +708,14 @@ export class ComplianceActionsService {
       message:
         'Tu verificación está siendo revisada y se necesita información adicional. Nuestro equipo de soporte se pondrá en contacto contigo pronto.',
     });
+
+    // 3.5 Notificar por email — mensaje genérico (sin exponer issues/additionalRequirements)
+    if (profile.email) {
+      await this.emailService.sendComplianceIncompleteEmail({
+        email: profile.email,
+        name: profile.full_name ?? undefined,
+      });
+    }
 
     // 4. Audit log — registro permanente de lo que Bridge reportó
     await this.supabase.from('audit_logs').insert({
