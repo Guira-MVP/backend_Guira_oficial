@@ -5,6 +5,7 @@ import {
   BadRequestException,
   Logger,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -18,6 +19,7 @@ export class ProfilesService {
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly adminGateway: AdminGateway,
+    private readonly config: ConfigService,
   ) {}
 
   // ───────────────────────────────────────────────
@@ -45,6 +47,10 @@ export class ProfilesService {
     userId: string,
     dto: UpdateProfileDto,
   ): Promise<ProfileResponseDto> {
+    if (dto.avatar_url) {
+      this.validateAvatarUrl(dto.avatar_url, userId);
+    }
+
     const { data, error } = await this.supabase
       .from('profiles')
       .update({
@@ -70,6 +76,21 @@ export class ProfilesService {
     });
 
     return data as ProfileResponseDto;
+  }
+
+  /**
+   * Valida que avatar_url apunte al propio bucket "avatars" del proyecto,
+   * dentro de la carpeta del usuario autenticado. Evita que un usuario
+   * referencie URLs externas arbitrarias (tracking/SSRF) o rutas de
+   * otros usuarios.
+   */
+  private validateAvatarUrl(avatarUrl: string, userId: string): void {
+    const supabaseUrl = this.config.get<string>('app.supabaseUrl');
+    const expectedPrefix = `${supabaseUrl}/storage/v1/object/public/avatars/${userId}/`;
+
+    if (!avatarUrl.startsWith(expectedPrefix)) {
+      throw new BadRequestException('avatar_url inválido');
+    }
   }
 
   /**
