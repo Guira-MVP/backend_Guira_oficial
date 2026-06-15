@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
+import { throwDbError } from '../../core/utils/db-error.util';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ExchangeRatesGateway } from './exchange-rates.gateway';
 import type { RateUpdatedPayload } from './exchange-rates.gateway';
@@ -350,7 +351,7 @@ export class ExchangeRatesService {
       .select('*')
       .order('pair');
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     return (data ?? []).map((row) => {
       const baseRate = parseFloat(row.rate);
@@ -401,7 +402,7 @@ export class ExchangeRatesService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     // Audit log
     await this.supabase.from('audit_logs').insert({

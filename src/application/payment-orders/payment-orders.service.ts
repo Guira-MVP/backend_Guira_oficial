@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
+import { throwDbError } from '../../core/utils/db-error.util';
 import { FeesService } from '../fees/fees.service';
 import { PsavService } from '../psav/psav.service';
 import { ExchangeRatesService } from '../exchange-rates/exchange-rates.service';
@@ -322,7 +323,7 @@ export class PaymentOrdersService {
       )
       .order('key');
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     return (data ?? []).map((r) => ({
       key: r.key,
@@ -340,7 +341,7 @@ export class PaymentOrdersService {
       .update({ value: String(value) })
       .eq('key', key);
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return { key, value };
   }
 
@@ -634,7 +635,7 @@ export class PaymentOrdersService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     this.logger.log(
       `📋 Orden bolivia_to_world creada: ${order.id} — $${dto.amount} BOB`,
@@ -772,7 +773,7 @@ export class PaymentOrdersService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     // ── 5. Ejecutar transfer vía Bridge API ──
     try {
@@ -983,7 +984,7 @@ export class PaymentOrdersService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     this.logger.log(
       `📋 Orden bolivia_to_wallet creada: ${order.id} — $${dto.amount} BOB`,
@@ -1063,7 +1064,7 @@ export class PaymentOrdersService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     this.logger.log(
       `📋 Orden world_to_bolivia creada: ${order.id} — $${dto.amount} USD→BOB`,
@@ -1152,7 +1153,7 @@ export class PaymentOrdersService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     this.logger.log(
       `📋 Orden world_to_wallet creada: ${order.id} — $${dto.amount} USD`,
@@ -1693,7 +1694,7 @@ export class PaymentOrdersService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     // ── Ledger entry pendiente — se liquida con webhook ──
     await this.supabase.from('ledger_entries').insert({
@@ -1899,7 +1900,7 @@ export class PaymentOrdersService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     // 4. Crear ledger entry (credit, pending — se liquida con webhook)
     // NOTA: amount arranca en 0 porque flexible_amount=true; se actualiza con
@@ -2066,7 +2067,7 @@ export class PaymentOrdersService {
         p_currency: sourceCurrency,
         p_amount: totalNeeded,
       });
-      throw new BadRequestException(error.message);
+      throwDbError(error);
     }
 
     // Ejecutar Tramo 1: Bridge Transfer → PSAV crypto wallet
@@ -2313,7 +2314,7 @@ export class PaymentOrdersService {
         p_currency: sourceCurrency,
         p_amount: totalNeeded,
       });
-      throw new BadRequestException(error.message);
+      throwDbError(error);
     }
 
     // Ejecutar transfer vía Bridge API
@@ -2640,7 +2641,7 @@ export class PaymentOrdersService {
         p_currency: sourceCurrency,
         p_amount: totalNeeded,
       });
-      throw new BadRequestException(error.message);
+      throwDbError(error);
     }
 
     // Ejecutar payout vía Bridge API usando external_account_id
@@ -3026,7 +3027,7 @@ export class PaymentOrdersService {
     }
 
     const { data, count, error } = await query;
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     return { data: data ?? [], total: count ?? 0, page, limit };
   }
@@ -3052,7 +3053,7 @@ export class PaymentOrdersService {
     }
 
     const { data, error } = await query;
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data ?? [];
   }
 
@@ -3124,7 +3125,7 @@ export class PaymentOrdersService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     this.logger.log(
       `📝 Orden ${orderId} actualizada por usuario: ${Object.keys(safeUpdate).join(', ')}`,
@@ -3167,7 +3168,7 @@ export class PaymentOrdersService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     // Notificar a admins que hay un depósito por revisar
     const { data: admins } = await this.supabase
@@ -3324,7 +3325,7 @@ export class PaymentOrdersService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     // Notificar al usuario y al staff del cambio de estado
     this.ordersGateway.emitOrderUpdated(updated.user_id, {
@@ -3360,7 +3361,7 @@ export class PaymentOrdersService {
     }
 
     const { data, error } = await query;
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     const rows = data ?? [];
 
@@ -3408,7 +3409,7 @@ export class PaymentOrdersService {
       .eq('status', 'completed')
       .order('created_at', { ascending: false });
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     const months = new Set<string>();
     for (const row of data ?? []) {
@@ -3522,7 +3523,7 @@ export class PaymentOrdersService {
     this.logger.debug(
       `listAllOrders → rows=${data?.length ?? 'null'} count=${count ?? 'null'} error=${error ? JSON.stringify(error) : 'none'}`,
     );
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return { data: data ?? [], total: count ?? 0, page, limit };
   }
 
@@ -3567,7 +3568,7 @@ export class PaymentOrdersService {
     }
 
     const { data, error } = await query;
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     const rows = data ?? [];
 
@@ -3614,7 +3615,7 @@ export class PaymentOrdersService {
       .eq('status', 'completed')
       .order('created_at', { ascending: false });
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     const months = new Set<string>();
     for (const row of data ?? []) {
@@ -3691,7 +3692,7 @@ export class PaymentOrdersService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     // Audit log
     const approveActorRole = await this.getActorRole(actorId);
@@ -3937,7 +3938,7 @@ export class PaymentOrdersService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     const markSentActorRole = await this.getActorRole(actorId);
     await this.supabase.from('audit_logs').insert({
@@ -4006,7 +4007,7 @@ export class PaymentOrdersService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     void this.notifyOrderFinalStatusEmail(order, 'completed');
 
@@ -4085,7 +4086,7 @@ export class PaymentOrdersService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     void this.notifyOrderFinalStatusEmail(order, 'failed');
 
@@ -4204,7 +4205,7 @@ export class PaymentOrdersService {
       .eq('user_id', userId)
       .order('flow_type');
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data ?? [];
   }
 
@@ -4248,7 +4249,7 @@ export class PaymentOrdersService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     await this.supabase.from('audit_logs').insert({
       actor_id: actorId,
@@ -4466,7 +4467,7 @@ export class PaymentOrdersService {
       .select('*')
       .eq('user_id', userId)
       .order('flow_type');
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data ?? [];
   }
 
@@ -4507,7 +4508,7 @@ export class PaymentOrdersService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     await this.supabase.from('audit_logs').insert({
       actor_id: actorId,

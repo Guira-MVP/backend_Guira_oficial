@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
+import { throwDbError } from '../../core/utils/db-error.util';
 import {
   CreateSupplierDto,
   UpdateSupplierDto,
@@ -315,7 +316,7 @@ export class SuppliersService {
           'Proveedor duplicado: ya existe un proveedor activo con este email y método de pago.',
         );
       }
-      throw new BadRequestException(error.message);
+      throwDbError(error);
     }
     return data;
   }
@@ -329,7 +330,7 @@ export class SuppliersService {
       .eq('is_active', true)
       .order('name');
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     const suppliers = (data ?? []).map((supplier) =>
       this.mapBridgeDetailsToBankDetails(supplier),
     );
@@ -584,7 +585,7 @@ export class SuppliersService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data;
   }
 

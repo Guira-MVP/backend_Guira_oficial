@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
+import { throwDbError } from '../../core/utils/db-error.util';
 
 export interface CreateLedgerEntryParams {
   wallet_id: string;
@@ -106,7 +107,7 @@ export class LedgerService {
 
     const { data, error, count } = await query;
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     this.logger.debug(
       `Ledger history: user=${userId}, wallets=${walletIds.length}, entries=${data?.length ?? 0}, total=${count ?? 0}, filters=${JSON.stringify(filters)}`,

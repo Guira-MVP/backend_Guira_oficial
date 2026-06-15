@@ -1,11 +1,11 @@
 import {
   Injectable,
   Inject,
-  BadRequestException,
   Logger,
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
+import { throwDbError } from '../../core/utils/db-error.util';
 import { CreateNotificationDto } from './dto/notifications.dto';
 
 @Injectable()
@@ -45,7 +45,7 @@ export class NotificationsService {
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     return { data, total: count, page, limit };
   }
@@ -57,7 +57,7 @@ export class NotificationsService {
       .eq('user_id', userId)
       .eq('is_read', false);
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return { unread_count: count ?? 0 };
   }
 
@@ -68,7 +68,7 @@ export class NotificationsService {
       .eq('id', notificationId)
       .eq('user_id', userId);
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
   }
 
   async markAllAsRead(userId: string): Promise<void> {
@@ -78,6 +78,6 @@ export class NotificationsService {
       .eq('user_id', userId)
       .eq('is_read', false);
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
   }
 }

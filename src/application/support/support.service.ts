@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
+import { throwDbError } from '../../core/utils/db-error.util';
 import {
   CreateTicketDto,
   AssignTicketDto,
@@ -72,7 +73,7 @@ export class SupportService {
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data ?? [];
   }
 
@@ -105,7 +106,7 @@ export class SupportService {
       query = query.eq('assigned_to', filters.assigned_to);
 
     const { data, count, error } = await query;
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     return { data, total: count, page, limit };
   }
@@ -121,7 +122,7 @@ export class SupportService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
@@ -144,7 +145,7 @@ export class SupportService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
@@ -172,7 +173,7 @@ export class SupportService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,

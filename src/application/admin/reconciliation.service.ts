@@ -1,6 +1,7 @@
 import { Injectable, Inject, BadRequestException } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
+import { throwDbError } from '../../core/utils/db-error.util';
 
 @Injectable()
 export class ReconciliationService {
@@ -115,7 +116,7 @@ export class ReconciliationService {
       .order('started_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return { data, total: count, page, limit };
   }
 

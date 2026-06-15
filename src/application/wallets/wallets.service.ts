@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
+import { throwDbError } from '../../core/utils/db-error.util';
 import { BridgeApiClient } from '../bridge/bridge-api.client';
 import { OrdersGateway } from '../orders/orders.gateway';
 
@@ -37,7 +38,7 @@ export class WalletsService {
       .eq('is_active', true)
       .order('created_at', { ascending: true });
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     if (!wallets || wallets.length === 0) return [];
 
     // Obtener TODOS los balances del usuario
@@ -129,7 +130,7 @@ export class WalletsService {
       .eq('user_id', userId)
       .order('currency', { ascending: true });
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data ?? [];
   }
 
@@ -217,7 +218,7 @@ export class WalletsService {
       .eq('user_id', userId)
       .eq('is_active', true);
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data ?? [];
   }
 

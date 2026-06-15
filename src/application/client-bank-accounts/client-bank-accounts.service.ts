@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
+import { throwDbError } from '../../core/utils/db-error.util';
 import { CreateBankAccountDto } from './dto/create-bank-account.dto';
 import { UpdateBankAccountDto } from './dto/update-bank-account.dto';
 
@@ -64,7 +65,7 @@ export class ClientBankAccountsService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     // 4. Audit log
     await this.supabase.from('audit_logs').insert({
@@ -99,7 +100,7 @@ export class ClientBankAccountsService {
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data ?? [];
   }
 
@@ -116,7 +117,7 @@ export class ClientBankAccountsService {
       .eq('currency', 'BOB')
       .maybeSingle();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data ?? null;
   }
 
@@ -200,7 +201,7 @@ export class ClientBankAccountsService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     // 5. Audit log
     await this.supabase.from('audit_logs').insert({
@@ -259,7 +260,7 @@ export class ClientBankAccountsService {
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data ?? [];
   }
 
@@ -330,7 +331,7 @@ export class ClientBankAccountsService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     // Audit log
     await this.supabase.from('audit_logs').insert({
@@ -385,7 +386,7 @@ export class ClientBankAccountsService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     // Audit log
     await this.supabase.from('audit_logs').insert({

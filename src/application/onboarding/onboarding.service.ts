@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
+import { throwDbError } from '../../core/utils/db-error.util';
 import { CreatePersonDto } from './dto/create-person.dto';
 import { CreateBusinessDto } from './dto/create-business.dto';
 import { CreateDirectorDto, CreateUboDto } from './dto/create-director-ubo.dto';
@@ -82,7 +83,7 @@ export class OnboardingService {
         .eq('user_id', userId)
         .select()
         .single();
-      if (error) throw new BadRequestException(error.message);
+      if (error) throwDbError(error);
       await this.syncProfileCountry(userId, dto.country_of_residence ?? dto.country);
       return data;
     }
@@ -93,7 +94,7 @@ export class OnboardingService {
       .insert({ ...dto, user_id: userId })
       .select()
       .single();
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     await this.syncProfileCountry(userId, dto.country_of_residence ?? dto.country);
     return data;
   }
@@ -105,7 +106,7 @@ export class OnboardingService {
       .select('*')
       .eq('user_id', userId)
       .maybeSingle();
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data;
   }
 
@@ -143,7 +144,7 @@ export class OnboardingService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     // Actualizar onboarding_status del perfil
     const { data: kycStartedProfile } = await this.supabase
@@ -186,7 +187,7 @@ export class OnboardingService {
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data;
   }
 
@@ -206,7 +207,7 @@ export class OnboardingService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data;
   }
 
@@ -287,7 +288,7 @@ export class OnboardingService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     // Actualizar perfil
     const { data: kycInReviewProfile } = await this.supabase
@@ -356,7 +357,7 @@ export class OnboardingService {
         .eq('user_id', userId)
         .select()
         .single();
-      if (error) throw new BadRequestException(error.message);
+      if (error) throwDbError(error);
       await this.syncProfileCountry(userId, dto.country_of_incorporation ?? dto.country);
       return data;
     }
@@ -366,7 +367,7 @@ export class OnboardingService {
       .insert({ ...dto, user_id: userId })
       .select()
       .single();
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     await this.syncProfileCountry(userId, dto.country_of_incorporation ?? dto.country);
     return data;
   }
@@ -378,7 +379,7 @@ export class OnboardingService {
       .select('*, business_directors(*), business_ubos(*)')
       .eq('user_id', userId)
       .maybeSingle();
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data;
   }
 
@@ -392,7 +393,7 @@ export class OnboardingService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data;
   }
 
@@ -406,7 +407,7 @@ export class OnboardingService {
       .eq('id', directorId)
       .eq('business_id', biz.id);
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return { message: 'Director eliminado' };
   }
 
@@ -420,7 +421,7 @@ export class OnboardingService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data;
   }
 
@@ -434,7 +435,7 @@ export class OnboardingService {
       .eq('id', uboId)
       .eq('business_id', biz.id);
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return { message: 'UBO eliminado' };
   }
 
@@ -463,7 +464,7 @@ export class OnboardingService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     const { data: kybStartedProfile } = await this.supabase
       .from('profiles')
@@ -514,7 +515,7 @@ export class OnboardingService {
       .limit(1)
       .maybeSingle();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data;
   }
 
@@ -575,7 +576,7 @@ export class OnboardingService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     const { data: kybInReviewProfile } = await this.supabase
       .from('profiles')
@@ -629,7 +630,7 @@ export class OnboardingService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data;
   }
 
@@ -721,7 +722,7 @@ export class OnboardingService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     return data;
   }
@@ -742,7 +743,7 @@ export class OnboardingService {
     }
 
     const { data, error } = await query;
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data;
   }
 
@@ -846,7 +847,7 @@ export class OnboardingService {
       required_docs: requiredDocs,
       expires_at: expiresAt,
     });
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     return { token: rawToken, expires_at: expiresAt };
   }

@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
+import { throwDbError } from '../../core/utils/db-error.util';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ProfileResponseDto } from './dto/profile-response.dto';
 import { AdminGateway } from '../admin/admin.gateway';
@@ -15,6 +16,12 @@ import { AdminGateway } from '../admin/admin.gateway';
 @Injectable()
 export class ProfilesService {
   private readonly logger = new Logger(ProfilesService.name);
+  private readonly allowedAvatarExtensions = new Set([
+    'png',
+    'jpg',
+    'jpeg',
+    'webp',
+  ]);
 
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
@@ -61,7 +68,7 @@ export class ProfilesService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     // WS: notificar al staff que el perfil fue actualizado
     this.adminGateway.emitUserUpdated({
@@ -100,13 +107,41 @@ export class ProfilesService {
     userId: string,
     fileName: string,
   ): Promise<{ upload_url: string; path: string }> {
-    const path = `${userId}/${Date.now()}-${fileName}`;
+    const sanitizedFileName = this.sanitizeAvatarFileName(fileName);
+    const path = `${userId}/${Date.now()}-${sanitizedFileName}`;
     const { data, error } = await this.supabase.storage
       .from('avatars')
       .createSignedUploadUrl(path);
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return { upload_url: data.signedUrl, path };
+  }
+
+  private sanitizeAvatarFileName(fileName: string): string {
+    const trimmedFileName = fileName?.trim();
+
+    if (!trimmedFileName) {
+      throw new BadRequestException('Nombre de archivo inválido');
+    }
+
+    const cleanedFileName = trimmedFileName
+      .replace(/\\/g, '/')
+      .split('/')
+      .pop()
+      ?.replace(/[^a-zA-Z0-9._-]/g, '_');
+
+    if (!cleanedFileName || cleanedFileName.startsWith('.')) {
+      throw new BadRequestException('Nombre de archivo inválido');
+    }
+
+    const extension = cleanedFileName.split('.').pop()?.toLowerCase();
+    if (!extension || !this.allowedAvatarExtensions.has(extension)) {
+      throw new BadRequestException(
+        'Formato de avatar no permitido. Usa PNG, JPG, JPEG o WEBP.',
+      );
+    }
+
+    return cleanedFileName;
   }
 
   /**
@@ -196,7 +231,7 @@ export class ProfilesService {
 
     const { data, error, count } = await query;
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     return {
       data,

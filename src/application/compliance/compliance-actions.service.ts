@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
+import { throwDbError } from '../../core/utils/db-error.util';
 import { BridgeService } from '../bridge/bridge.service';
 import { BridgeCustomerService } from '../onboarding/bridge-customer.service';
 import { EmailService } from '../email/email.service';
@@ -38,7 +39,7 @@ export class ComplianceActionsService {
     if (filters.assigned_to) query = query.eq('assigned_to', filters.assigned_to);
 
     const { data, error } = await query;
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     if (!data || data.length === 0) return [];
 
     return data.map((row) => {
@@ -300,7 +301,7 @@ export class ComplianceActionsService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data;
   }
 
@@ -1220,7 +1221,7 @@ export class ComplianceActionsService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,

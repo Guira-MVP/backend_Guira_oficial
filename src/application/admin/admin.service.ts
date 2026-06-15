@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
+import { throwDbError } from '../../core/utils/db-error.util';
 import { UpdateSettingDto, CreateSettingDto, UpdateCurrencySettingDto, UpdateVaSourceCurrencySettingDto } from './dto/admin.dto';
 import { AdminGateway } from './admin.gateway';
 
@@ -24,7 +25,7 @@ export class AdminService {
       .select('key, value, type, description')
       .eq('is_public', true);
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data;
   }
 
@@ -34,7 +35,7 @@ export class AdminService {
       .select('*')
       .order('key', { ascending: true });
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data;
   }
 
@@ -63,7 +64,7 @@ export class AdminService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
@@ -94,7 +95,7 @@ export class AdminService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
@@ -125,7 +126,7 @@ export class AdminService {
       .select('*')
       .order('sort_order', { ascending: true });
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data;
   }
 
@@ -140,7 +141,7 @@ export class AdminService {
       .eq(column, true)
       .order('sort_order', { ascending: true });
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return (data ?? []).map((r) => r.currency);
   }
 
@@ -195,7 +196,7 @@ export class AdminService {
       .select('*')
       .order('sort_order', { ascending: true });
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data;
   }
 
@@ -206,7 +207,7 @@ export class AdminService {
       .eq('is_active', true)
       .order('sort_order', { ascending: true });
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data ?? [];
   }
 
@@ -305,7 +306,7 @@ export class AdminService {
     const [{ data, error }, { count, error: countErr }] =
       await Promise.all([query, countQuery]);
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     if (countErr) throw new BadRequestException(countErr.message);
 
     return { data, total: count ?? 0, page, limit };
@@ -321,7 +322,7 @@ export class AdminService {
       .order('created_at', { ascending: false })
       .limit(100);
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data;
   }
 
@@ -335,7 +336,7 @@ export class AdminService {
       .order('created_at', { ascending: false })
       .limit(limit);
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data;
   }
 }

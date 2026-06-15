@@ -9,6 +9,7 @@ import {
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
+import { throwDbError } from '../../core/utils/db-error.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/dto/notifications.dto';
 
@@ -163,7 +164,7 @@ export class OrderReviewService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     await this.supabase.from('audit_logs').insert({
       performed_by: payload.userId,
@@ -195,7 +196,7 @@ export class OrderReviewService {
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return (data ?? []) as OrderReviewRequest[];
   }
 
@@ -236,7 +237,7 @@ export class OrderReviewService {
       .update({ status: 'cancelled_by_user' })
       .eq('id', reviewId);
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     await this.supabase.from('audit_logs').insert({
       performed_by: userId,
@@ -271,7 +272,7 @@ export class OrderReviewService {
 
     const { data, error, count } = await query;
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     const rows = (data ?? []) as unknown as OrderReviewRequest[];
 

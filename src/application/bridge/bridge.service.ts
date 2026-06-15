@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
+import { throwDbError } from '../../core/utils/db-error.util';
 import { BridgeApiClient } from './bridge-api.client';
 import { PAYMENT_RAIL_TO_BRIDGE_ACCOUNT_TYPE } from './bridge.constants';
 import { FeesService } from '../fees/fees.service';
@@ -268,7 +269,7 @@ export class BridgeService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data;
   }
 
@@ -281,7 +282,7 @@ export class BridgeService {
       .eq('status', 'active')
       .order('created_at');
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data ?? [];
   }
 
@@ -707,7 +708,7 @@ export class BridgeService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data;
   }
 
@@ -820,7 +821,7 @@ export class BridgeService {
       .eq('user_id', userId)
       .eq('is_active', true);
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data ?? [];
   }
 
@@ -912,7 +913,7 @@ export class BridgeService {
     if (error) {
       // Liberar saldo si falla
       await this.releaseReservedBalance(userId, dto.currency, totalAmount);
-      throw new BadRequestException(error.message);
+      throwDbError(error);
     }
 
     // 7. ¿Requiere revisión de compliance?
@@ -1048,7 +1049,7 @@ export class BridgeService {
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data ?? [];
   }
 
@@ -1138,7 +1139,7 @@ export class BridgeService {
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data ?? [];
   }
 
@@ -1198,7 +1199,7 @@ export class BridgeService {
       countQuery,
     ]);
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     if (countError) throw new BadRequestException(countError.message);
 
     // bridge_raw_response contiene datos sensibles de Bridge API (cuentas bancarias, hashes).
@@ -1835,7 +1836,7 @@ export class BridgeService {
       .select('*')
       .order('source_currency')
       .order('destination_type');
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data ?? [];
   }
 
@@ -1877,7 +1878,7 @@ export class BridgeService {
       .eq('id', existing.id)
       .select()
       .single();
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     // Audit log
     await this.supabase.from('audit_logs').insert({
@@ -1920,7 +1921,7 @@ export class BridgeService {
       .eq('user_id', userId)
       .order('source_currency')
       .order('destination_type');
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data ?? [];
   }
 
@@ -1976,7 +1977,7 @@ export class BridgeService {
       )
       .select()
       .single();
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     // Audit log
     await this.supabase.from('audit_logs').insert({
@@ -2037,7 +2038,7 @@ export class BridgeService {
       .eq('user_id', userId)
       .eq('source_currency', currency)
       .eq('destination_type', destType);
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     // Audit log
     await this.supabase.from('audit_logs').insert({
@@ -2142,7 +2143,7 @@ export class BridgeService {
       .eq('user_id', userId)
       .eq('status', 'active')
       .order('created_at', { ascending: false });
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data ?? [];
   }
 

@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
+import { throwDbError } from '../../core/utils/db-error.util';
 import { AdminGateway } from '../admin/admin.gateway';
 
 @Injectable()
@@ -32,7 +33,7 @@ export class FeesService {
       .eq('is_active', true)
       .order('operation_type');
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data ?? [];
   }
 
@@ -47,7 +48,7 @@ export class FeesService {
       .select('*')
       .order('operation_type');
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data ?? [];
   }
 
@@ -72,7 +73,7 @@ export class FeesService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     // WS: notificar al staff que se creó una nueva tarifa
     this.adminGateway.emitFeeConfigUpdated({
@@ -146,7 +147,7 @@ export class FeesService {
       .eq('user_id', userId)
       .order('operation_type');
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
     return data ?? [];
   }
 
@@ -207,7 +208,7 @@ export class FeesService {
       .select()
       .single();
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) throwDbError(error);
 
     // Audit log
     await this.supabase.from('audit_logs').insert({
