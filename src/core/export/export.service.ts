@@ -94,6 +94,17 @@ const FLOW_LABELS: Record<string, string> = {
   va_deposit: 'Depósito cuenta virtual',
 };
 
+// Previene CSV/Excel Formula Injection (CWE-1236): si un valor de texto
+// comienza con =, +, -, @ o tab/CR, Excel/LibreOffice puede interpretarlo
+// como fórmula al abrir el archivo (ej. nombre de proveedor "=HYPERLINK(...)").
+const FORMULA_INJECTION_RE = /^[=+\-@\t\r]/;
+function sanitizeCellValue<T>(val: T): T {
+  if (typeof val === 'string' && FORMULA_INJECTION_RE.test(val)) {
+    return `'${val}` as unknown as T;
+  }
+  return val;
+}
+
 function buildRows(orders: PaymentOrder[], suppliersMap: Map<string, string>, noSupplierFallback?: string) {
   const fallback = noSupplierFallback || 'Sin proveedor';
   return orders.map((o) => ({
@@ -274,7 +285,7 @@ export class ExportService {
 
       values.forEach((val, colIdx) => {
         const cell = excelRow.getCell(colIdx + 1);
-        cell.value = val;
+        cell.value = sanitizeCellValue(val);
         cell.font = { size: 9, color: { argb: BRAND_NAVY } };
         cell.alignment = { vertical: 'middle', horizontal: colIdx === 0 ? 'center' : 'left' };
         if (isEven) {

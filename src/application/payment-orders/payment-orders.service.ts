@@ -8,6 +8,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
+import * as crypto from 'crypto';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
 import { throwDbError } from '../../core/utils/db-error.util';
 import { FeesService } from '../fees/fees.service';
@@ -188,7 +189,7 @@ export class PaymentOrdersService {
     const dd = String(now.getDate()).padStart(2, '0');
     const mm = String(now.getMonth() + 1).padStart(2, '0');
     const yyyy = String(now.getFullYear());
-    const rand = Math.floor(100000 + Math.random() * 900000);
+    const rand = crypto.randomInt(100000, 1000000);
     return `G-${dd}${mm}${yyyy}-${rand}`;
   }
 
