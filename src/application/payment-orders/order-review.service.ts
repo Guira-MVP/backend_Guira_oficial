@@ -4,6 +4,7 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  ForbiddenException,
   Logger,
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -321,6 +322,20 @@ export class OrderReviewService {
     actorId: string,
     staffNotes?: string,
   ): Promise<{ review: OrderReviewRequest; payload: Record<string, unknown> }> {
+    // Evitar auto-aprobación: un admin que también opera como cliente no
+    // puede aprobar su propia solicitud de excepción de límites.
+    const { data: target } = await this.supabase
+      .from('order_review_requests')
+      .select('user_id')
+      .eq('id', reviewId)
+      .single();
+
+    if (target?.user_id === actorId) {
+      throw new ForbiddenException(
+        'No puedes aprobar tu propia solicitud de revisión',
+      );
+    }
+
     // Lock optimista: solo actualiza si sigue en pending_review
     const { data: updated, error } = await this.supabase
       .from('order_review_requests')
