@@ -17,6 +17,7 @@ import { BridgeApiClient } from '../bridge/bridge-api.client';
 import { OrdersGateway } from '../orders/orders.gateway';
 import { AdminGateway } from '../admin/admin.gateway';
 import * as crypto from 'crypto';
+import type { MobileDocumentTargetDto } from './dto/create-mobile-token.dto';
 
 const ALLOWED_MIME_TYPES = [
   'application/pdf',
@@ -827,7 +828,11 @@ export class OnboardingService {
 
   // ─── Mobile Upload Token ───────────────────────────────────────────
 
-  async createMobileToken(userId: string, type: 'personal' | 'company', requiredDocs: string[]) {
+  async createMobileToken(
+    userId: string,
+    type: 'personal' | 'company',
+    documents: MobileDocumentTargetDto[],
+  ) {
     // Invalidar tokens activos anteriores del mismo usuario
     await this.supabase
       .from('mobile_upload_tokens')
@@ -840,14 +845,43 @@ export class OnboardingService {
     const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
     const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
 
-    const { error } = await this.supabase.from('mobile_upload_tokens').insert({
-      user_id: userId,
-      token_hash: tokenHash,
-      onboarding_type: type,
-      required_docs: requiredDocs,
-      expires_at: expiresAt,
-    });
+    const uniqueKeys = new Set(documents.map((document) => document.key));
+    if (uniqueKeys.size !== documents.length) {
+      throw new BadRequestException('La selección contiene documentos duplicados');
+    }
+
+    const { data: tokenRow, error } = await this.supabase
+      .from('mobile_upload_tokens')
+      .insert({
+        user_id: userId,
+        token_hash: tokenHash,
+        onboarding_type: type,
+        required_docs: documents.map((document) => document.document_type),
+        expires_at: expiresAt,
+      })
+      .select('id')
+      .single();
     if (error) throwDbError(error);
+
+    const { error: targetsError } = await this.supabase
+      .from('mobile_upload_session_documents')
+      .insert(
+        documents.map((document) => ({
+          token_id: tokenRow.id,
+          document_key: document.key,
+          document_type: document.document_type,
+          subject_type: document.subject_type,
+          label: document.label,
+          observation: document.observation ?? null,
+        })),
+      );
+    if (targetsError) {
+      await this.supabase
+        .from('mobile_upload_tokens')
+        .delete()
+        .eq('id', tokenRow.id);
+      throwDbError(targetsError);
+    }
 
     return { token: rawToken, expires_at: expiresAt };
   }
@@ -864,42 +898,113 @@ export class OnboardingService {
     if (data.completed_at) throw new UnauthorizedException('Este enlace ya fue utilizado');
     if (new Date(data.expires_at) < new Date()) throw new UnauthorizedException('Token expirado');
 
+    const { data: documents, error } = await this.supabase
+      .from('mobile_upload_session_documents')
+      .select(
+        'document_key, document_type, subject_type, label, observation, uploaded_at',
+      )
+      .eq('token_id', data.id)
+      .order('created_at', { ascending: true });
+    if (error) throwDbError(error);
+
     return {
       userId: data.user_id as string,
       onboardingType: data.onboarding_type as string,
       requiredDocs: data.required_docs as string[],
       tokenId: data.id as string,
+      documents: (documents ?? []).map((document) => ({
+        key: document.document_key as string,
+        document_type: document.document_type as string,
+        subject_type: document.subject_type as string,
+        label: document.label as string,
+        observation: (document.observation as string | null) ?? null,
+        uploaded: !!document.uploaded_at,
+      })),
     };
+  }
+
+  async uploadMobileDocument(
+    session: Awaited<ReturnType<OnboardingService['resolveMobileToken']>>,
+    file: Express.Multer.File,
+    documentKey: string,
+    documentType: string,
+    subjectType: string,
+  ) {
+    const target = session.documents.find(
+      (document) => document.key === documentKey,
+    );
+    if (
+      !target ||
+      target.document_type !== documentType ||
+      target.subject_type !== subjectType
+    ) {
+      throw new BadRequestException(
+        'El documento no pertenece a esta sesión móvil',
+      );
+    }
+
+    const uploaded = await this.uploadDocument(
+      session.userId,
+      file,
+      target.document_type,
+      target.subject_type,
+    );
+
+    const { error } = await this.supabase
+      .from('mobile_upload_session_documents')
+      .update({
+        uploaded_document_id: uploaded.id,
+        uploaded_at: new Date().toISOString(),
+      })
+      .eq('token_id', session.tokenId)
+      .eq('document_key', target.key);
+    if (error) throwDbError(error);
+
+    return uploaded;
   }
 
   async getMobileTokenStatus(userId: string, rawToken: string) {
     const hash = crypto.createHash('sha256').update(rawToken).digest('hex');
     const { data } = await this.supabase
       .from('mobile_upload_tokens')
-      .select('expires_at, completed_at, required_docs')
+      .select('id, expires_at, completed_at, required_docs')
       .eq('token_hash', hash)
       .eq('user_id', userId)
       .maybeSingle();
     if (!data) throw new NotFoundException('Token no encontrado');
 
-    const { data: docs } = await this.supabase
-      .from('documents')
-      .select('document_type')
-      .eq('user_id', userId)
-      .eq('status', 'pending')
-      .in('document_type', data.required_docs as string[]);
+    const { data: docs, error } = await this.supabase
+      .from('mobile_upload_session_documents')
+      .select('document_key, uploaded_at')
+      .eq('token_id', data.id);
+    if (error) throwDbError(error);
 
     return {
       completed: !!data.completed_at,
-      uploaded_docs: (docs ?? []).map((d: { document_type: string }) => d.document_type),
+      uploaded_docs: (docs ?? [])
+        .filter((document) => !!document.uploaded_at)
+        .map((document) => document.document_key as string),
       expires_at: data.expires_at,
     };
   }
 
-  async completeMobileToken(tokenId: string) {
-    await this.supabase
+  async completeMobileToken(
+    session: Awaited<ReturnType<OnboardingService['resolveMobileToken']>>,
+  ) {
+    if (session.documents.length === 0) {
+      throw new BadRequestException('La sesión no contiene documentos');
+    }
+    const missing = session.documents.filter((document) => !document.uploaded);
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        `Faltan documentos por cargar: ${missing.map((document) => document.label).join(', ')}`,
+      );
+    }
+
+    const { error } = await this.supabase
       .from('mobile_upload_tokens')
       .update({ completed_at: new Date().toISOString() })
-      .eq('id', tokenId);
+      .eq('id', session.tokenId);
+    if (error) throwDbError(error);
   }
 }

@@ -285,7 +285,7 @@ export class OnboardingController {
     @Body() dto: CreateMobileTokenDto,
   ) {
     return this.onboardingService.createMobileToken(
-      user.id, dto.onboarding_type, dto.required_docs,
+      user.id, dto.onboarding_type, dto.documents,
     );
   }
 
@@ -310,20 +310,29 @@ export class OnboardingController {
       type: 'object',
       properties: {
         file: { type: 'string', format: 'binary' },
+        document_key: { type: 'string' },
         document_type: { type: 'string' },
         subject_type: { type: 'string' },
       },
-      required: ['file', 'document_type', 'subject_type'],
+      required: ['file', 'document_key', 'document_type', 'subject_type'],
     },
   })
   async mobileUpload(
     @Query('token') rawToken: string,
     @UploadedFile() file: Express.Multer.File,
-    @Body() body: { document_type: string; subject_type: string; subject_id?: string },
+    @Body() body: {
+      document_key: string;
+      document_type: string;
+      subject_type: string;
+    },
   ) {
     const session = await this.onboardingService.resolveMobileToken(rawToken);
-    return this.onboardingService.uploadDocument(
-      session.userId, file, body.document_type, body.subject_type, body.subject_id,
+    return this.onboardingService.uploadMobileDocument(
+      session,
+      file,
+      body.document_key,
+      body.document_type,
+      body.subject_type,
     );
   }
 
@@ -332,7 +341,10 @@ export class OnboardingController {
   @ApiOperation({ summary: 'Obtener datos de la sesión móvil (sin JWT)' })
   async getMobileSession(@Query('token') rawToken: string) {
     const session = await this.onboardingService.resolveMobileToken(rawToken);
-    return { onboarding_type: session.onboardingType, required_docs: session.requiredDocs };
+    return {
+      onboarding_type: session.onboardingType,
+      documents: session.documents,
+    };
   }
 
   @Public()
@@ -340,7 +352,7 @@ export class OnboardingController {
   @ApiOperation({ summary: 'Marcar sesión móvil como completada' })
   async completeMobileSession(@Query('token') rawToken: string) {
     const session = await this.onboardingService.resolveMobileToken(rawToken);
-    await this.onboardingService.completeMobileToken(session.tokenId);
+    await this.onboardingService.completeMobileToken(session);
     return { message: 'Sesión completada' };
   }
 }
