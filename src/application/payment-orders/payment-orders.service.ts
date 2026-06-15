@@ -3163,6 +3163,7 @@ export class PaymentOrdersService {
           : undefined,
       })
       .eq('id', orderId)
+      .eq('user_id', userId)
       .select()
       .single();
 
@@ -3319,6 +3320,7 @@ export class PaymentOrdersService {
       .from('payment_orders')
       .update({ status: 'cancelled' })
       .eq('id', orderId)
+      .eq('user_id', userId)
       .select()
       .single();
 

@@ -40,6 +40,7 @@ export class PublicSettingsController {
   }
 
   @Get('currencies')
+  @Roles('client', 'staff', 'admin', 'super_admin')
   @ApiOperation({ summary: 'Obtener divisas activas por contexto (requiere auth)' })
   @ApiQuery({ name: 'context', required: false, enum: ['ramp', 'va', 'supplier'] })
   getActiveCurrencies(@Query('context') context?: string) {
@@ -47,6 +48,7 @@ export class PublicSettingsController {
   }
 
   @Get('va-source-currencies')
+  @Roles('client', 'staff', 'admin', 'super_admin')
   @ApiOperation({ summary: 'Obtener todas las monedas fiat para depósitos VA (activas e inactivas)' })
   getAllVaSourceCurrencies() {
     return this.adminService.getVaSourceCurrencySettings();

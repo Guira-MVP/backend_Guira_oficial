@@ -76,15 +76,14 @@ export class SupportService {
     return data ?? [];
   }
 
-  async getTicket(id: string, userId?: string) {
-    let query = this.supabase.from('support_tickets').select('*').eq('id', id);
+  async getTicket(id: string, userId: string) {
+    const { data, error } = await this.supabase
+      .from('support_tickets')
+      .select('*')
+      .eq('id', id)
+      .eq('user_id', userId)
+      .single();
 
-    // Si se pasa userId, validar que pertenece a ese usuario
-    if (userId) {
-      query = query.eq('user_id', userId);
-    }
-
-    const { data, error } = await query.single();
     if (error || !data) throw new NotFoundException('Ticket no encontrado');
     return data;
   }
