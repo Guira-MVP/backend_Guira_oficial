@@ -131,6 +131,7 @@ export class AuthController {
 
   @Post('reset-password')
   @ApiBearerAuth('supabase-jwt')
+  @UseGuards(RateLimitGuard)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Restablecer contraseña',
