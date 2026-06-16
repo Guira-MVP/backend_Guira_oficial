@@ -330,6 +330,10 @@ export class AuthService {
       user_agent: context?.user_agent,
     });
 
+    // Esperar a que se cumplan los 400ms mínimos antes de responder.
+    // Garantiza tiempo de respuesta uniforme independientemente de si el email existe.
+    await minDelay;
+
     return {
       message:
         'Si el correo está registrado, recibirás instrucciones para restablecer tu contraseña.',
