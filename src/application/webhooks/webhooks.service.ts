@@ -1995,6 +1995,10 @@ export class WebhooksService {
     const receiptExchangeFee = receipt?.exchange_fee
       ? parseFloat(receipt.exchange_fee as string)
       : null;
+    // Tasa real que Bridge aplicó en la conversión (solo presente en transfers con FX).
+    const receiptExchangeRate = receipt?.exchange_rate
+      ? parseFloat(receipt.exchange_rate as string)
+      : null;
     const destinationTxHash =
       (data?.destination_tx_hash as string | undefined) ??
       (receipt?.destination_tx_hash as string | undefined) ??
@@ -2167,6 +2171,13 @@ export class WebhooksService {
             ...(receiptFinalAmount != null
               ? { amount_destination: receiptFinalAmount }
               : {}),
+            // Para retiros bridge_wallet_to_fiat_us a divisas no-USD (MXN, EUR, BRL, COP, GBP):
+            // sobreescribir con la tasa real de Bridge como fuente de verdad.
+            ...(receiptExchangeRate != null &&
+              paymentOrder.flow_type === 'bridge_wallet_to_fiat_us' &&
+              (paymentOrder.destination_currency ?? '').toUpperCase() !== 'USD'
+                ? { exchange_rate_applied: receiptExchangeRate }
+                : {}),
             // Guardar metadata histórica si fue on-ramp flexible (amount original 0)
             ...(initialAmount === 0 && receipt?.initial_amount
               ? { amount: parseFloat(receipt.initial_amount as string) }

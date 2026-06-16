@@ -2651,15 +2651,27 @@ export class PaymentOrdersService {
         net_amount,
         destination_type: 'external_account',
         destination_currency: extAccount.currency ?? 'USD',
-        exchange_rate_applied: 1.0,
+        // Para USD la conversión es 1:1. Para otras divisas (MXN, EUR, BRL, COP, GBP)
+        // usamos la tasa congelada por el cliente en el paso de revisión.
+        // El webhook transfer.complete sobreescribe con receipt.exchange_rate (tasa real de Bridge).
+        exchange_rate_applied:
+          (extAccount.currency ?? 'USD').toUpperCase() !== 'USD' &&
+          dto.exchange_rate_applied &&
+          dto.exchange_rate_applied > 0
+            ? dto.exchange_rate_applied
+            : 1.0,
         external_account_id: extAccount.id,
         supplier_id: supplier.id,
         destination_bank_name: (bankDetails?.bank_name as string) ?? null,
         destination_account_holder: supplier.name ?? null,
         destination_account_number: destinationAccountNumber,
-        // 1:1 USDC→USD → el crédito neto estimado se conoce desde la creación.
-        // El webhook transfer.complete lo confirma con receipt.final_amount.
-        amount_destination: net_amount,
+        // Estimado en la divisa destino. El webhook lo sobreescribe con receipt.final_amount.
+        amount_destination:
+          (extAccount.currency ?? 'USD').toUpperCase() !== 'USD' &&
+          dto.exchange_rate_applied &&
+          dto.exchange_rate_applied > 0
+            ? parseFloat((net_amount * dto.exchange_rate_applied).toFixed(2))
+            : net_amount,
         notes: dto.notes,
         business_purpose: dto.business_purpose,
         supporting_document_url: dto.supporting_document_url,

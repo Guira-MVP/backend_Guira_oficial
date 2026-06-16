@@ -198,6 +198,8 @@ export class ExchangeRatesService {
         const bridgeRates = { buy_rate: buyRate, sell_rate: sellRate };
         await this.updateRateInternal(`BOB_${upper}`, bobXRate, actorId, bridgeRates);
         await this.updateRateInternal(`${upper}_BOB`, xBobRate, actorId, bridgeRates);
+        // USD_X: cliente da USDC (≈USD), recibe X → Bridge vende X → sell_rate
+        await this.updateRateInternal(`USD_${upper}`, sellRate, actorId, bridgeRates);
       } catch (e) {
         this.logger.warn(
           `No se pudo sincronizar par BOB/${currency.toUpperCase()} desde Bridge: ${(e as Error).message}`,
