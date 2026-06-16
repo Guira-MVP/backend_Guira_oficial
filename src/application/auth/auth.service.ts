@@ -195,7 +195,16 @@ export class AuthService {
       throw new NotFoundException('Perfil no encontrado');
     }
 
-    return data as MeResponseDto;
+    // Consultar factores MFA del usuario (best-effort — no bloqueamos si falla)
+    let mfa_enabled = false;
+    try {
+      const { data: factors } = await this.supabase.auth.admin.mfa.listFactors({ userId });
+      mfa_enabled = (factors?.totp ?? []).some((f: { status: string }) => f.status === 'verified');
+    } catch {
+      this.logger.warn(`No se pudo consultar factores MFA para ${userId}`);
+    }
+
+    return { ...(data as MeResponseDto), mfa_enabled };
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -286,6 +295,10 @@ export class AuthService {
     dto: ForgotPasswordDto,
     context?: { ip_address: string; user_agent: string },
   ): Promise<{ message: string }> {
+    // Normalizar tiempo de respuesta para evitar enumeración de emails por timing attack.
+    // Sin esto: email existente ~350ms, email inexistente ~80ms → diferencia detectable.
+    const minDelay = new Promise<void>((resolve) => setTimeout(resolve, 400));
+
     // Hallazgo 6: Usar URL_FRONTEND validada via ConfigService en vez de
     // process.env.FRONTEND_URL sin validar.
     const frontendUrl =

@@ -33,4 +33,5 @@ export class MeResponseDto {
   daily_limit_usd: number | null;
   monthly_limit_usd: number | null;
   created_at: string;
+  mfa_enabled: boolean;
 }
