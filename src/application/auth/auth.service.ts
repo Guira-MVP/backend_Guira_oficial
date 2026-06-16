@@ -75,9 +75,13 @@ export class AuthService {
     const { event_type, user_id, email, ip_address, user_agent, metadata } =
       params;
 
+    // Sanitizar valores de usuario para prevenir log injection (CWE-117)
+    const sanitize = (v: string | null | undefined) =>
+      v ? v.replace(/[\r\n\t]/g, ' ').substring(0, 120) : 'n/a';
+
     // Log estructurado al servidor siempre
     this.logger.log(
-      `🔐 AUTH_EVENT: ${event_type} | user=${user_id ?? 'unknown'} | email=${email ?? 'n/a'} | ip=${ip_address ?? 'n/a'}`,
+      `🔐 AUTH_EVENT: ${event_type} | user=${sanitize(user_id)} | email=${sanitize(email)} | ip=${sanitize(ip_address)}`,
     );
 
     // Persistir en la tabla auth_audit_log (best-effort)

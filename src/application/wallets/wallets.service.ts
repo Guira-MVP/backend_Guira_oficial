@@ -309,6 +309,19 @@ export class WalletsService {
           }
         } else {
           initialized++;
+          // Audit trail (best-effort)
+          void this.supabase.from('audit_logs').insert({
+            performed_by: userId,
+            role: 'client',
+            action: 'CREATE_WALLET',
+            table_name: 'wallets',
+            new_values: {
+              network: chainFromBridge,
+              address: bridgeWallet.address,
+              provider: 'bridge',
+            },
+            source: 'system',
+          });
         }
       }
 

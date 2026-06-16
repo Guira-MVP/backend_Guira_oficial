@@ -235,11 +235,13 @@ export class LedgerService {
 
     // Audit log
     await this.supabase.from('audit_logs').insert({
-      actor_id: actorId,
+      performed_by: actorId,
+      role: 'admin',
       action: 'ledger_manual_adjustment',
-      entity_type: 'ledger_entry',
-      entity_id: entry.id,
-      details: { wallet_id: walletId, type, amount, currency, reason },
+      table_name: 'ledger_entries',
+      record_id: entry.id,
+      new_values: { wallet_id: walletId, type, amount, currency, reason },
+      source: 'admin_panel',
     });
 
     return entry;

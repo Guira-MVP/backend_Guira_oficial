@@ -7,6 +7,7 @@ import {
   UnauthorizedException,
   Logger,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
 import { throwDbError } from '../../core/utils/db-error.util';
@@ -37,7 +38,36 @@ export class OnboardingService {
     private readonly bridgeApiClient: BridgeApiClient,
     private readonly ordersGateway: OrdersGateway,
     private readonly adminGateway: AdminGateway,
+    private readonly config: ConfigService,
   ) {}
+
+  /**
+   * Valida que redirect_uri pertenezca a uno de los orígenes del frontend
+   * configurados en URL_FRONTEND. Previene SSRF/Open Redirect (OWASP A10).
+   */
+  private validateRedirectUri(redirectUri: string): void {
+    const raw = this.config.get<string>('app.urlFrontend') ?? '';
+    const allowedOrigins = raw
+      .split(',')
+      .map((u) => {
+        try { return new URL(u.trim()).origin; }
+        catch { return null; }
+      })
+      .filter(Boolean) as string[];
+
+    let parsedOrigin: string;
+    try {
+      parsedOrigin = new URL(redirectUri).origin;
+    } catch {
+      throw new BadRequestException('redirect_uri inválido');
+    }
+
+    if (!allowedOrigins.includes(parsedOrigin)) {
+      throw new BadRequestException(
+        'redirect_uri no está en la lista de orígenes permitidos',
+      );
+    }
+  }
 
   /**
    * Materializa el país de origen del cliente en profiles.country_code para que
@@ -238,6 +268,7 @@ export class OnboardingService {
     }
 
     if (redirectUri) {
+      this.validateRedirectUri(redirectUri);
       const hasParams = url.includes('?');
       url = `${url}${hasParams ? '&' : '?'}redirect_uri=${encodeURIComponent(
         redirectUri,

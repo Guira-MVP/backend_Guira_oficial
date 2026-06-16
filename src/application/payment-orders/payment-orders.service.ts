@@ -490,6 +490,22 @@ export class PaymentOrdersService {
         throw new BadRequestException(`Flujo no soportado: ${dto.flow_type}`);
     }
 
+    // Audit trail de creación de orden (best-effort)
+    void this.supabase.from('audit_logs').insert({
+      performed_by: userId,
+      role: 'client',
+      action: 'CREATE_PAYMENT_ORDER',
+      table_name: 'payment_orders',
+      record_id: interbankOrder.id,
+      new_values: {
+        flow_type: interbankOrder.flow_type,
+        amount: interbankOrder.amount,
+        currency: interbankOrder.currency,
+        status: interbankOrder.status,
+      },
+      source: 'api',
+    });
+
     // Notificar al staff que hay una nueva orden
     this.ordersGateway.emitOrderCreated({
       id: interbankOrder.id,
@@ -1507,6 +1523,22 @@ export class PaymentOrdersService {
       default:
         throw new BadRequestException(`Flujo no soportado: ${dto.flow_type}`);
     }
+
+    // Audit trail de creación de orden wallet ramp (best-effort)
+    void this.supabase.from('audit_logs').insert({
+      performed_by: userId,
+      role: 'client',
+      action: 'CREATE_WALLET_RAMP_ORDER',
+      table_name: 'payment_orders',
+      record_id: walletRampOrder.id,
+      new_values: {
+        flow_type: walletRampOrder.flow_type,
+        amount: walletRampOrder.amount,
+        currency: walletRampOrder.currency,
+        status: walletRampOrder.status,
+      },
+      source: 'api',
+    });
 
     // Notificar al staff que hay una nueva orden
     this.ordersGateway.emitOrderCreated({
@@ -4253,17 +4285,19 @@ export class PaymentOrdersService {
     if (error) throwDbError(error);
 
     await this.supabase.from('audit_logs').insert({
-      actor_id: actorId,
+      performed_by: actorId,
+      role: 'admin',
       action: 'limit_override_created',
-      entity_type: 'customer_limit_override',
-      entity_id: data.id,
-      details: {
+      table_name: 'customer_limit_overrides',
+      record_id: data.id,
+      new_values: {
         user_id: dto.user_id,
         flow_type: dto.flow_type,
         min_usd: dto.min_usd,
         max_usd: dto.max_usd,
         valid_from: dto.valid_from ?? today,
       },
+      source: 'admin_panel',
     });
 
     return data;
@@ -4321,20 +4355,22 @@ export class PaymentOrdersService {
       );
 
     await this.supabase.from('audit_logs').insert({
-      actor_id: actorId,
+      performed_by: actorId,
+      role: 'admin',
       action: 'limit_override_updated',
-      entity_type: 'customer_limit_override',
-      entity_id: overrideId,
-      details: {
+      table_name: 'customer_limit_overrides',
+      record_id: overrideId,
+      previous_values: {
+        min_usd: current.min_usd,
+        max_usd: current.max_usd,
+        is_active: current.is_active,
+      },
+      new_values: {
         user_id: current.user_id,
         flow_type: current.flow_type,
-        previous: {
-          min_usd: current.min_usd,
-          max_usd: current.max_usd,
-          is_active: current.is_active,
-        },
         updated: dto,
       },
+      source: 'admin_panel',
     });
 
     return data;
@@ -4362,16 +4398,18 @@ export class PaymentOrdersService {
       );
 
     await this.supabase.from('audit_logs').insert({
-      actor_id: actorId,
+      performed_by: actorId,
+      role: 'admin',
       action: 'limit_override_deleted',
-      entity_type: 'customer_limit_override',
-      entity_id: overrideId,
-      details: {
+      table_name: 'customer_limit_overrides',
+      record_id: overrideId,
+      previous_values: {
         user_id: current.user_id,
         flow_type: current.flow_type,
         min_usd: current.min_usd,
         max_usd: current.max_usd,
       },
+      source: 'admin_panel',
     });
   }
 
@@ -4512,15 +4550,17 @@ export class PaymentOrdersService {
     if (error) throwDbError(error);
 
     await this.supabase.from('audit_logs').insert({
-      actor_id: actorId,
+      performed_by: actorId,
+      role: 'admin',
       action: 'flow_override_created',
-      entity_type: 'customer_flow_override',
-      entity_id: data.id,
-      details: {
+      table_name: 'customer_flow_overrides',
+      record_id: data.id,
+      new_values: {
         user_id: dto.user_id,
         flow_type: dto.flow_type,
         is_enabled: dto.is_enabled,
       },
+      source: 'admin_panel',
     });
 
     return data;
@@ -4572,19 +4612,21 @@ export class PaymentOrdersService {
       );
 
     await this.supabase.from('audit_logs').insert({
-      actor_id: actorId,
+      performed_by: actorId,
+      role: 'admin',
       action: 'flow_override_updated',
-      entity_type: 'customer_flow_override',
-      entity_id: overrideId,
-      details: {
+      table_name: 'customer_flow_overrides',
+      record_id: overrideId,
+      previous_values: {
+        is_enabled: current.is_enabled,
+        is_active: current.is_active,
+      },
+      new_values: {
         user_id: current.user_id,
         flow_type: current.flow_type,
-        previous: {
-          is_enabled: current.is_enabled,
-          is_active: current.is_active,
-        },
         updated: dto,
       },
+      source: 'admin_panel',
     });
 
     return data;
@@ -4610,15 +4652,17 @@ export class PaymentOrdersService {
       throw new BadRequestException('No se pudo eliminar el override de flujo');
 
     await this.supabase.from('audit_logs').insert({
-      actor_id: actorId,
+      performed_by: actorId,
+      role: 'admin',
       action: 'flow_override_deleted',
-      entity_type: 'customer_flow_override',
-      entity_id: overrideId,
-      details: {
+      table_name: 'customer_flow_overrides',
+      record_id: overrideId,
+      previous_values: {
         user_id: current.user_id,
         flow_type: current.flow_type,
         is_enabled: current.is_enabled,
       },
+      source: 'admin_panel',
     });
   }
 

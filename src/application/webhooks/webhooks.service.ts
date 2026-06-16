@@ -254,6 +254,19 @@ export class WebhooksService {
           this.logger.warn(
             `❌ Firma inválida en evento ${id} — ignorado en producción`,
           );
+          // Audit trail de firma inválida para detectar ataques de webhook injection
+          void this.supabase.from('audit_logs').insert({
+            performed_by: null,
+            role: 'system',
+            action: 'WEBHOOK_SIGNATURE_INVALID',
+            table_name: 'webhook_events',
+            record_id: id,
+            new_values: {
+              provider: 'bridge',
+              event_type: event.event_type,
+            },
+            source: 'webhook',
+          });
           await this.supabase
             .from('webhook_events')
             .update({ status: 'ignored' })

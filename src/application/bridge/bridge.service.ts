@@ -1083,11 +1083,13 @@ export class BridgeService {
     )?.bridge_customer_id;
 
     await this.supabase.from('audit_logs').insert({
-      actor_id: actorId,
+      performed_by: actorId,
+      role: 'admin',
       action: 'payout_approved',
-      entity_type: 'payout_request',
-      entity_id: payoutId,
-      details: { amount: req.amount, currency: req.currency },
+      table_name: 'payout_requests',
+      record_id: payoutId,
+      new_values: { amount: req.amount, currency: req.currency },
+      source: 'admin_panel',
     });
 
     return this.executePayout(payoutId, bridgeCustomerId);
@@ -1118,11 +1120,13 @@ export class BridgeService {
       .eq('id', payoutId);
 
     await this.supabase.from('audit_logs').insert({
-      actor_id: actorId,
+      performed_by: actorId,
+      role: 'admin',
       action: 'payout_rejected',
-      entity_type: 'payout_request',
-      entity_id: payoutId,
-      details: { reason, amount: req.amount },
+      table_name: 'payout_requests',
+      record_id: payoutId,
+      new_values: { reason, amount: req.amount },
+      source: 'admin_panel',
     });
 
     return { message: 'Payout rechazado, saldo liberado' };

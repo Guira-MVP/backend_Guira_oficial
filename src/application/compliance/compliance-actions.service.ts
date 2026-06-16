@@ -549,6 +549,21 @@ export class ComplianceActionsService {
       .update({ onboarding_status: 'bridge_rejected' })
       .eq('id', userId);
 
+    // Audit trail del rechazo (best-effort)
+    void this.supabase.from('audit_logs').insert({
+      performed_by: null,
+      role: 'system',
+      action: 'BRIDGE_KYC_REJECTED',
+      table_name: 'profiles',
+      record_id: userId,
+      new_values: {
+        onboarding_status: 'bridge_rejected',
+        bridge_customer_id: bridgeCustomerId,
+        issues,
+      },
+      source: 'webhook',
+    });
+
     // 3. Buscar review abierto y registrar evento
     const review = await this.findOpenReviewForUser(userId);
     if (review) {
