@@ -10,7 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
 import { LoginDto } from './dto/login.dto';
-import { MeResponseDto } from './dto/auth-response.dto';
+import { MeResponseDto, SessionInfo } from './dto/auth-response.dto';
 import { ForgotPasswordDto, ResetPasswordDto } from './dto/password-reset.dto';
 
 /**
@@ -222,7 +222,10 @@ export class AuthService {
     let mfa_enabled = false;
     try {
       const { data: factors } = await this.supabase.auth.admin.mfa.listFactors({ userId });
-      mfa_enabled = (factors?.totp ?? []).some((f: { status: string }) => f.status === 'verified');
+      mfa_enabled = (factors?.factors ?? []).some(
+        (f: { factor_type: string; status: string }) =>
+          f.factor_type === 'totp' && f.status === 'verified',
+      );
     } catch {
       this.logger.warn(`No se pudo consultar factores MFA para ${userId}`);
     }
@@ -544,11 +547,3 @@ export class AuthService {
   }
 }
 
-interface SessionInfo {
-  id: string;
-  created_at: string;
-  updated_at: string;
-  user_agent: string | null;
-  ip: string | null;
-  aal: string;
-}

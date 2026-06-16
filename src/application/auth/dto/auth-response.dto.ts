@@ -18,6 +18,15 @@ export class AuthResponseDto {
   onboarding_status: string;
 }
 
+export interface SessionInfo {
+  id: string;
+  created_at: string;
+  updated_at: string;
+  user_agent: string | null;
+  ip: string | null;
+  aal: string;
+}
+
 /** Respuesta de /auth/me */
 export class MeResponseDto {
   id: string;
