@@ -2,7 +2,9 @@ import {
   Controller,
   Post,
   Get,
+  Delete,
   Body,
+  Param,
   HttpCode,
   HttpStatus,
   UseGuards,
@@ -170,5 +172,55 @@ export class AuthController {
   ) {
     const context = this.authService.extractRequestContext(req);
     return this.authService.oauthCallback(user.id, dto.provider, context);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Sessions
+  // ─────────────────────────────────────────────────────────────
+
+  @Get('sessions')
+  @ApiBearerAuth('supabase-jwt')
+  @ApiOperation({
+    summary: 'Listar sesiones activas',
+    description: 'Retorna todas las sesiones activas del usuario autenticado.',
+  })
+  @ApiResponse({ status: 200, description: 'Lista de sesiones' })
+  async listSessions(
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    const currentSessionId = this.authService.extractSessionId(req);
+    return this.authService.listSessions(user.id, currentSessionId);
+  }
+
+  @Delete('sessions/others')
+  @ApiBearerAuth('supabase-jwt')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Cerrar todas las otras sesiones',
+    description: 'Revoca todas las sesiones activas excepto la sesión actual.',
+  })
+  @ApiResponse({ status: 200, description: 'Sesiones cerradas' })
+  async revokeOtherSessions(
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    const currentSessionId = this.authService.extractSessionId(req);
+    return this.authService.revokeOtherSessions(user.id, currentSessionId);
+  }
+
+  @Delete('sessions/:id')
+  @ApiBearerAuth('supabase-jwt')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Revocar una sesión específica',
+    description: 'Cierra una sesión activa por su ID. Solo se pueden revocar sesiones propias.',
+  })
+  @ApiResponse({ status: 200, description: 'Sesión cerrada' })
+  async revokeSession(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') sessionId: string,
+  ) {
+    return this.authService.revokeSession(user.id, sessionId);
   }
 }

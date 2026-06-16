@@ -118,6 +118,29 @@ export class AuthService {
     return { ip_address, user_agent };
   }
 
+  /**
+   * Extrae el session_id del JWT Bearer ya validado por el guard.
+   * El token fue verificado server-side por Supabase antes de llegar aquí,
+   * por lo que solo decodificamos el payload (base64) sin reverificar firma.
+   */
+  extractSessionId(request: {
+    headers?: Record<string, string | string[] | undefined>;
+  }): string | undefined {
+    try {
+      const auth = request.headers?.['authorization'];
+      const token = typeof auth === 'string' ? auth.split(' ')[1] : undefined;
+      if (!token) return undefined;
+      const payload = JSON.parse(
+        Buffer.from(token.split('.')[1], 'base64url').toString('utf8'),
+      ) as Record<string, unknown>;
+      return typeof payload['session_id'] === 'string'
+        ? payload['session_id']
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────
   // Login (Hallazgo 4: Login con rate limiting + logging)
   // ─────────────────────────────────────────────────────────────
@@ -455,4 +478,77 @@ export class AuthService {
 
     return { message: 'OAuth callback procesado' };
   }
+
+  // ─────────────────────────────────────────────────────────────
+  // Sessions
+  // ─────────────────────────────────────────────────────────────
+
+  async listSessions(
+    userId: string,
+    currentSessionId?: string,
+  ): Promise<{
+    sessions: SessionInfo[];
+    current_session_id: string | null;
+  }> {
+    const { data, error } = await this.supabase.rpc('get_user_sessions', {
+      p_user_id: userId,
+    });
+
+    if (error) {
+      this.logger.error(`Error listando sesiones para ${userId}: ${error.message}`);
+      throw new InternalServerErrorException('No se pudieron obtener las sesiones activas.');
+    }
+
+    return {
+      sessions: (data as SessionInfo[]) ?? [],
+      current_session_id: currentSessionId ?? null,
+    };
+  }
+
+  async revokeSession(userId: string, sessionId: string): Promise<{ message: string }> {
+    const { error } = await this.supabase.rpc('revoke_user_session', {
+      p_user_id: userId,
+      p_session_id: sessionId,
+    });
+
+    if (error) {
+      this.logger.error(`Error revocando sesión ${sessionId}: ${error.message}`);
+      throw new InternalServerErrorException('No se pudo cerrar la sesión.');
+    }
+
+    return { message: 'Sesión cerrada exitosamente' };
+  }
+
+  async revokeOtherSessions(
+    userId: string,
+    currentSessionId?: string,
+  ): Promise<{ message: string; revoked: number }> {
+    if (!currentSessionId) {
+      throw new InternalServerErrorException('No se pudo identificar la sesión actual.');
+    }
+
+    const { data, error } = await this.supabase.rpc('revoke_other_sessions', {
+      p_user_id: userId,
+      p_current_session_id: currentSessionId,
+    });
+
+    if (error) {
+      this.logger.error(`Error revocando otras sesiones para ${userId}: ${error.message}`);
+      throw new InternalServerErrorException('No se pudieron cerrar las otras sesiones.');
+    }
+
+    return {
+      message: 'Otras sesiones cerradas exitosamente',
+      revoked: (data as number) ?? 0,
+    };
+  }
+}
+
+interface SessionInfo {
+  id: string;
+  created_at: string;
+  updated_at: string;
+  user_agent: string | null;
+  ip: string | null;
+  aal: string;
 }
