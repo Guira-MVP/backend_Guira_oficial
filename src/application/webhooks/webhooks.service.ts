@@ -2192,7 +2192,16 @@ export class WebhooksService {
           })
           .eq('id', paymentOrder.id);
 
-        void this.notifyOrderFinalStatusEmail(paymentOrder, 'completed');
+        // Para on-ramp flexible (amount=0 en creación), el monto real viene
+        // del receipt de Bridge — usar ese valor en el correo al cliente.
+        const emailOrder = {
+          ...paymentOrder,
+          amount:
+            initialAmount === 0 && receipt?.initial_amount
+              ? parseFloat(receipt.initial_amount as string)
+              : paymentOrder.amount,
+        };
+        void this.notifyOrderFinalStatusEmail(emailOrder, 'completed');
 
         // WS: notificar al usuario y staff que la transferencia fue completada
         this.ordersGateway.emitOrderUpdated(paymentOrder.user_id, {
