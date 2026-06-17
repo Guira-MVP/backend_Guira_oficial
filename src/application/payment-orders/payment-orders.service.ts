@@ -3770,6 +3770,7 @@ export class PaymentOrdersService {
         notes: dto.notes
           ? `${order.notes ?? ''}\n[ADMIN] ${dto.notes}`.trim()
           : order.notes,
+        ...(dto.receipt_url ? { receipt_url: dto.receipt_url } : {}),
       })
       .eq('id', orderId)
       .select()

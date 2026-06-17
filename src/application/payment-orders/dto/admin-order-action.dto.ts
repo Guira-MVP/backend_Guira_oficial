@@ -15,6 +15,11 @@ export class ApproveOrderDto {
   @IsString()
   @MaxLength(1000)
   notes?: string;
+
+  @ApiPropertyOptional({ description: 'Evidencia interna del staff (recibo PSAV de recepción del depósito)' })
+  @IsOptional()
+  @IsString()
+  receipt_url?: string;
 }
 
 export class MarkSentDto {
