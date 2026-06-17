@@ -605,8 +605,14 @@ export class PaymentOrdersService {
       liquidationFeePercent,
     );
 
-    // Obtener tipo de cambio estimado
-    const rateData = await this.exchangeRatesService.getRate('BOB_USD');
+    // Obtener tipo de cambio para la divisa destino real (BOB_EUR, BOB_USD, BOB_MXN…).
+    // USDC/USDT se anclan a USD. Fallback a BOB_USD si el par aún no está configurado.
+    const destCurrNorm = destinationCurrency
+      .toUpperCase()
+      .replace(/^USDC$|^USDT$/, 'USD');
+    const rateData = await this.exchangeRatesService
+      .getRate(`BOB_${destCurrNorm}`)
+      .catch(() => this.exchangeRatesService.getRate('BOB_USD'));
     // Tipo de cambio congelado por el cliente en la revisión (Step 4). Si llegó,
     // prevalece sobre el rate actual del servidor para honrar lo que el cliente aceptó.
     const appliedRate =
