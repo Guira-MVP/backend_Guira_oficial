@@ -2631,7 +2631,7 @@ export class PaymentOrdersService {
       dto.exchange_rate_applied > 0
     ) {
       const liveRate = await this.exchangeRatesService.getRate(`USD_${destCurrency}`);
-      const liveBase = liveRate.effective_rate ?? liveRate.rate;
+      const liveBase = liveRate.effective_rate;
       const deviation = Math.abs(dto.exchange_rate_applied - liveBase) / liveBase;
       const MAX_RATE_DEVIATION = 0.03;
       if (deviation > MAX_RATE_DEVIATION) {
