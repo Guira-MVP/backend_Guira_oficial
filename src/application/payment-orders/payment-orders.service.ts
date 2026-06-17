@@ -2064,7 +2064,7 @@ export class PaymentOrdersService {
     const rateData = await this.exchangeRatesService.getRate('USD_BOB');
     // Validar que el rate congelado no difiera >3% del live antes de reservar saldo.
     if (dto.exchange_rate_applied && dto.exchange_rate_applied > 0) {
-      const liveBase = rateData.effective_rate ?? rateData.rate;
+      const liveBase = rateData.effective_rate;
       const deviation = Math.abs(dto.exchange_rate_applied - liveBase) / liveBase;
       const MAX_RATE_DEVIATION = 0.03;
       if (deviation > MAX_RATE_DEVIATION) {
@@ -2447,7 +2447,7 @@ export class PaymentOrdersService {
           bridge_transfer_id: transferId,
           source_payment_rail: 'bridge_wallet',
           source_currency: sourceCurrency.toLowerCase(),
-          destination_payment_rail: destinationRail,
+          destination_payment_rail: destinationRailPre,
           destination_currency: (
             dto.destination_currency ?? sourceCurrency
           ).toLowerCase(),
