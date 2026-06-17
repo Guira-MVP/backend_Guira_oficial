@@ -2622,6 +2622,26 @@ export class PaymentOrdersService {
       dto.supplier_id,
     );
 
+    // Validar que el rate congelado no difiera >3% del rate live (solo para destinos no-USD).
+    // Protege contra rates obsoletos si el cliente tardó horas en confirmar en el paso review.
+    const destCurrency = (extAccount.currency ?? 'USD').toUpperCase();
+    if (
+      destCurrency !== 'USD' &&
+      dto.exchange_rate_applied &&
+      dto.exchange_rate_applied > 0
+    ) {
+      const liveRate = await this.exchangeRatesService.getRate(`USD_${destCurrency}`);
+      const liveBase = liveRate.effective_rate ?? liveRate.rate;
+      const deviation = Math.abs(dto.exchange_rate_applied - liveBase) / liveBase;
+      const MAX_RATE_DEVIATION = 0.03;
+      if (deviation > MAX_RATE_DEVIATION) {
+        throw new BadRequestException(
+          `La cotización ha variado un ${(deviation * 100).toFixed(1)}% desde que fue generada. ` +
+          `Por favor vuelve a cotizar para continuar.`,
+        );
+      }
+    }
+
     // Reservar saldo
     await this.supabase.rpc('reserve_balance', {
       p_user_id: userId,
