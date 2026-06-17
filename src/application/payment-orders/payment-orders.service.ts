@@ -2713,6 +2713,22 @@ export class PaymentOrdersService {
     // Ejecutar payout vía Bridge API usando external_account_id
     try {
       const idempotencyKey = `po_w2f_${order.id}`;
+      const orderToken = order.id.slice(0, 8).toUpperCase();
+      const railRef: Record<string, string> = {};
+      if (extAccount.payment_rail === 'sepa') {
+        railRef.sepa_reference = `Guira ${orderToken}`;
+      } else if (extAccount.payment_rail === 'wire') {
+        railRef.wire_message = `Guira ${orderToken}`;
+      } else if (extAccount.payment_rail === 'ach') {
+        railRef.ach_reference = 'GUIRA';
+      } else if (extAccount.payment_rail === 'spei') {
+        railRef.spei_reference = `Guira ${orderToken}`;
+      } else if (extAccount.payment_rail === 'faster_payments') {
+        railRef.reference = orderToken;
+      } else if (extAccount.payment_rail === 'pix') {
+        railRef.reference = `Guira ${orderToken}`;
+      }
+
       const bridgeResult = await this.bridgeApi.post<Record<string, unknown>>(
         '/v0/transfers',
         {
@@ -2726,6 +2742,7 @@ export class PaymentOrdersService {
             payment_rail: extAccount.payment_rail,
             currency: (extAccount.currency ?? 'usd').toLowerCase(),
             external_account_id: extAccount.bridge_external_account_id,
+            ...railRef,
           },
           amount: dto.amount.toFixed(2),
           ...(fee_amount > 0 && { developer_fee: fee_amount.toFixed(2) }),
@@ -2807,7 +2824,7 @@ export class PaymentOrdersService {
     }
 
     this.logger.log(
-      `📋 Orden bridge_wallet_to_fiat_us: ${order.id} — ${dto.amount} ${sourceCurrency}→USD`,
+      `📋 Orden bridge_wallet_to_fiat_us: ${order.id} — ${dto.amount} ${sourceCurrency}→${destCurrency}`,
     );
     return order;
   }

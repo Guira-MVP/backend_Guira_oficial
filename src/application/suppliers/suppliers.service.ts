@@ -205,10 +205,10 @@ export class SuppliersService {
           railRefs.destination_ach_reference = 'GUIRA';
         } else if (dto.payment_rail === 'spei') {
           railRefs.destination_spei_reference = `Pago Guira ${token}`;
+        } else if (dto.payment_rail === 'faster_payments') {
+          railRefs.destination_reference = token;
         } else if (
-          ['pix', 'faster_payments', 'bre_b', 'co_bank_transfer'].includes(
-            dto.payment_rail,
-          )
+          ['pix', 'bre_b', 'co_bank_transfer'].includes(dto.payment_rail)
         ) {
           railRefs.destination_reference = `Pago via Guira ${token}`;
         }
