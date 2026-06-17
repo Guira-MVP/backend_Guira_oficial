@@ -2048,6 +2048,33 @@ export class PaymentOrdersService {
       sourceCurrency,
     );
 
+    // Validar bridge_customer_id antes de reservar saldo
+    const { data: profile } = await this.supabase
+      .from('profiles')
+      .select('bridge_customer_id')
+      .eq('id', userId)
+      .single();
+
+    if (!profile?.bridge_customer_id) {
+      throw new BadRequestException(
+        'El usuario no tiene una cuenta Bridge activa. Completa el KYC antes de realizar retiros.',
+      );
+    }
+
+    const rateData = await this.exchangeRatesService.getRate('USD_BOB');
+    // Validar que el rate congelado no difiera >3% del live antes de reservar saldo.
+    if (dto.exchange_rate_applied && dto.exchange_rate_applied > 0) {
+      const liveBase = rateData.effective_rate ?? rateData.rate;
+      const deviation = Math.abs(dto.exchange_rate_applied - liveBase) / liveBase;
+      const MAX_RATE_DEVIATION = 0.03;
+      if (deviation > MAX_RATE_DEVIATION) {
+        throw new BadRequestException(
+          `La cotización ha variado un ${(deviation * 100).toFixed(1)}% desde que fue generada. ` +
+          `Por favor vuelve a cotizar para continuar.`,
+        );
+      }
+    }
+
     // Reservar saldo
     await this.supabase.rpc('reserve_balance', {
       p_user_id: userId,
@@ -2055,7 +2082,6 @@ export class PaymentOrdersService {
       p_amount: totalNeeded,
     });
 
-    const rateData = await this.exchangeRatesService.getRate('USD_BOB');
     // Tipo de cambio congelado por el cliente en la revisión (Step 4). Si llegó,
     // prevalece sobre el rate actual del servidor para honrar lo que el cliente aceptó.
     const appliedRate =
@@ -2105,12 +2131,6 @@ export class PaymentOrdersService {
 
     // Ejecutar Tramo 1: Bridge Transfer → PSAV crypto wallet
     try {
-      const { data: profile } = await this.supabase
-        .from('profiles')
-        .select('bridge_customer_id')
-        .eq('id', userId)
-        .single();
-
       // Validar y normalizar la red del PSAV
       if (
         !psavAccount.crypto_network ||
@@ -2128,7 +2148,7 @@ export class PaymentOrdersService {
       }
 
       const transferPayload = {
-        on_behalf_of: profile?.bridge_customer_id,
+        on_behalf_of: profile.bridge_customer_id,
         source: {
           payment_rail: 'bridge_wallet',
           currency: sourceCurrency.toLowerCase(),
@@ -2302,6 +2322,31 @@ export class PaymentOrdersService {
       dto.destination_network ?? '',
     );
 
+    // Validar monto mínimo antes de reservar saldo
+    const routeMin = getOffRampMinAmount(
+      sourceCurrency.toLowerCase(),
+      destinationRailPre,
+      destCurrencyPre,
+    );
+    if (routeMin > 0 && dto.amount < routeMin) {
+      throw new BadRequestException(
+        `Monto mínimo para esta ruta es ${routeMin} ${sourceCurrency}. Ingresaste ${dto.amount}.`,
+      );
+    }
+
+    // Validar bridge_customer_id antes de reservar saldo
+    const { data: profile } = await this.supabase
+      .from('profiles')
+      .select('bridge_customer_id')
+      .eq('id', userId)
+      .single();
+
+    if (!profile?.bridge_customer_id) {
+      throw new BadRequestException(
+        'El usuario no tiene una cuenta Bridge activa. Completa el KYC antes de realizar retiros.',
+      );
+    }
+
     // Reservar saldo
     await this.supabase.rpc('reserve_balance', {
       p_user_id: userId,
@@ -2352,61 +2397,16 @@ export class PaymentOrdersService {
 
     // Ejecutar transfer vía Bridge API
     try {
-      // Obtener bridge_customer_id del usuario
-      const { data: profile } = await this.supabase
-        .from('profiles')
-        .select('bridge_customer_id')
-        .eq('id', userId)
-        .single();
-
-      // Validar y normalizar la red destino
-      const destinationRail = (dto.destination_network ?? '')
-        .toLowerCase()
-        .trim();
-      if (!ALLOWED_NETWORKS.includes(destinationRail as any)) {
-        throw new Error(
-          `Red destino inválida: "${dto.destination_network}" (normalizada: "${destinationRail}"). Valores permitidos: ${ALLOWED_NETWORKS.join(', ')}`,
-        );
-      }
-
-      // Validar ruta off-ramp contra catálogo Bridge
-      const destCurrency = (
-        dto.destination_currency ?? sourceCurrency
-      ).toLowerCase();
-      if (
-        !isValidOffRampRoute(
-          sourceCurrency.toLowerCase(),
-          destinationRail,
-          destCurrency,
-        )
-      ) {
-        throw new BadRequestException(
-          `Ruta off-ramp no soportada: ${sourceCurrency} → ${destinationRail} → ${destCurrency.toUpperCase()}. Verifica las combinaciones válidas.`,
-        );
-      }
-
-      // Validar monto mínimo según la ruta
-      const routeMin = getOffRampMinAmount(
-        sourceCurrency.toLowerCase(),
-        destinationRail,
-        destCurrency,
-      );
-      if (routeMin > 0 && dto.amount < routeMin) {
-        throw new BadRequestException(
-          `Monto mínimo para esta ruta es ${routeMin} ${sourceCurrency}. Ingresaste ${dto.amount}.`,
-        );
-      }
-
       const transferPayload = {
-        on_behalf_of: profile?.bridge_customer_id,
+        on_behalf_of: profile.bridge_customer_id,
         source: {
           payment_rail: 'bridge_wallet',
           currency: sourceCurrency.toLowerCase(),
           bridge_wallet_id: wallet.provider_wallet_id,
         },
         destination: {
-          payment_rail: destinationRail,
-          currency: (dto.destination_currency ?? sourceCurrency).toLowerCase(),
+          payment_rail: destinationRailPre,
+          currency: destCurrencyPre,
           to_address: dto.destination_address,
         },
         amount: dto.amount.toFixed(2),
@@ -2414,11 +2414,8 @@ export class PaymentOrdersService {
         client_reference_id: order.id,
       };
 
-      console.log(
-        '\n══════════ [bridge_wallet_to_crypto] PAYLOAD → Bridge API ══════════',
-        '\nPOST /v0/transfers',
-        '\n' + JSON.stringify(transferPayload, null, 2),
-        '\n════════════════════════════════════════════════════════════════════\n',
+      this.logger.log(
+        `🔍 [bridge_wallet_to_crypto] Bridge payload: ${JSON.stringify(transferPayload)}`,
       );
 
       const idempotencyKey = `po_w2c_${order.id}`;
@@ -2428,10 +2425,8 @@ export class PaymentOrdersService {
         idempotencyKey,
       );
 
-      console.log(
-        '\n══════════ [bridge_wallet_to_crypto] RESPONSE ← Bridge API ════════',
-        '\n' + JSON.stringify(bridgeResult, null, 2),
-        '\n════════════════════════════════════════════════════════════════════\n',
+      this.logger.log(
+        `✅ [bridge_wallet_to_crypto] Bridge response: ${JSON.stringify(bridgeResult)}`,
       );
 
       const transferId = (bridgeResult?.id ?? null) as string | null;
