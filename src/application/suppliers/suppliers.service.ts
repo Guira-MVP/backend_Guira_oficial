@@ -195,12 +195,31 @@ export class SuppliersService {
         const destinationCurrency =
           FIAT_RAIL_TO_CURRENCY[dto.payment_rail] ?? dto.currency.toLowerCase();
 
+        const token = Date.now().toString(36).toUpperCase();
+        const railRefs: Record<string, unknown> = {};
+        if (dto.payment_rail === 'sepa') {
+          railRefs.destination_sepa_reference = `Pago via Guira ${token}`;
+        } else if (dto.payment_rail === 'wire') {
+          railRefs.destination_wire_message = `Pago via Guira ${token}`;
+        } else if (dto.payment_rail === 'ach') {
+          railRefs.destination_ach_reference = 'GUIRA';
+        } else if (dto.payment_rail === 'spei') {
+          railRefs.destination_spei_reference = `Pago Guira ${token}`;
+        } else if (
+          ['pix', 'faster_payments', 'bre_b', 'co_bank_transfer'].includes(
+            dto.payment_rail,
+          )
+        ) {
+          railRefs.destination_reference = `Pago via Guira ${token}`;
+        }
+
         const la = await this.bridgeService.createLiquidationAddress(userId, {
           currency: 'usdc',
           chain: 'solana',
           external_account_id: ea.bridge_external_account_id as string,
           destination_payment_rail: dto.payment_rail,
           destination_currency: destinationCurrency,
+          ...railRefs,
         });
 
         bridge_liquidation_address_id =

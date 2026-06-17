@@ -67,8 +67,55 @@ export class CreateLiquidationAddressDto {
 
   @ApiPropertyOptional({
     description:
+      'Referencia SEPA (6-140 chars, solo a-z A-Z 0-9 espacio & - . /). ' +
+      'Si no se provee Bridge usa "Payment via Bridge {token}".',
+    example: 'Pago via Guira LB9H3K2',
+  })
+  @IsOptional()
+  @IsString()
+  destination_sepa_reference?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Mensaje Wire (1-140 chars, 4 líneas × 35 chars máx per Fedwire). ' +
+      'Incluido en la transferencia wire al beneficiario.',
+    example: 'Pago via Guira LB9H3K2',
+  })
+  @IsOptional()
+  @IsString()
+  destination_wire_message?: string;
+
+  @ApiPropertyOptional({
+    description: 'Referencia ACH (1-10 chars, solo A-Z a-z 0-9 y espacios).',
+    example: 'GUIRA',
+  })
+  @IsOptional()
+  @IsString()
+  destination_ach_reference?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Referencia SPEI (1-40 chars, solo a-z A-Z 0-9 y espacio). ' +
+      'Información de remesa incluida en la transferencia SPEI.',
+    example: 'Pago Guira LB9H3K2',
+  })
+  @IsOptional()
+  @IsString()
+  destination_spei_reference?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Referencia genérica para rails modernos (Pix, Faster Payments, Bre-B, CO Bank Transfer).',
+    example: 'Pago via Guira LB9H3K2',
+  })
+  @IsOptional()
+  @IsString()
+  destination_reference?: string;
+
+  @ApiPropertyOptional({
+    description:
       'Fee porcentual del desarrollador a aplicar. Se calcula automáticamente ' +
-      'desde fees_config si no se proporciona. Valor en base 100 (ej. "0.3" = 0.3%).',
+      'desde fees_config si no se provee. Valor en base 100 (ej. "0.3" = 0.3%).',
     example: '0.3',
   })
   @IsOptional()

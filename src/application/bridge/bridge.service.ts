@@ -1307,6 +1307,21 @@ export class BridgeService {
         ...(dto.destination_address
           ? { destination_address: dto.destination_address }
           : {}),
+        ...(dto.destination_sepa_reference
+          ? { destination_sepa_reference: dto.destination_sepa_reference }
+          : {}),
+        ...(dto.destination_wire_message
+          ? { destination_wire_message: dto.destination_wire_message }
+          : {}),
+        ...(dto.destination_ach_reference
+          ? { destination_ach_reference: dto.destination_ach_reference }
+          : {}),
+        ...(dto.destination_spei_reference
+          ? { destination_spei_reference: dto.destination_spei_reference }
+          : {}),
+        ...(dto.destination_reference
+          ? { destination_reference: dto.destination_reference }
+          : {}),
         ...(developerFeePercent !== undefined && developerFeePercent !== null
           ? { custom_developer_fee_percent: developerFeePercent }
           : {}),
