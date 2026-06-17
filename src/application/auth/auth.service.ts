@@ -574,7 +574,7 @@ export class AuthService {
     for (const factor of factors) {
       const { error: delError } = await this.supabase.auth.admin.mfa.deleteFactor({
         userId: targetUserId,
-        factorId: factor.id,
+        id: factor.id,
       });
       if (delError) {
         this.logger.warn(`Error eliminando factor ${factor.id} de ${targetUserId}: ${delError.message}`);

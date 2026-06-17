@@ -92,11 +92,6 @@ export class CreateSupplierDto {
   @MaxLength(200)
   name: string;
 
-  @ApiProperty({ example: 'MX' })
-  @IsString()
-  @IsNotEmpty()
-  country: string;
-
   @ApiProperty({ example: 'mxn' })
   @IsString()
   @IsNotEmpty()
@@ -344,11 +339,6 @@ export class UpdateSupplierDto {
   @IsString()
   @MaxLength(200)
   name?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  country?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

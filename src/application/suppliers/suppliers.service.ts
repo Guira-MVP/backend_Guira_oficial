@@ -159,7 +159,6 @@ export class SuppliersService {
         currency: dto.currency.toLowerCase(),
         payment_rail: dto.payment_rail,
         bank_name: dto.bank_name,
-        country: dto.country,
         // ACH/Wire
         account_number: dto.account_number,
         routing_number: dto.routing_number,
@@ -270,7 +269,6 @@ export class SuppliersService {
           last_name: dto.last_name,
           business_name: dto.business_name,
           address: dto.address ?? null,
-          bank_country: dto.country,
         }
       : {
           wallet_address: dto.wallet_address,
@@ -296,7 +294,6 @@ export class SuppliersService {
       .insert({
         user_id: userId,
         name: dto.name,
-        country: dto.country,
         currency: supplierCurrency,
         payment_rail: dto.payment_rail,
         bank_details,
@@ -404,12 +401,9 @@ export class SuppliersService {
   private mapBridgeDetailsToBankDetails(supplier: any) {
     if (supplier.bridge_external_accounts) {
       if (!supplier.bank_details) supplier.bank_details = {};
-      const { bank_name, country } = supplier.bridge_external_accounts;
+      const { bank_name } = supplier.bridge_external_accounts;
       if (bank_name && !supplier.bank_details.bank_name) {
         supplier.bank_details.bank_name = bank_name;
-      }
-      if (country && !supplier.bank_details.bank_country) {
-        supplier.bank_details.bank_country = country;
       }
     }
     delete supplier.bridge_external_accounts;
@@ -462,7 +456,6 @@ export class SuppliersService {
       updated_at: new Date().toISOString(),
     };
     if (dto.name !== undefined) updateData.name = dto.name;
-    if (dto.country !== undefined) updateData.country = dto.country;
     if (dto.currency !== undefined)
       updateData.currency = dto.currency.toLowerCase();
     if (dto.payment_rail !== undefined)

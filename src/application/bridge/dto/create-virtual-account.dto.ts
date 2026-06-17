@@ -256,14 +256,6 @@ export class CreateExternalAccountDto {
   @MaxLength(256)
   bank_name?: string;
 
-  @ApiPropertyOptional({
-    example: 'US',
-    description: 'País de la cuenta (ISO alpha-2)',
-  })
-  @IsOptional()
-  @IsString()
-  country?: string;
-
   // ── Dirección del beneficiario (recomendada para US) ──
 
   @ApiPropertyOptional({

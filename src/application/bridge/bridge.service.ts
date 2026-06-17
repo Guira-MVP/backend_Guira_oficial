@@ -695,7 +695,6 @@ export class BridgeService {
         routing_number: dto.routing_number ?? null,
         iban: dto.iban ?? null,
         swift_bic: dto.swift_bic ?? null,
-        country: dto.country ?? null,
         is_active: (bridgeEA.active as boolean) ?? true,
         // Nuevos campos de la respuesta de Bridge
         beneficiary_address_valid:
