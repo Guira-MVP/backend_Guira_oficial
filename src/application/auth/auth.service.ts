@@ -28,7 +28,8 @@ type AuthEventType =
   | 'token_refresh_failed'
   | 'password_reset_request'
   | 'password_reset_success'
-  | 'password_reset_failed';
+  | 'password_reset_failed'
+  | 'mfa_disabled_by_admin';
 
 @Injectable()
 export class AuthService {
@@ -548,6 +549,47 @@ export class AuthService {
       message: 'Otras sesiones cerradas exitosamente',
       revoked: (data as number) ?? 0,
     };
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Admin: Desactivar MFA de un usuario (recuperación por teléfono perdido)
+  // ─────────────────────────────────────────────────────────────
+
+  async disableUserMfa(
+    actorId: string,
+    targetUserId: string,
+  ): Promise<{ message: string; factors_removed: number }> {
+    const { data, error } = await this.supabase.auth.admin.mfa.listFactors({
+      userId: targetUserId,
+    });
+
+    if (error) {
+      this.logger.error(`Error listando factores MFA para ${targetUserId}: ${error.message}`);
+      throw new InternalServerErrorException('No se pudo consultar el MFA del usuario.');
+    }
+
+    const factors = data?.factors ?? [];
+    let removed = 0;
+
+    for (const factor of factors) {
+      const { error: delError } = await this.supabase.auth.admin.mfa.deleteFactor({
+        userId: targetUserId,
+        factorId: factor.id,
+      });
+      if (delError) {
+        this.logger.warn(`Error eliminando factor ${factor.id} de ${targetUserId}: ${delError.message}`);
+      } else {
+        removed++;
+      }
+    }
+
+    await this.logAuthEvent({
+      event_type: 'mfa_disabled_by_admin',
+      user_id: targetUserId,
+      metadata: { performed_by: actorId, factors_removed: removed },
+    });
+
+    return { message: 'MFA desactivado', factors_removed: removed };
   }
 }
 

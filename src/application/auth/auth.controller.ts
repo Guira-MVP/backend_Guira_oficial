@@ -26,6 +26,8 @@ import { Public } from '../../core/guards/supabase-auth.guard';
 import type { AuthenticatedUser } from '../../core/guards/supabase-auth.guard';
 import { CurrentUser } from '../../core/decorators/current-user.decorator';
 import { RateLimitGuard } from '../../core/guards/rate-limit.guard';
+import { RolesGuard } from '../../core/guards/roles.guard';
+import { Roles } from '../../core/decorators/roles.decorator';
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -222,5 +224,27 @@ export class AuthController {
     @Param('id') sessionId: string,
   ) {
     return this.authService.revokeSession(user.id, sessionId);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Admin: Desactivar MFA de un usuario (recuperación por teléfono perdido)
+  // ─────────────────────────────────────────────────────────────
+
+  @Delete('admin/users/:userId/mfa')
+  @ApiBearerAuth('supabase-jwt')
+  @UseGuards(RolesGuard)
+  @Roles('staff', 'admin')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Desactivar MFA de un usuario (staff/admin)',
+    description: 'Elimina todos los factores TOTP del usuario. Usar cuando el cliente pierde acceso a su autenticador.',
+  })
+  @ApiResponse({ status: 200, description: 'MFA desactivado' })
+  @ApiResponse({ status: 403, description: 'Permisos insuficientes' })
+  async disableUserMfa(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('userId') targetUserId: string,
+  ) {
+    return this.authService.disableUserMfa(actor.id, targetUserId);
   }
 }
