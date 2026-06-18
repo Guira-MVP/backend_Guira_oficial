@@ -8,7 +8,7 @@ import {
 } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
-const PSAV_TYPES = ['bank_bo', 'bank_us', 'crypto'] as const;
+const PSAV_TYPES = ['bank_bo', 'bank_us', 'bank_mx', 'bank_eu', 'bank_co', 'bank_br', 'crypto'] as const;
 
 export class UpsertPsavAccountDto {
   @ApiPropertyOptional({ description: 'UUID presente solo en actualizaciones' })

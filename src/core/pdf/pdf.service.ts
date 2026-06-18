@@ -833,4 +833,222 @@ export class PdfService {
       throw error;
     }
   }
+
+  // ═══════════════════════════════════════════════════════════
+  //  PSAV RECEIPT PDF — Comprobante institucional de recepción
+  //  Paleta: grises formales, sin branding Guira.
+  // ═══════════════════════════════════════════════════════════
+
+  async generatePsavReceiptPdf(
+    order: any,
+    psavAgent: { id: string; name: string; verification_code: string },
+    psavChannels: any[],
+  ): Promise<Buffer> {
+    const C = {
+      headerBg: '#1C2B3A',
+      headerText: '#FFFFFF',
+      sectionBg: '#374956',
+      sectionText: '#FFFFFF',
+      body: '#1A1A1A',
+      label: '#666666',
+      border: '#CCCCCC',
+      rowAlt: '#F7F7F7',
+      white: '#FFFFFF',
+      accent: '#3A6EA5',
+    };
+
+    const emitDate = this.fmtDate(new Date().toISOString());
+    const orderDate = this.fmtDate(order.created_at);
+    const refCode = order.deposit_reference_code ?? 'N/D';
+
+    const borderedLayout = {
+      hLineWidth: () => 0.5,
+      vLineWidth: (i: number, node: any) => (i === 0 || i === node.table.widths.length ? 0.5 : 0),
+      hLineColor: () => C.border,
+      vLineColor: () => C.border,
+      paddingLeft: () => 10,
+      paddingRight: () => 10,
+      paddingTop: () => 6,
+      paddingBottom: () => 6,
+    };
+
+    const sectionRow = (title: string, cols: number) => {
+      const cells: any[] = [{
+        text: title,
+        fontSize: 8,
+        bold: true,
+        color: C.sectionText,
+        fillColor: C.sectionBg,
+        characterSpacing: 0.8,
+        colSpan: cols,
+        margin: [0, 2, 0, 2],
+      }];
+      for (let i = 1; i < cols; i++) cells.push({});
+      return cells;
+    };
+
+    const dataRow = (label: string, value: string, alt = false): any[] => [
+      { text: label, fontSize: 8, color: C.label, fillColor: alt ? C.rowAlt : C.white },
+      { text: value || 'N/D', fontSize: 8.5, bold: true, color: C.body, fillColor: alt ? C.rowAlt : C.white },
+    ];
+
+    // ── Canales del PSAV ──
+    const bankChannels = psavChannels.filter(ch => ch.type !== 'crypto' && ch.is_active);
+    const channelRows: any[][] = [];
+    bankChannels.forEach((ch, idx) => {
+      const alt = idx % 2 === 0;
+      if (ch.bank_name) channelRows.push(dataRow(`Canal ${idx + 1} — Banco`, ch.bank_name, alt));
+      if (ch.account_number) channelRows.push(dataRow('Número de Cuenta', ch.account_number, alt));
+      if (ch.routing_number) channelRows.push(dataRow('Código de Routing', ch.routing_number, alt));
+      if (ch.account_holder) channelRows.push(dataRow('Titular', ch.account_holder, alt));
+      if (ch.currency) channelRows.push(dataRow('Moneda', ch.currency, alt));
+    });
+    if (channelRows.length === 0) {
+      channelRows.push(dataRow('Canales activos', 'Sin canales registrados'));
+    }
+
+    const docDefinition: TDocumentDefinitions = {
+      pageSize: 'A4',
+      pageMargins: [40, 40, 40, 60],
+      defaultStyle: { font: 'Helvetica', fontSize: 9, color: C.body },
+
+      content: [
+        // ── CABECERA ──
+        {
+          table: {
+            widths: ['*'],
+            body: [[{
+              columns: [
+                {
+                  stack: [
+                    { text: 'COMPROBANTE DE RECEPCIÓN DE FONDOS', fontSize: 13, bold: true, color: C.headerText, characterSpacing: 0.5 },
+                    { text: 'Documento de trazabilidad operativa interna', fontSize: 8, color: '#AAC4E0', margin: [0, 4, 0, 0] },
+                  ],
+                  width: '*',
+                },
+                {
+                  stack: [
+                    { text: 'FECHA DE EMISIÓN', fontSize: 7, bold: true, color: '#AAC4E0', characterSpacing: 0.6 },
+                    { text: emitDate, fontSize: 8, color: C.headerText, margin: [0, 3, 0, 0] },
+                  ],
+                  width: 'auto',
+                  alignment: 'right' as const,
+                },
+              ],
+              fillColor: C.headerBg,
+              margin: [18, 16, 18, 16],
+            }]],
+          },
+          layout: 'noBorders',
+          margin: [0, 0, 0, 0] as [number, number, number, number],
+        },
+
+        // Línea de acento
+        {
+          canvas: [{ type: 'rect', x: 0, y: 0, w: 515, h: 2.5, color: C.accent }],
+          margin: [0, 0, 0, 16] as [number, number, number, number],
+        },
+
+        // ── CÓDIGO DE TRAZABILIDAD (destacado) ──
+        {
+          table: {
+            widths: ['*'],
+            body: [[{
+              columns: [
+                {
+                  stack: [
+                    { text: 'CÓDIGO DE REFERENCIA DE TRAZABILIDAD', fontSize: 7.5, bold: true, color: C.label, characterSpacing: 0.8 },
+                    { text: refCode, fontSize: 18, bold: true, color: C.accent, characterSpacing: 0.5, margin: [0, 4, 0, 0] },
+                  ],
+                  width: '*',
+                },
+                {
+                  stack: [
+                    { text: 'N° DE EXPEDIENTE', fontSize: 7.5, bold: true, color: C.label, characterSpacing: 0.8 },
+                    { text: (order.id ?? 'N/D').slice(0, 8).toUpperCase(), fontSize: 11, bold: true, color: C.body, margin: [0, 4, 0, 0] },
+                  ],
+                  width: 'auto',
+                  alignment: 'right' as const,
+                },
+              ],
+              margin: [14, 12, 14, 12],
+            }]],
+          },
+          layout: {
+            hLineWidth: () => 0.5,
+            vLineWidth: () => 0.5,
+            hLineColor: () => C.border,
+            vLineColor: () => C.border,
+          },
+          margin: [0, 0, 0, 14] as [number, number, number, number],
+        },
+
+        // ── DATOS DEL AGENTE PSAV ──
+        {
+          table: {
+            widths: ['35%', '65%'],
+            body: [
+              sectionRow('DATOS DEL AGENTE PSAV ASIGNADO', 2),
+              dataRow('Nombre del Agente', psavAgent.name),
+              dataRow('Código de Verificación', psavAgent.verification_code, true),
+              ...channelRows,
+            ],
+          },
+          layout: borderedLayout,
+          margin: [0, 0, 0, 14] as [number, number, number, number],
+        },
+
+        // ── DETALLE DE LA OPERACIÓN ──
+        {
+          table: {
+            widths: ['35%', '65%'],
+            body: [
+              sectionRow('DETALLE DE LA OPERACIÓN', 2),
+              dataRow('Tipo de Operación', 'Bolivia — Exterior (PSAV)'),
+              dataRow('Monto Recibido', `${this.fmtAmount(order.amount)} ${(order.currency ?? 'BOB').toUpperCase()}`, true),
+              dataRow('Comisión Operativa', `${this.fmtAmount(order.fee_amount)} ${(order.currency ?? 'BOB').toUpperCase()}`),
+              dataRow('Monto Neto Procesado', `${this.fmtAmount(order.net_amount)} ${(order.currency ?? 'BOB').toUpperCase()}`, true),
+              dataRow('Fecha de Creación del Expediente', orderDate),
+              dataRow('Estado al Momento de Emisión', 'DEPÓSITO RECIBIDO — EN REVISIÓN', true),
+            ],
+          },
+          layout: borderedLayout,
+          margin: [0, 0, 0, 20] as [number, number, number, number],
+        },
+
+        // Línea de cierre
+        {
+          canvas: [{ type: 'rect', x: 0, y: 0, w: 515, h: 1.5, color: C.border }],
+          margin: [0, 0, 0, 10] as [number, number, number, number],
+        },
+
+        // ── AVISO LEGAL ──
+        {
+          text: 'Este documento es un comprobante interno de recepción de fondos generado automáticamente por el sistema operativo de Guira. No constituye un documento fiscal ni contable. El presente comprobante acredita únicamente la recepción y registro del depósito por parte del agente PSAV asignado al cliente, como parte del proceso de trazabilidad operativa interna.',
+          fontSize: 7,
+          color: C.label,
+          lineHeight: 1.5,
+          alignment: 'justify' as const,
+        },
+      ],
+
+      footer: (_currentPage: number, _pageCount: number) => ({
+        columns: [
+          { text: 'Guira — Comprobante de Recepción PSAV · Uso Interno', fontSize: 7, color: C.label },
+          { text: `Emitido: ${emitDate}`, fontSize: 7, color: C.label, alignment: 'right' as const },
+        ],
+        margin: [40, 0, 40, 0],
+      }),
+
+      styles: {},
+    };
+
+    try {
+      const pdf = this.printer.createPdf(docDefinition);
+      return await pdf.getBuffer();
+    } catch (error) {
+      this.logger.error('Error generando PDF recibo PSAV', error);
+      throw error;
+    }
+  }
 }

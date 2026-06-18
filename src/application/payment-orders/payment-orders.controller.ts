@@ -589,6 +589,16 @@ export class AdminPaymentOrdersController {
 
   // ── Acciones de estado ──
 
+  @Post(':id/generate-psav-receipt')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({ summary: 'Generar PDF de evidencia PSAV y guardarlo en receipt_url (bolivia_to_world)' })
+  generatePsavReceipt(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.paymentOrdersService.generatePsavReceipt(id, user.id);
+  }
+
   @Post(':id/approve')
   @Roles('staff', 'admin', 'super_admin')
   @ApiOperation({ summary: 'Aprobar orden (deposit_received → processing)' })

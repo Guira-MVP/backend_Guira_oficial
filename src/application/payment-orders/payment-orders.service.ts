@@ -17,6 +17,7 @@ import { ExchangeRatesService } from '../exchange-rates/exchange-rates.service';
 import { BridgeApiClient } from '../bridge/bridge-api.client';
 import { ClientBankAccountsService } from '../client-bank-accounts/client-bank-accounts.service';
 import { OrderReviewService } from './order-review.service';
+import { PdfService } from '../../core/pdf/pdf.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/dto/notifications.dto';
 import { OrdersGateway } from '../orders/orders.gateway';
@@ -91,6 +92,7 @@ export class PaymentOrdersService {
     private readonly notificationsService: NotificationsService,
     private readonly ordersGateway: OrdersGateway,
     private readonly emailService: EmailService,
+    private readonly pdfService: PdfService,
   ) {}
 
   private async getActorRole(actorId: string): Promise<string> {
@@ -4850,5 +4852,103 @@ export class PaymentOrdersService {
       default:
         throw new BadRequestException(`Flujo no soportado: ${dto.flow_type}`);
     }
+  }
+
+  /**
+   * Genera el PDF de evidencia PSAV, lo sube al bucket y actualiza receipt_url.
+   * Solo aplica a órdenes bolivia_to_world en estado deposit_received.
+   */
+  async generatePsavReceipt(orderId: string, actorId: string) {
+    const { data: order, error: orderErr } = await this.supabase
+      .from('payment_orders')
+      .select('*')
+      .eq('id', orderId)
+      .single();
+
+    if (orderErr || !order) throw new NotFoundException('Orden no encontrada');
+    if (order.flow_type !== 'bolivia_to_world') {
+      throw new BadRequestException('La generación de evidencia PSAV solo aplica al flujo bolivia_to_world');
+    }
+    if (order.status !== 'deposit_received') {
+      throw new BadRequestException(
+        `La orden debe estar en estado "deposit_received" para generar la evidencia. Estado actual: "${order.status}"`,
+      );
+    }
+
+    // Cargar profile del cliente → assigned_psav_id
+    const { data: profile } = await this.supabase
+      .from('profiles')
+      .select('assigned_psav_id')
+      .eq('id', order.user_id)
+      .single();
+
+    const psavId = profile?.assigned_psav_id;
+    if (!psavId) {
+      throw new BadRequestException(
+        'El cliente no tiene un agente PSAV asignado. Asigna uno desde el panel antes de generar la evidencia.',
+      );
+    }
+
+    // Cargar datos del agente PSAV
+    const { data: psavAgent } = await this.supabase
+      .from('psavs')
+      .select('id, name, verification_code')
+      .eq('id', psavId)
+      .single();
+
+    if (!psavAgent) {
+      throw new NotFoundException(`Agente PSAV con id "${psavId}" no encontrado`);
+    }
+
+    // Cargar canales del PSAV (todas las cuentas activas)
+    const { data: psavChannels } = await this.supabase
+      .from('psav_accounts')
+      .select('*')
+      .eq('psav_id', psavId)
+      .eq('is_active', true)
+      .order('type');
+
+    // Generar PDF
+    const pdfBuffer = await this.pdfService.generatePsavReceiptPdf(
+      order,
+      psavAgent,
+      psavChannels ?? [],
+    );
+
+    // Subir al bucket payment-receipts
+    const timestamp = Date.now();
+    const storagePath = `${order.user_id}/${orderId}_psav_receipt_${timestamp}.pdf`;
+
+    const { error: uploadErr } = await this.supabase.storage
+      .from('payment-receipts')
+      .upload(storagePath, pdfBuffer, { contentType: 'application/pdf', upsert: true });
+
+    if (uploadErr) {
+      throw new BadRequestException(`Error al subir el PDF al bucket: ${uploadErr.message}`);
+    }
+
+    const receiptUrl = `payment-receipts/${storagePath}`;
+
+    // Actualizar receipt_url en la orden
+    const { data: updated, error: updateErr } = await this.supabase
+      .from('payment_orders')
+      .update({ receipt_url: receiptUrl })
+      .eq('id', orderId)
+      .select()
+      .single();
+
+    if (updateErr || !updated) throwDbError(updateErr ?? new Error('No se pudo actualizar la orden'));
+
+    // Audit log
+    void this.supabase.from('audit_logs').insert({
+      actor_id: actorId,
+      action: 'GENERATE_PSAV_RECEIPT',
+      target_type: 'payment_order',
+      target_id: orderId,
+      metadata: { psav_id: psavId, psav_name: psavAgent.name, receipt_url: receiptUrl },
+    });
+
+    this.logger.log(`📄 Evidencia PSAV generada para orden ${orderId} — PSAV: ${psavAgent.name}`);
+    return updated;
   }
 }
