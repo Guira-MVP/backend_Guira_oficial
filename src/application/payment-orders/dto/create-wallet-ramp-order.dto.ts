@@ -175,14 +175,19 @@ export class CreateWalletRampOrderDto {
   })
   source_currency?: string;
 
-  // ── wallet_to_fiat / bridge_wallet_to_fiat_us: proveedor fiat destino ──
+  // ── wallet_to_fiat / bridge_wallet_to_fiat_us / bridge_wallet_to_crypto: proveedor destino ──
   @ApiPropertyOptional({
     description:
-      'UUID del proveedor (supplier) con bridge_external_account_id registrado.',
+      'UUID del proveedor (supplier) destino. Requerido para wallet_to_fiat, bridge_wallet_to_fiat_us y bridge_wallet_to_crypto.',
   })
   @ValidateIf((o) =>
-    ['wallet_to_fiat', 'bridge_wallet_to_fiat_us'].includes(o.flow_type),
+    [
+      'wallet_to_fiat',
+      'bridge_wallet_to_fiat_us',
+      'bridge_wallet_to_crypto',
+    ].includes(o.flow_type),
   )
+  @IsOptional()
   @IsUUID()
   supplier_id?: string;
 

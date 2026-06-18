@@ -2346,6 +2346,38 @@ export class PaymentOrdersService {
       );
     }
 
+    // Validar supplier_id si viene en el payload (obligatorio desde la UI)
+    if (dto.supplier_id) {
+      const { data: supplier } = await this.supabase
+        .from('suppliers')
+        .select('id, bank_details')
+        .eq('id', dto.supplier_id)
+        .eq('user_id', userId)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (!supplier) {
+        throw new BadRequestException(
+          'El proveedor seleccionado no existe o no pertenece a tu cuenta.',
+        );
+      }
+
+      const bankDetails = supplier.bank_details as Record<string, string>;
+      const supplierNet = bankDetails?.wallet_network?.toLowerCase();
+      const supplierCur = bankDetails?.wallet_currency?.toLowerCase();
+
+      if (supplierNet !== destinationRailPre) {
+        throw new BadRequestException(
+          `La red del proveedor (${supplierNet}) no coincide con la red de destino (${destinationRailPre}).`,
+        );
+      }
+      if (supplierCur !== destCurrencyPre) {
+        throw new BadRequestException(
+          `El token del proveedor (${supplierCur}) no coincide con el token de destino (${destCurrencyPre}).`,
+        );
+      }
+    }
+
     // Validar bridge_customer_id antes de reservar saldo
     const { data: profile } = await this.supabase
       .from('profiles')
@@ -2394,6 +2426,7 @@ export class PaymentOrdersService {
         supporting_document_url: dto.supporting_document_url,
         notes: dto.notes,
         status: 'created',
+        ...(dto.supplier_id ? { supplier_id: dto.supplier_id } : {}),
       })
       .select()
       .single();
