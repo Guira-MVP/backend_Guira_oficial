@@ -4866,8 +4866,8 @@ export class PaymentOrdersService {
       .single();
 
     if (orderErr || !order) throw new NotFoundException('Orden no encontrada');
-    if (order.flow_type !== 'bolivia_to_world') {
-      throw new BadRequestException('La generación de evidencia PSAV solo aplica al flujo bolivia_to_world');
+    if (!['bolivia_to_world', 'bolivia_to_wallet', 'fiat_bo_to_bridge_wallet'].includes(order.flow_type ?? '')) {
+      throw new BadRequestException('La generación de evidencia PSAV solo aplica a los flujos bolivia_to_world, bolivia_to_wallet y fiat_bo_to_bridge_wallet');
     }
     if (order.status !== 'deposit_received') {
       throw new BadRequestException(
