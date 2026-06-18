@@ -740,6 +740,13 @@ export class AdminPaymentOrdersController {
     return this.psavService.updateAccount(id, dto as any);
   }
 
+  @Delete('psav-accounts/:id')
+  @Roles('admin', 'super_admin')
+  @ApiOperation({ summary: 'Eliminar canal PSAV' })
+  deletePsavAccount(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.psavService.deleteAccount(id);
+  }
+
   // ── Limits Admin ──
 
   @Get('limits')

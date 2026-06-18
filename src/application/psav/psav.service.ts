@@ -231,6 +231,25 @@ export class PsavService {
     return this.updateAccount(id, { is_active: false });
   }
 
+  async deleteAccount(id: string) {
+    const { error } = await this.supabase
+      .from('psav_accounts')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+
+    this.adminGateway.emitPsavConfigUpdated({
+      id,
+      name: '',
+      type: '',
+      currency: '',
+      is_active: false,
+      updated_at: new Date().toISOString(),
+      action: 'deleted',
+    });
+  }
+
   // ── Admin CRUD de agentes PSAV ──────────────────────────────────
 
   async listPsavs() {
