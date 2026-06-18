@@ -243,7 +243,7 @@ export class PsavService {
         is_active,
         created_at,
         updated_at,
-        channels:psav_accounts(id, name, type, currency, is_active),
+        channels:psav_accounts(id, name, type, currency, is_active, bank_name, account_number, routing_number, account_holder, qr_url, crypto_address, crypto_network),
         assigned_count:profiles(count)
       `)
       .order('name');
