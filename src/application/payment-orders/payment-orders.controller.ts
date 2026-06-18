@@ -679,6 +679,13 @@ export class AdminPaymentOrdersController {
     return this.psavService.deactivatePsav(id);
   }
 
+  @Get('psavs/:id/clients')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({ summary: 'Listar clientes asignados a un agente PSAV' })
+  listPsavClients(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.psavService.listAssignedClients(id);
+  }
+
   // ── Asignación manual de PSAV a usuario ──
 
   @Post('psavs/assign-user')

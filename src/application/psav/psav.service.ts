@@ -302,6 +302,17 @@ export class PsavService {
     return this.updatePsav(id, { is_active: false });
   }
 
+  async listAssignedClients(psavId: string) {
+    const { data, error } = await this.supabase
+      .from('profiles')
+      .select('id, full_name, email, onboarding_status, role, created_at, avatar_url, country_code')
+      .eq('assigned_psav_id', psavId)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+    return data ?? [];
+  }
+
   // ── Asignación de PSAV a usuarios ──────────────────────────────
 
   /**
