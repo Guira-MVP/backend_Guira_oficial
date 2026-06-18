@@ -2078,7 +2078,7 @@ export class WebhooksService {
     const { data: paymentOrder } = await this.supabase
       .from('payment_orders')
       .select(
-        'id, user_id, wallet_id, flow_type, amount, fee_amount, amount_destination, currency, source_currency, destination_currency, deposit_reference_code',
+        'id, user_id, wallet_id, flow_type, amount, fee_amount, amount_destination, currency, source_currency, destination_currency, deposit_reference_code, receipt_url',
       )
       .eq('bridge_transfer_id', bridgeTransferId)
       .in('status', [
@@ -2154,7 +2154,8 @@ export class WebhooksService {
             completed_at: new Date().toISOString(),
             tx_hash: destinationTxHash,
             source_tx_hash: sourceTxHash,
-            receipt_url: receiptUrl,
+            // No sobreescribir receipt_url si ya tiene el PDF de evidencia PSAV generado
+            ...(!paymentOrder.receipt_url && receiptUrl ? { receipt_url: receiptUrl } : {}),
             provider_reference:
               traceNumber ??
               destinationTxHash ??
