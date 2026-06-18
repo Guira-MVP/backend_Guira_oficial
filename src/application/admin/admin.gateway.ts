@@ -54,7 +54,7 @@ export interface PsavConfigUpdatedPayload {
   currency: string;
   is_active: boolean;
   updated_at: string;
-  action: 'created' | 'updated';
+  action: 'created' | 'updated' | 'deleted';
 }
 
 // ── Gateway ───────────────────────────────────────────────────────
