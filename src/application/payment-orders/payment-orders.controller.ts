@@ -633,29 +633,80 @@ export class AdminPaymentOrdersController {
     return this.paymentOrdersService.failOrder(id, user.id, dto);
   }
 
-  // ── PSAV Accounts Admin ──
+  // ── PSAV Agents Admin ──
+
+  @Get('psavs')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({ summary: 'Listar agentes PSAV con sus canales y conteo de clientes' })
+  listPsavs() {
+    return this.psavService.listPsavs();
+  }
+
+  @Post('psavs')
+  @Roles('admin', 'super_admin')
+  @ApiOperation({ summary: 'Crear agente PSAV' })
+  createPsav(@Body() dto: { name: string; verification_code: string }) {
+    if (!dto.name || !dto.verification_code) {
+      throw new BadRequestException('name y verification_code son requeridos');
+    }
+    return this.psavService.createPsav(dto as any);
+  }
+
+  @Patch('psavs/:id')
+  @Roles('admin', 'super_admin')
+  @ApiOperation({ summary: 'Actualizar agente PSAV (nombre, código, is_active)' })
+  updatePsav(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: Record<string, unknown>,
+  ) {
+    return this.psavService.updatePsav(id, dto as any);
+  }
+
+  @Delete('psavs/:id')
+  @Roles('admin', 'super_admin')
+  @ApiOperation({ summary: 'Desactivar agente PSAV' })
+  deactivatePsav(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.psavService.deactivatePsav(id);
+  }
+
+  // ── Asignación manual de PSAV a usuario ──
+
+  @Post('psavs/assign-user')
+  @Roles('admin', 'super_admin')
+  @ApiOperation({ summary: 'Asignar (o reasignar) un PSAV específico a un usuario' })
+  assignPsavToUser(
+    @Body() dto: { user_id: string; psav_id: string },
+  ) {
+    if (!dto.user_id || !dto.psav_id) {
+      throw new BadRequestException('user_id y psav_id son requeridos');
+    }
+    return this.psavService.assignPsavToUser(dto.user_id, dto.psav_id);
+  }
+
+  // ── PSAV Accounts Admin (canales) ──
 
   @Get('psav-accounts')
   @Roles('staff', 'admin', 'super_admin')
-  @ApiOperation({ summary: 'Listar cuentas PSAV' })
-  listPsavAccounts() {
-    return this.psavService.listAccounts();
+  @ApiOperation({ summary: 'Listar canales PSAV (opcionalmente filtrar por psav_id)' })
+  listPsavAccounts(@Query('psav_id') psavId?: string) {
+    return this.psavService.listAccounts(psavId);
   }
 
   @Post('psav-accounts')
   @Roles('admin', 'super_admin')
-  @ApiOperation({ summary: 'Crear o actualizar cuenta PSAV (upsert)' })
+  @ApiOperation({ summary: 'Crear canal PSAV (requiere psav_id)' })
   upsertPsavAccount(@Body() dto: UpsertPsavAccountDto) {
     if (dto.id) {
       const { id, ...rest } = dto;
       return this.psavService.updateAccount(id, rest);
     }
-    if (!dto.name || !dto.type || !dto.currency) {
+    if (!dto.psav_id || !dto.name || !dto.type || !dto.currency) {
       throw new BadRequestException(
-        'name, type y currency son requeridos para crear una cuenta PSAV',
+        'psav_id, name, type y currency son requeridos para crear un canal PSAV',
       );
     }
     return this.psavService.createAccount({
+      psav_id: dto.psav_id,
       name: dto.name,
       type: dto.type,
       currency: dto.currency,
@@ -671,7 +722,7 @@ export class AdminPaymentOrdersController {
 
   @Patch('psav-accounts/:id')
   @Roles('admin', 'super_admin')
-  @ApiOperation({ summary: 'Actualizar cuenta PSAV' })
+  @ApiOperation({ summary: 'Actualizar canal PSAV' })
   updatePsavAccount(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: Record<string, unknown>,

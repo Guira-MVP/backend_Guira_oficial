@@ -11,6 +11,7 @@ import { throwDbError } from '../../core/utils/db-error.util';
 import { BridgeService } from '../bridge/bridge.service';
 import { BridgeCustomerService } from '../onboarding/bridge-customer.service';
 import { EmailService } from '../email/email.service';
+import { PsavService } from '../psav/psav.service';
 import { SetLimitsDto } from './dto/admin-compliance.dto';
 
 @Injectable()
@@ -22,6 +23,7 @@ export class ComplianceActionsService {
     private readonly bridgeService: BridgeService,
     private readonly bridgeCustomerService: BridgeCustomerService,
     private readonly emailService: EmailService,
+    private readonly psavService: PsavService,
   ) {}
 
   // ── REVIEWS (Lectura) ─────────────────────────────────────────────
@@ -490,6 +492,13 @@ export class ComplianceActionsService {
         name: profile.full_name ?? undefined,
       });
     }
+
+    // 4. Asignar PSAV equitativamente (no bloqueante — falla silenciosamente)
+    void this.psavService.assignPsavEquitably(userId).catch((err) =>
+      this.logger.error(
+        `assignPsavEquitably falló para usuario ${userId}: ${err?.message}`,
+      ),
+    );
   }
 
   /**

@@ -590,8 +590,9 @@ export class PaymentOrdersService {
       extAccount.iban ??
       extAccount.swift_bic;
 
-    // Obtener cuenta PSAV para depósito en BOB
-    const psavAccount = await this.psavService.getDepositAccount(
+    // Obtener canal PSAV del usuario para depósito en BOB
+    const psavAccount = await this.psavService.getDepositAccountForUser(
+      userId,
       'bank_bo',
       'BOB',
     );
@@ -934,7 +935,8 @@ export class PaymentOrdersService {
       liquidationAddressForFee.bridge_liquidation_address_id,
     );
 
-    const psavAccount = await this.psavService.getDepositAccount(
+    const psavAccount = await this.psavService.getDepositAccountForUser(
+      userId,
       'bank_bo',
       'BOB',
     );
@@ -1030,8 +1032,9 @@ export class PaymentOrdersService {
     const bankAccount =
       await this.bankAccountsService.getApprovedAccountForWithdrawal(userId);
 
-    // Obtener cuenta PSAV para depósito en USD (el usuario deposita USD)
-    const psavAccount = await this.psavService.getDepositAccount(
+    // Obtener canal PSAV del usuario para depósito en USD
+    const psavAccount = await this.psavService.getDepositAccountForUser(
+      userId,
       'bank_us',
       'USD',
     );
@@ -1593,7 +1596,8 @@ export class PaymentOrdersService {
       );
     }
 
-    const psavAccount = await this.psavService.getDepositAccount(
+    const psavAccount = await this.psavService.getDepositAccountForUser(
+      userId,
       'bank_bo',
       'BOB',
     );
@@ -2000,7 +2004,7 @@ export class PaymentOrdersService {
       );
     }
 
-    const activePsavAccounts = await this.psavService.getActiveCryptoAccounts();
+    const activePsavAccounts = await this.psavService.getActiveCryptoAccountsForUser(userId);
     const psavMatch = resolveFiatBoPsavMatch(
       sourceCurrency,
       activePsavAccounts,

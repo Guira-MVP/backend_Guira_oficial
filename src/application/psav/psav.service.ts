@@ -2,6 +2,7 @@ import { Injectable, Inject, NotFoundException, Logger } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
 import { AdminGateway } from '../admin/admin.gateway';
+import type { CreatePsavDto, UpdatePsavDto } from './dto/create-psav.dto';
 
 export enum PsavAccountType {
   BANK_BO = 'bank_bo',
@@ -18,23 +19,62 @@ export class PsavService {
     private readonly adminGateway: AdminGateway,
   ) {}
 
+  // ── Resolución por usuario ──────────────────────────────────────
+
   /**
-   * Obtiene la cuenta PSAV activa para un tipo y moneda específicos.
-   * Se usa internamente al crear una orden que requiere PSAV.
+   * Devuelve el psav_id asignado al usuario, o null si no tiene ninguno.
    */
-  async getDepositAccount(type: string, currency: string) {
-    const { data, error } = await this.supabase
+  private async resolveUserPsavId(userId: string): Promise<string | null> {
+    const { data } = await this.supabase
+      .from('profiles')
+      .select('assigned_psav_id')
+      .eq('id', userId)
+      .single();
+    return data?.assigned_psav_id ?? null;
+  }
+
+  /**
+   * Obtiene la cuenta PSAV activa del usuario para un tipo y moneda concretos.
+   * Primero usa el PSAV asignado al usuario; si no tiene, busca globalmente
+   * (comportamiento anterior — compatibilidad con clientes sin asignar).
+   */
+  async getDepositAccountForUser(userId: string, type: string, currency: string) {
+    const psavId = await this.resolveUserPsavId(userId);
+    return this.getDepositAccount(type, currency, psavId ?? undefined);
+  }
+
+  /**
+   * Obtiene todas las cuentas PSAV crypto activas para el usuario.
+   * Filtra por su PSAV asignado; fallback global si no tiene.
+   */
+  async getActiveCryptoAccountsForUser(userId: string) {
+    const psavId = await this.resolveUserPsavId(userId);
+    return this.getActiveCryptoAccounts(psavId ?? undefined);
+  }
+
+  // ── Acceso a canales (psav_accounts) ───────────────────────────
+
+  /**
+   * Obtiene la cuenta PSAV activa para un tipo y moneda.
+   * Si psavId se provee, restringe la búsqueda a ese agente.
+   */
+  async getDepositAccount(type: string, currency: string, psavId?: string) {
+    let query = this.supabase
       .from('psav_accounts')
       .select('*')
       .eq('type', type)
       .eq('currency', currency.toUpperCase())
-      .eq('is_active', true)
-      .limit(1)
-      .single();
+      .eq('is_active', true);
+
+    if (psavId) {
+      query = query.eq('psav_id', psavId);
+    }
+
+    const { data, error } = await query.limit(1).single();
 
     if (error || !data) {
       throw new NotFoundException(
-        `No hay cuenta PSAV activa para ${type}/${currency}`,
+        `No hay cuenta PSAV activa para ${type}/${currency}${psavId ? ` (PSAV ${psavId})` : ''}`,
       );
     }
 
@@ -72,35 +112,45 @@ export class PsavService {
 
   /**
    * Obtiene todas las cuentas PSAV crypto activas.
-   * Se usa para resolución dinámica del PSAV en flujos off-ramp
-   * donde la divisa de destino no es fija.
+   * Se usa para resolución dinámica en flujos off-ramp.
    */
-  async getActiveCryptoAccounts() {
-    const { data, error } = await this.supabase
+  async getActiveCryptoAccounts(psavId?: string) {
+    let query = this.supabase
       .from('psav_accounts')
       .select('*')
       .eq('type', 'crypto')
       .eq('is_active', true)
       .order('currency');
 
+    if (psavId) {
+      query = query.eq('psav_id', psavId);
+    }
+
+    const { data, error } = await query;
     if (error) throw error;
     return data ?? [];
   }
 
-  // ── Admin CRUD ─────────────────────────────────
+  // ── Admin CRUD de canales (psav_accounts) ──────────────────────
 
-  async listAccounts() {
-    const { data, error } = await this.supabase
+  async listAccounts(psavId?: string) {
+    let query = this.supabase
       .from('psav_accounts')
-      .select('*')
+      .select('*, psav:psavs(id, name)')
       .order('type')
       .order('currency');
 
+    if (psavId) {
+      query = query.eq('psav_id', psavId);
+    }
+
+    const { data, error } = await query;
     if (error) throw error;
     return data ?? [];
   }
 
   async createAccount(dto: {
+    psav_id: string;
     name: string;
     type: string;
     currency: string;
@@ -124,7 +174,6 @@ export class PsavService {
 
     if (error) throw error;
 
-    // WS: notificar al staff que se creó una cuenta PSAV
     this.adminGateway.emitPsavConfigUpdated({
       id: data.id,
       name: data.name,
@@ -165,7 +214,6 @@ export class PsavService {
       throw new NotFoundException('Cuenta PSAV no encontrada');
     }
 
-    // WS: notificar al staff que se actualizó una cuenta PSAV
     this.adminGateway.emitPsavConfigUpdated({
       id: data.id,
       name: data.name,
@@ -181,5 +229,130 @@ export class PsavService {
 
   async deactivateAccount(id: string) {
     return this.updateAccount(id, { is_active: false });
+  }
+
+  // ── Admin CRUD de agentes PSAV ──────────────────────────────────
+
+  async listPsavs() {
+    const { data, error } = await this.supabase
+      .from('psavs')
+      .select(`
+        id,
+        name,
+        verification_code,
+        is_active,
+        created_at,
+        updated_at,
+        channels:psav_accounts(id, name, type, currency, is_active),
+        assigned_count:profiles(count)
+      `)
+      .order('name');
+
+    if (error) throw error;
+    return data ?? [];
+  }
+
+  async createPsav(dto: CreatePsavDto) {
+    const { data, error } = await this.supabase
+      .from('psavs')
+      .insert({ ...dto, is_active: true })
+      .select()
+      .single();
+
+    if (error) throw error;
+    this.logger.log(`PSAV creado: ${data.id} — ${data.name}`);
+    return data;
+  }
+
+  async updatePsav(id: string, dto: UpdatePsavDto) {
+    const { data, error } = await this.supabase
+      .from('psavs')
+      .update({ ...dto, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error || !data) {
+      throw new NotFoundException('Agente PSAV no encontrado');
+    }
+
+    return data;
+  }
+
+  async deactivatePsav(id: string) {
+    return this.updatePsav(id, { is_active: false });
+  }
+
+  // ── Asignación de PSAV a usuarios ──────────────────────────────
+
+  /**
+   * Asigna el PSAV activo con menos clientes al usuario dado.
+   * Se llama automáticamente al aprobar KYC/KYB del cliente.
+   */
+  async assignPsavEquitably(userId: string): Promise<void> {
+    // Contar clientes asignados por PSAV activo
+    const { data: psavs, error } = await this.supabase
+      .from('psavs')
+      .select('id, profiles(count)')
+      .eq('is_active', true);
+
+    if (error || !psavs?.length) {
+      this.logger.warn(
+        `assignPsavEquitably: no hay PSAVs activos para asignar al usuario ${userId}`,
+      );
+      return;
+    }
+
+    // Elegir el PSAV con menos usuarios asignados
+    const sorted = [...psavs].sort((a, b) => {
+      const countA = (a.profiles as unknown as { count: number }[])[0]?.count ?? 0;
+      const countB = (b.profiles as unknown as { count: number }[])[0]?.count ?? 0;
+      return countA - countB;
+    });
+
+    const chosen = sorted[0];
+
+    const { error: updateError } = await this.supabase
+      .from('profiles')
+      .update({ assigned_psav_id: chosen.id })
+      .eq('id', userId);
+
+    if (updateError) {
+      this.logger.error(
+        `assignPsavEquitably: error al asignar PSAV ${chosen.id} a usuario ${userId}`,
+        updateError,
+      );
+    } else {
+      this.logger.log(
+        `PSAV ${chosen.id} asignado equitativamente al usuario ${userId}`,
+      );
+    }
+  }
+
+  /**
+   * Permite al admin asignar (o reasignar) un PSAV específico a un usuario.
+   */
+  async assignPsavToUser(userId: string, psavId: string): Promise<void> {
+    // Verificar que el PSAV existe y está activo
+    const { data: psav, error: psavError } = await this.supabase
+      .from('psavs')
+      .select('id, name')
+      .eq('id', psavId)
+      .single();
+
+    if (psavError || !psav) {
+      throw new NotFoundException('Agente PSAV no encontrado');
+    }
+
+    const { error } = await this.supabase
+      .from('profiles')
+      .update({ assigned_psav_id: psavId })
+      .eq('id', userId);
+
+    if (error) throw error;
+
+    this.logger.log(
+      `Admin reasignó PSAV "${psav.name}" (${psavId}) al usuario ${userId}`,
+    );
   }
 }

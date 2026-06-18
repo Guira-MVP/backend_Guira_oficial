@@ -16,6 +16,11 @@ export class UpsertPsavAccountDto {
   @IsUUID()
   id?: string;
 
+  @ApiPropertyOptional({ description: 'UUID del agente PSAV al que pertenece este canal' })
+  @IsOptional()
+  @IsUUID()
+  psav_id?: string;
+
   @ApiPropertyOptional({ example: 'Banco Unión BO', maxLength: 120 })
   @IsOptional()
   @IsString()
