@@ -1009,7 +1009,7 @@ export class PdfService {
               dataRow('Comisión Operativa', `${this.fmtAmount(order.fee_amount)} ${(order.currency ?? 'BOB').toUpperCase()}`),
               dataRow('Monto Neto Procesado', `${this.fmtAmount(order.net_amount)} ${(order.currency ?? 'BOB').toUpperCase()}`, true),
               dataRow('Fecha de Creación del Expediente', orderDate),
-              dataRow('Estado al Momento de Emisión', 'DEPÓSITO RECIBIDO — EN REVISIÓN', true),
+              dataRow('Estado al Momento de Emisión', 'COMPLETADO — TRANSFERENCIA ENVIADA', true),
             ],
           },
           layout: borderedLayout,

@@ -6,12 +6,14 @@ import { WalletsModule } from '../wallets/wallets.module';
 import { ComplianceModule } from '../compliance/compliance.module';
 import { OrdersModule } from '../orders/orders.module';
 import { AdminModule } from '../admin/admin.module';
+import { PaymentOrdersModule } from '../payment-orders/payment-orders.module';
 
 @Module({
   imports: [
     BridgeModule,
     WalletsModule,
     forwardRef(() => ComplianceModule),
+    PaymentOrdersModule,
     OrdersModule,
     AdminModule,
   ],

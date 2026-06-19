@@ -10,6 +10,7 @@ import { ComplianceActionsService } from '../compliance/compliance-actions.servi
 import { OrdersGateway } from '../orders/orders.gateway';
 import { AdminGateway } from '../admin/admin.gateway';
 import { EmailService } from '../email/email.service';
+import { PaymentOrdersService } from '../payment-orders/payment-orders.service';
 
 interface SinkEventDto {
   provider: string;
@@ -40,6 +41,7 @@ export class WebhooksService {
     private readonly ordersGateway: OrdersGateway,
     private readonly adminGateway: AdminGateway,
     private readonly emailService: EmailService,
+    private readonly paymentOrdersService: PaymentOrdersService,
   ) {}
 
   /**
@@ -2327,6 +2329,11 @@ export class WebhooksService {
           });
         }
 
+        // Comprobante PSAV — generado automáticamente al completar fiat_bo_to_bridge_wallet (fire-and-forget)
+        if (paymentOrder.flow_type === 'fiat_bo_to_bridge_wallet') {
+          void this.paymentOrdersService.storePsavReceiptOnCompletion(paymentOrder.id);
+        }
+
         this.logger.log(
           `✅ Payment order ${paymentOrder.id} completada vía webhook (transfer ${bridgeTransferId})`,
         );
@@ -3123,6 +3130,9 @@ export class WebhooksService {
       action: 'PAYMENT_ORDER_COMPLETED_VIA_DRAIN',
       description: `Orden ${order.id} (${order.flow_type}) completada vía webhook drain ${drainId}`,
     });
+
+    // 5. Comprobante PSAV — generado automáticamente al completar (fire-and-forget)
+    void this.paymentOrdersService.storePsavReceiptOnCompletion(order.id);
 
     this.logger.log(
       `✅ Orden ${order.id} completada vía drain ${drainId} (payment_processed)`,
