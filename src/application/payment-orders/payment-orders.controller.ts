@@ -655,9 +655,9 @@ export class AdminPaymentOrdersController {
   @Post('psavs')
   @Roles('admin', 'super_admin')
   @ApiOperation({ summary: 'Crear agente PSAV' })
-  createPsav(@Body() dto: { name: string; verification_code: string }) {
-    if (!dto.name || !dto.verification_code) {
-      throw new BadRequestException('name y verification_code son requeridos');
+  createPsav(@Body() dto: { name: string; verification_code?: string }) {
+    if (!dto.name) {
+      throw new BadRequestException('name es requerido');
     }
     return this.psavService.createPsav(dto as any);
   }

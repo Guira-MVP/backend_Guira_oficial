@@ -4888,75 +4888,164 @@ export class PaymentOrdersService {
   }
 
   /**
-   * Núcleo de generación de comprobante PSAV: carga agente, genera PDF, sube al bucket
-   * y actualiza receipt_url. Devuelve la URL o null si no hay PSAV asignado.
+   * Núcleo de generación del C.T.A.V.: carga agente, KYC/KYB, LA, genera PDF,
+   * sube al bucket y actualiza receipt_url + ctav_id.
    * No valida estado — el caller es responsable de verificar precondiciones.
    */
   private async _storePsavReceipt(order: any): Promise<string | null> {
+    // ── 1. Perfil + PSAV ──
     const { data: profile } = await this.supabase
       .from('profiles')
-      .select('assigned_psav_id')
+      .select('assigned_psav_id, full_name, email, phone')
       .eq('id', order.user_id)
       .single();
 
     const psavId = profile?.assigned_psav_id;
     if (!psavId) {
-      this.logger.warn(`⚠️ Sin agente PSAV asignado para orden ${order.id} — comprobante omitido`);
+      this.logger.warn(`⚠️ Sin agente PSAV asignado para orden ${order.id} — C.T.A.V. omitido`);
       return null;
     }
 
     const { data: psavAgent } = await this.supabase
       .from('psavs')
-      .select('id, name, verification_code')
+      .select('id, name')
       .eq('id', psavId)
       .single();
 
     if (!psavAgent) {
-      this.logger.warn(`⚠️ Agente PSAV ${psavId} no encontrado — comprobante omitido`);
+      this.logger.warn(`⚠️ Agente PSAV ${psavId} no encontrado — C.T.A.V. omitido`);
       return null;
     }
 
-    const { data: psavChannels } = await this.supabase
-      .from('psav_accounts')
-      .select('*')
-      .eq('psav_id', psavId)
-      .eq('is_active', true)
-      .order('type');
+    // ── 2. KYC / KYB — determinar tipo de persona y documento ──
+    const ID_TYPE_LABELS: Record<string, string> = {
+      national_id:      'CI Nacional',
+      passport:         'Pasaporte',
+      drivers_license:  'Licencia de Conducir',
+    };
 
+    const { data: person } = await this.supabase
+      .from('people')
+      .select('id_type, id_number, tax_id')
+      .eq('user_id', order.user_id)
+      .maybeSingle();
+
+    const { data: business } = person
+      ? { data: null }
+      : await this.supabase
+          .from('businesses')
+          .select('legal_name, tax_id')
+          .eq('user_id', order.user_id)
+          .maybeSingle();
+
+    let clientInfo: {
+      full_name: string;
+      email: string;
+      phone?: string | null;
+      identity_label: string;
+      identity_value: string;
+      nit?: string | null;
+      is_company: boolean;
+    };
+
+    if (person) {
+      clientInfo = {
+        full_name:      profile?.full_name ?? 'N/D',
+        email:          profile?.email ?? 'N/D',
+        phone:          profile?.phone ?? null,
+        identity_label: ID_TYPE_LABELS[person.id_type] ?? 'Documento',
+        identity_value: person.id_number ?? 'N/D',
+        nit:            person.tax_id ?? null,
+        is_company:     false,
+      };
+    } else if (business) {
+      clientInfo = {
+        full_name:      business.legal_name ?? profile?.full_name ?? 'N/D',
+        email:          profile?.email ?? 'N/D',
+        phone:          profile?.phone ?? null,
+        identity_label: 'NIT',
+        identity_value: business.tax_id ?? 'N/D',
+        nit:            null,
+        is_company:     true,
+      };
+    } else {
+      // Fallback: sin KYC/KYB completado
+      clientInfo = {
+        full_name:      profile?.full_name ?? 'N/D',
+        email:          profile?.email ?? 'N/D',
+        phone:          profile?.phone ?? null,
+        identity_label: 'Documento',
+        identity_value: 'N/D',
+        nit:            null,
+        is_company:     false,
+      };
+    }
+
+    // ── 3. Liquidation Address (wallet destino) ──
+    let liquidationAddress: { address: string; chain?: string | null } | null = null;
+
+    if (order.bridge_liquidation_address_id) {
+      const { data: la } = await this.supabase
+        .from('bridge_liquidation_addresses')
+        .select('address, chain')
+        .eq('bridge_liquidation_address_id', order.bridge_liquidation_address_id)
+        .maybeSingle();
+      if (la?.address) liquidationAddress = { address: la.address, chain: la.chain };
+    } else if (order.bridge_source_deposit_instructions) {
+      // fiat_bo_to_bridge_wallet guarda la dirección en el JSONB de instrucciones
+      const instr = order.bridge_source_deposit_instructions as Record<string, any>;
+      const addr = instr?.to_address ?? instr?.address ?? null;
+      if (addr) liquidationAddress = { address: addr, chain: null };
+    }
+
+    // ── 4. ctav_id: reutilizar si existe, generar si es nuevo ──
+    const ctavId: string = order.ctav_id ?? crypto.randomUUID();
+
+    // ── 5. Generar PDF ──
     const pdfBuffer = await this.pdfService.generatePsavReceiptPdf(
       order,
       psavAgent,
-      psavChannels ?? [],
+      clientInfo,
+      ctavId,
+      liquidationAddress,
     );
 
+    // ── 6. Subir al bucket payment-receipts ──
     const timestamp = Date.now();
-    const storagePath = `${order.user_id}/${order.id}_psav_receipt_${timestamp}.pdf`;
+    const storagePath = `${order.user_id}/${order.id}_ctav_${timestamp}.pdf`;
 
     const { error: uploadErr } = await this.supabase.storage
       .from('payment-receipts')
       .upload(storagePath, pdfBuffer, { contentType: 'application/pdf', upsert: true });
 
     if (uploadErr) {
-      this.logger.error(`❌ Error subiendo comprobante PSAV para orden ${order.id}: ${uploadErr.message}`);
+      this.logger.error(`❌ Error subiendo C.T.A.V. para orden ${order.id}: ${uploadErr.message}`);
       return null;
     }
 
     const receiptUrl = `payment-receipts/${storagePath}`;
 
+    // ── 7. Persistir receipt_url y ctav_id ──
     await this.supabase
       .from('payment_orders')
-      .update({ receipt_url: receiptUrl })
+      .update({ receipt_url: receiptUrl, ctav_id: ctavId })
       .eq('id', order.id);
 
     void this.supabase.from('audit_logs').insert({
       actor_id: null,
-      action: 'GENERATE_PSAV_RECEIPT',
+      action: 'GENERATE_CTAV',
       target_type: 'payment_order',
       target_id: order.id,
-      metadata: { psav_id: psavId, psav_name: psavAgent.name, receipt_url: receiptUrl, triggered_by: 'auto_on_complete' },
+      metadata: {
+        psav_id: psavId,
+        psav_name: psavAgent.name,
+        ctav_id: ctavId,
+        receipt_url: receiptUrl,
+        triggered_by: 'auto_on_complete',
+      },
     });
 
-    this.logger.log(`📄 Comprobante PSAV auto-generado para orden ${order.id} — PSAV: ${psavAgent.name}`);
+    this.logger.log(`📄 C.T.A.V. generado para orden ${order.id} — PSAV: ${psavAgent.name} — N° CTAV-${ctavId.slice(0, 8).toUpperCase()}`);
     return receiptUrl;
   }
 
@@ -5011,12 +5100,17 @@ export class PaymentOrdersService {
     }
 
     // Audit log con actor identificado (generación manual por staff)
+    const { data: orderAfter } = await this.supabase
+      .from('payment_orders')
+      .select('ctav_id')
+      .eq('id', orderId)
+      .single();
     void this.supabase.from('audit_logs').insert({
       actor_id: actorId,
-      action: 'GENERATE_PSAV_RECEIPT_MANUAL',
+      action: 'GENERATE_CTAV_MANUAL',
       target_type: 'payment_order',
       target_id: orderId,
-      metadata: { receipt_url: receiptUrl, triggered_by: 'staff_manual' },
+      metadata: { receipt_url: receiptUrl, ctav_id: orderAfter?.ctav_id ?? null, triggered_by: 'staff_manual' },
     });
 
     const { data: updated } = await this.supabase

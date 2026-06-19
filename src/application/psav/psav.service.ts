@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import { Injectable, Inject, NotFoundException, Logger } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
@@ -272,14 +273,17 @@ export class PsavService {
   }
 
   async createPsav(dto: CreatePsavDto) {
+    const code = dto.verification_code?.trim()
+      ?? `PSAV-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+
     const { data, error } = await this.supabase
       .from('psavs')
-      .insert({ ...dto, is_active: true })
+      .insert({ ...dto, verification_code: code, is_active: true })
       .select()
       .single();
 
     if (error) throw error;
-    this.logger.log(`PSAV creado: ${data.id} — ${data.name}`);
+    this.logger.log(`PSAV creado: ${data.id} — ${data.name} [code: ${data.verification_code}]`);
     return data;
   }
 

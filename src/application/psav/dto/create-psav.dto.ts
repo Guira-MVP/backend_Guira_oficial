@@ -13,10 +13,11 @@ export class CreatePsavDto {
   @MaxLength(120)
   name: string;
 
-  @ApiProperty({ example: 'PSAV-HE-001', maxLength: 60 })
+  @ApiPropertyOptional({ example: 'PSAV-A3F8B2C1', maxLength: 60 })
+  @IsOptional()
   @IsString()
   @MaxLength(60)
-  verification_code: string;
+  verification_code?: string;
 }
 
 export class UpdatePsavDto extends PartialType(CreatePsavDto) {

@@ -835,32 +835,57 @@ export class PdfService {
   }
 
   // ═══════════════════════════════════════════════════════════
-  //  PSAV RECEIPT PDF — Comprobante institucional de recepción
-  //  Paleta: grises formales, sin branding Guira.
+  //  C.T.A.V. — Comprobante de Transferencia de Activos Virtuales
+  //  Paleta teal institucional.
   // ═══════════════════════════════════════════════════════════
 
   async generatePsavReceiptPdf(
     order: any,
-    psavAgent: { id: string; name: string; verification_code: string },
-    psavChannels: any[],
+    psavAgent: { id: string; name: string },
+    client: {
+      full_name: string;
+      email: string;
+      phone?: string | null;
+      identity_label: string;
+      identity_value: string;
+      nit?: string | null;
+      is_company: boolean;
+    },
+    ctavId: string,
+    liquidationAddress?: { address: string; chain?: string | null } | null,
   ): Promise<Buffer> {
     const C = {
-      headerBg: '#1C2B3A',
-      headerText: '#FFFFFF',
-      sectionBg: '#374956',
+      headerBg:    '#1C3A3A',
+      headerText:  '#FFFFFF',
+      headerSub:   '#A8CCCA',
+      accent:      '#00968A',
+      sectionBg:   '#1A2E2E',
       sectionText: '#FFFFFF',
-      body: '#1A1A1A',
-      label: '#666666',
-      border: '#CCCCCC',
-      rowAlt: '#F7F7F7',
-      white: '#FFFFFF',
-      accent: '#3A6EA5',
+      summaryBg:   '#D6EEEC',
+      summaryLbl:  '#4A7A75',
+      body:        '#1A1A1A',
+      label:       '#888888',
+      border:      '#CCCCCC',
+      rowAlt:      '#F5F5F5',
+      white:       '#FFFFFF',
     };
 
-    const emitDate = this.fmtDate(new Date().toISOString());
-    const orderDate = this.fmtDate(order.created_at);
-    const refCode = order.deposit_reference_code ?? 'N/D';
+    const nd = (val: any) => (val == null || val === '' ? 'N/D' : String(val));
+    const emitDate   = this.fmtDate(new Date().toISOString());
+    const createdDate = this.fmtDate(order.created_at);
+    const completedDate = order.completed_at ? this.fmtDate(order.completed_at) : emitDate;
+    const refCode    = nd(order.deposit_reference_code);
+    const ctavShort  = `N° CTAV-${ctavId.slice(0, 8).toUpperCase()}`;
+    const amountBob  = this.fmtAmount(order.amount);
+    const amountDest = this.fmtAmount(order.amount_destination ?? order.net_amount);
+    const currency   = (order.currency ?? 'BOB').toUpperCase();
+    const destCcy    = (order.destination_currency ?? '').toUpperCase();
+    const destNet    = nd(order.destination_network);
+    const txRef      = nd(order.tx_hash ?? order.source_tx_hash);
+    const walletDest = nd(liquidationAddress?.address);
+    const exRate     = nd(order.exchange_rate_applied);
 
+    // ── Layout helpers ──
     const borderedLayout = {
       hLineWidth: () => 0.5,
       vLineWidth: (i: number, node: any) => (i === 0 || i === node.table.widths.length ? 0.5 : 0),
@@ -868,52 +893,78 @@ export class PdfService {
       vLineColor: () => C.border,
       paddingLeft: () => 10,
       paddingRight: () => 10,
-      paddingTop: () => 6,
-      paddingBottom: () => 6,
+      paddingTop: () => 5,
+      paddingBottom: () => 5,
     };
 
-    const sectionRow = (title: string, cols: number) => {
+    const fullBorderLayout = {
+      hLineWidth: () => 0.5,
+      vLineWidth: () => 0.5,
+      hLineColor: () => C.border,
+      vLineColor: () => C.border,
+      paddingLeft: () => 10,
+      paddingRight: () => 10,
+      paddingTop: () => 5,
+      paddingBottom: () => 5,
+    };
+
+    const secHdr = (text: string, cols: number): any[] => {
       const cells: any[] = [{
-        text: title,
-        fontSize: 8,
+        text,
+        fontSize: 7.5,
         bold: true,
         color: C.sectionText,
         fillColor: C.sectionBg,
         characterSpacing: 0.8,
         colSpan: cols,
-        margin: [0, 2, 0, 2],
+        margin: [2, 4, 2, 4],
       }];
       for (let i = 1; i < cols; i++) cells.push({});
       return cells;
     };
 
-    const dataRow = (label: string, value: string, alt = false): any[] => [
-      { text: label, fontSize: 8, color: C.label, fillColor: alt ? C.rowAlt : C.white },
-      { text: value || 'N/D', fontSize: 8.5, bold: true, color: C.body, fillColor: alt ? C.rowAlt : C.white },
+    const dr = (label: string, value: string, alt = false): any[] => [
+      { text: label, fontSize: 7.5, color: C.label, fillColor: alt ? C.rowAlt : C.white },
+      { text: value,  fontSize: 8.5, bold: true, color: C.body, fillColor: alt ? C.rowAlt : C.white },
     ];
 
-    // ── Canales del PSAV ──
-    const bankChannels = psavChannels.filter(ch => ch.type !== 'crypto' && ch.is_active);
-    const channelRows: any[][] = [];
-    bankChannels.forEach((ch, idx) => {
-      const alt = idx % 2 === 0;
-      if (ch.bank_name) channelRows.push(dataRow(`Canal ${idx + 1} — Banco`, ch.bank_name, alt));
-      if (ch.account_number) channelRows.push(dataRow('Número de Cuenta', ch.account_number, alt));
-      if (ch.routing_number) channelRows.push(dataRow('Código de Routing', ch.routing_number, alt));
-      if (ch.account_holder) channelRows.push(dataRow('Titular', ch.account_holder, alt));
-      if (ch.currency) channelRows.push(dataRow('Moneda', ch.currency, alt));
-    });
-    if (channelRows.length === 0) {
-      channelRows.push(dataRow('Canales activos', 'Sin canales registrados'));
-    }
+    // ── Sección 3: Datos del cliente ──
+    const clientRows: any[][] = [secHdr('DATOS DEL CLIENTE', 2)];
+    clientRows.push(dr('Nombre / Razón Social', nd(client.full_name)));
+    clientRows.push(dr(client.identity_label, nd(client.identity_value), true));
+    if (client.nit) clientRows.push(dr('NIT', client.nit));
+    clientRows.push(dr('Correo Electrónico', nd(client.email), !!client.nit));
+    if (client.phone) clientRows.push(dr('Teléfono', client.phone, !client.nit));
+
+    // ── Sección 4: Detalles (grid 4 columnas) ──
+    const detailRows: any[][] = [
+      secHdr('DETALLES DE LA OPERACIÓN', 4),
+      [
+        { text: 'Monto Acreditado',  fontSize: 7.5, color: C.label, fillColor: C.white },
+        { text: `${amountDest} ${destCcy}`, fontSize: 8.5, bold: true, color: C.body, fillColor: C.white },
+        { text: 'Red / Blockchain',  fontSize: 7.5, color: C.label, fillColor: C.white },
+        { text: destNet, fontSize: 8.5, bold: true, color: C.body, fillColor: C.white },
+      ],
+      [
+        { text: 'Wallet Destino', fontSize: 7.5, color: C.label, fillColor: C.rowAlt },
+        { text: walletDest, fontSize: 7, bold: true, color: C.body, fillColor: C.rowAlt, colSpan: 3 },
+        {}, {},
+      ],
+      [
+        { text: 'Hash / ID Transacción', fontSize: 7.5, color: C.label, fillColor: C.white },
+        { text: txRef, fontSize: 7, bold: true, color: C.body, fillColor: C.white, colSpan: 3 },
+        {}, {},
+      ],
+    ];
 
     const docDefinition: TDocumentDefinitions = {
       pageSize: 'A4',
-      pageMargins: [40, 40, 40, 60],
+      pageMargins: [40, 40, 40, 55],
       defaultStyle: { font: 'Helvetica', fontSize: 9, color: C.body },
 
       content: [
-        // ── CABECERA ──
+
+        // ── 1. CABECERA ──
         {
           table: {
             widths: ['*'],
@@ -921,18 +972,18 @@ export class PdfService {
               columns: [
                 {
                   stack: [
-                    { text: 'COMPROBANTE DE RECEPCIÓN DE FONDOS', fontSize: 13, bold: true, color: C.headerText, characterSpacing: 0.5 },
-                    { text: 'Documento de trazabilidad operativa interna', fontSize: 8, color: '#AAC4E0', margin: [0, 4, 0, 0] },
+                    { text: 'C.T.A.V.', fontSize: 20, bold: true, color: C.headerText, characterSpacing: 1 },
+                    { text: 'Comprobante de Transferencia de Activos Virtuales', fontSize: 7.5, color: C.headerSub, margin: [0, 3, 0, 0] },
                   ],
                   width: '*',
                 },
                 {
                   stack: [
-                    { text: 'FECHA DE EMISIÓN', fontSize: 7, bold: true, color: '#AAC4E0', characterSpacing: 0.6 },
-                    { text: emitDate, fontSize: 8, color: C.headerText, margin: [0, 3, 0, 0] },
+                    { text: 'COMPROBANTE DE OPERACIÓN', fontSize: 12, bold: true, color: C.headerText, characterSpacing: 0.4, alignment: 'right' as const },
+                    { text: 'Compra de activos virtuales por PSAV', fontSize: 7.5, color: C.headerSub, alignment: 'right' as const, margin: [0, 3, 0, 0] },
+                    { text: ctavShort, fontSize: 9.5, bold: true, color: C.accent, alignment: 'right' as const, margin: [0, 5, 0, 0] },
                   ],
                   width: 'auto',
-                  alignment: 'right' as const,
                 },
               ],
               fillColor: C.headerBg,
@@ -943,89 +994,184 @@ export class PdfService {
           margin: [0, 0, 0, 0] as [number, number, number, number],
         },
 
-        // Línea de acento
+        // Línea acento teal
         {
-          canvas: [{ type: 'rect', x: 0, y: 0, w: 515, h: 2.5, color: C.accent }],
-          margin: [0, 0, 0, 16] as [number, number, number, number],
+          canvas: [{ type: 'rect', x: 0, y: 0, w: 515, h: 3, color: C.accent }],
+          margin: [0, 0, 0, 14] as [number, number, number, number],
         },
 
-        // ── CÓDIGO DE TRAZABILIDAD (destacado) ──
+        // ── 2. BARRA DE ESTADO (3 columnas) ──
+        {
+          table: {
+            widths: ['33%', '33%', '34%'],
+            body: [[
+              {
+                stack: [
+                  { text: 'FECHA DE EMISIÓN', fontSize: 7, bold: true, color: C.label, characterSpacing: 0.6 },
+                  { text: completedDate, fontSize: 8.5, bold: true, color: C.body, margin: [0, 3, 0, 0] },
+                ],
+                border: [true, true, true, true],
+                margin: [0, 6, 0, 6],
+              },
+              {
+                stack: [
+                  { text: 'ESTADO', fontSize: 7, bold: true, color: C.label, characterSpacing: 0.6 },
+                  { text: 'COMPLETADO', fontSize: 8.5, bold: true, color: C.accent, margin: [0, 3, 0, 0] },
+                ],
+                border: [true, true, true, true],
+                margin: [0, 6, 0, 6],
+              },
+              {
+                stack: [
+                  { text: 'CÓDIGO DE RASTREO', fontSize: 7, bold: true, color: C.label, characterSpacing: 0.6 },
+                  { text: refCode, fontSize: 8.5, bold: true, color: C.body, margin: [0, 3, 0, 0] },
+                ],
+                border: [true, true, true, true],
+                margin: [0, 6, 0, 6],
+              },
+            ]],
+          },
+          layout: fullBorderLayout,
+          margin: [0, 0, 0, 12] as [number, number, number, number],
+        },
+
+        // ── 3. RESUMEN DESTACADO (fondo teal claro) ──
+        {
+          table: {
+            widths: ['*', '*', '*'],
+            body: [[
+              {
+                stack: [
+                  { text: 'MONTO TRANSFERIDO POR EL CLIENTE', fontSize: 6.5, bold: true, color: C.summaryLbl, characterSpacing: 0.5 },
+                  { text: `Bs. ${amountBob}`, fontSize: 20, bold: true, color: C.sectionBg, margin: [0, 3, 0, 0] },
+                ],
+                fillColor: C.summaryBg,
+                border: [true, true, false, true],
+                margin: [4, 8, 4, 8],
+              },
+              {
+                stack: [
+                  { text: 'TIPO DE CAMBIO APLICADO', fontSize: 6.5, bold: true, color: C.summaryLbl, characterSpacing: 0.5 },
+                  { text: exRate, fontSize: 14, bold: true, color: C.sectionBg, margin: [0, 6, 0, 0], decoration: 'underline' as const },
+                ],
+                fillColor: C.summaryBg,
+                border: [false, true, false, true],
+                margin: [4, 8, 4, 8],
+              },
+              {
+                stack: [
+                  { text: 'ACTIVO VIRTUAL ADQUIRIDO', fontSize: 6.5, bold: true, color: C.summaryLbl, characterSpacing: 0.5 },
+                  { text: destCcy || 'N/D', fontSize: 14, bold: true, color: C.sectionBg, margin: [0, 6, 0, 0], decoration: 'underline' as const },
+                ],
+                fillColor: C.summaryBg,
+                border: [false, true, true, true],
+                margin: [4, 8, 4, 8],
+              },
+            ]],
+          },
+          layout: fullBorderLayout,
+          margin: [0, 0, 0, 12] as [number, number, number, number],
+        },
+
+        // ── 4. DATOS DEL CLIENTE ──
+        {
+          table: {
+            widths: ['35%', '65%'],
+            body: clientRows,
+          },
+          layout: borderedLayout,
+          margin: [0, 0, 0, 12] as [number, number, number, number],
+        },
+
+        // ── 5. DETALLES DE LA OPERACIÓN ──
+        {
+          table: {
+            widths: ['*'],
+            body: [[{
+              stack: [
+                { text: 'DETALLES DE LA OPERACIÓN', fontSize: 7.5, bold: true, color: C.sectionText, characterSpacing: 0.8, margin: [0, 0, 0, 0] },
+              ],
+              fillColor: C.sectionBg,
+              border: [true, true, true, false],
+              margin: [2, 4, 2, 4],
+            }]],
+          },
+          layout: 'noBorders',
+          margin: [0, 0, 0, 0] as [number, number, number, number],
+        },
+        // Párrafo narrativo
+        {
+          text: [
+            'Se deja constancia de que el PSAV ',
+            { text: psavAgent.name, bold: true },
+            ' realizó la compra de ',
+            { text: destCcy, bold: true },
+            ' en favor de ',
+            { text: nd(client.full_name), bold: true },
+            ', por la suma transferida de ',
+            { text: `Bs. ${amountBob}`, bold: true },
+            ', aplicando el tipo de cambio vigente/referencial de ',
+            { text: exRate, bold: true },
+            ' de fecha ',
+            { text: createdDate, bold: true },
+            '.',
+          ],
+          fontSize: 8.5,
+          lineHeight: 1.5,
+          color: C.body,
+          border: [true, false, true, false],
+          margin: [10, 8, 10, 8] as [number, number, number, number],
+        },
+        // Grid 4 columnas
+        {
+          table: {
+            widths: ['22%', '28%', '22%', '28%'],
+            body: detailRows.slice(1),
+          },
+          layout: fullBorderLayout,
+          margin: [0, 0, 0, 12] as [number, number, number, number],
+        },
+
+        // ── 6. TRAZABILIDAD ──
+        {
+          table: {
+            widths: ['35%', '65%'],
+            body: [
+              secHdr('TRAZABILIDAD', 2),
+              dr('Completado en fecha', completedDate),
+            ],
+          },
+          layout: borderedLayout,
+          margin: [0, 0, 0, 12] as [number, number, number, number],
+        },
+
+        // ── 7. EMITIDO POR / PSAV ──
         {
           table: {
             widths: ['*'],
             body: [[{
               columns: [
-                {
-                  stack: [
-                    { text: 'CÓDIGO DE REFERENCIA DE TRAZABILIDAD', fontSize: 7.5, bold: true, color: C.label, characterSpacing: 0.8 },
-                    { text: refCode, fontSize: 18, bold: true, color: C.accent, characterSpacing: 0.5, margin: [0, 4, 0, 0] },
-                  ],
-                  width: '*',
-                },
-                {
-                  stack: [
-                    { text: 'N° DE EXPEDIENTE', fontSize: 7.5, bold: true, color: C.label, characterSpacing: 0.8 },
-                    { text: (order.id ?? 'N/D').slice(0, 8).toUpperCase(), fontSize: 11, bold: true, color: C.body, margin: [0, 4, 0, 0] },
-                  ],
-                  width: 'auto',
-                  alignment: 'right' as const,
-                },
+                { text: 'Emitido por / PSAV:', fontSize: 7.5, bold: true, color: C.label, width: 'auto' },
+                { text: psavAgent.name, fontSize: 8.5, bold: true, color: C.body, margin: [8, 0, 0, 0], width: '*' },
               ],
-              margin: [14, 12, 14, 12],
+              margin: [10, 7, 10, 7],
+              fillColor: C.rowAlt,
             }]],
           },
-          layout: {
-            hLineWidth: () => 0.5,
-            vLineWidth: () => 0.5,
-            hLineColor: () => C.border,
-            vLineColor: () => C.border,
-          },
-          margin: [0, 0, 0, 14] as [number, number, number, number],
-        },
-
-        // ── DATOS DEL AGENTE PSAV ──
-        {
-          table: {
-            widths: ['35%', '65%'],
-            body: [
-              sectionRow('DATOS DEL AGENTE PSAV ASIGNADO', 2),
-              dataRow('Nombre del Agente', psavAgent.name),
-              dataRow('Código de Verificación', psavAgent.verification_code, true),
-              ...channelRows,
-            ],
-          },
-          layout: borderedLayout,
-          margin: [0, 0, 0, 14] as [number, number, number, number],
-        },
-
-        // ── DETALLE DE LA OPERACIÓN ──
-        {
-          table: {
-            widths: ['35%', '65%'],
-            body: [
-              sectionRow('DETALLE DE LA OPERACIÓN', 2),
-              dataRow('Tipo de Operación', 'Bolivia — Exterior (PSAV)'),
-              dataRow('Monto Recibido', `${this.fmtAmount(order.amount)} ${(order.currency ?? 'BOB').toUpperCase()}`, true),
-              dataRow('Comisión Operativa', `${this.fmtAmount(order.fee_amount)} ${(order.currency ?? 'BOB').toUpperCase()}`),
-              dataRow('Monto Neto Procesado', `${this.fmtAmount(order.net_amount)} ${(order.currency ?? 'BOB').toUpperCase()}`, true),
-              dataRow('Fecha de Creación del Expediente', orderDate),
-              dataRow('Estado al Momento de Emisión', 'COMPLETADO — TRANSFERENCIA ENVIADA', true),
-            ],
-          },
-          layout: borderedLayout,
-          margin: [0, 0, 0, 20] as [number, number, number, number],
+          layout: fullBorderLayout,
+          margin: [0, 0, 0, 12] as [number, number, number, number],
         },
 
         // Línea de cierre
         {
-          canvas: [{ type: 'rect', x: 0, y: 0, w: 515, h: 1.5, color: C.border }],
-          margin: [0, 0, 0, 10] as [number, number, number, number],
+          canvas: [{ type: 'rect', x: 0, y: 0, w: 515, h: 1, color: C.border }],
+          margin: [0, 0, 0, 8] as [number, number, number, number],
         },
 
-        // ── AVISO LEGAL ──
+        // ── 8. AVISO LEGAL ──
         {
-          text: 'Este documento es un comprobante interno de recepción de fondos generado automáticamente por el sistema operativo de Guira. No constituye un documento fiscal ni contable. El presente comprobante acredita únicamente la recepción y registro del depósito por parte del agente PSAV asignado al cliente, como parte del proceso de trazabilidad operativa interna.',
-          fontSize: 7,
+          text: 'Aviso Legal: El presente C.T.A.V. respalda la operación realizada por el PSAV en favor del cliente. No constituye factura, comprobante fiscal, captación de recursos, intermediación financiera ni garantía de rendimiento.',
+          fontSize: 6.5,
           color: C.label,
           lineHeight: 1.5,
           alignment: 'justify' as const,
@@ -1034,8 +1180,8 @@ export class PdfService {
 
       footer: (_currentPage: number, _pageCount: number) => ({
         columns: [
-          { text: 'Guira — Comprobante de Recepción PSAV · Uso Interno', fontSize: 7, color: C.label },
-          { text: `Emitido: ${emitDate}`, fontSize: 7, color: C.label, alignment: 'right' as const },
+          { text: 'C.T.A.V. — Comprobante de Transferencia de Activos Virtuales', fontSize: 6.5, color: C.label },
+          { text: 'Página 1 de 1', fontSize: 6.5, color: C.label, alignment: 'right' as const },
         ],
         margin: [40, 0, 40, 0],
       }),
@@ -1047,7 +1193,7 @@ export class PdfService {
       const pdf = this.printer.createPdf(docDefinition);
       return await pdf.getBuffer();
     } catch (error) {
-      this.logger.error('Error generando PDF recibo PSAV', error);
+      this.logger.error('Error generando PDF C.T.A.V.', error);
       throw error;
     }
   }
