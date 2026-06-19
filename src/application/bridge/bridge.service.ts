@@ -1535,6 +1535,16 @@ export class BridgeService {
       dbSync.developer_fee_percent = bridgeResponse.custom_developer_fee_percent ?? null;
     if (bridgeResponse.destination_address !== undefined)
       dbSync.destination_address = bridgeResponse.destination_address ?? null;
+    if (bridgeResponse.destination_ach_reference !== undefined)
+      dbSync.destination_ach_reference = bridgeResponse.destination_ach_reference ?? null;
+    if (bridgeResponse.destination_wire_message !== undefined)
+      dbSync.destination_wire_message = bridgeResponse.destination_wire_message ?? null;
+    if (bridgeResponse.destination_sepa_reference !== undefined)
+      dbSync.destination_sepa_reference = bridgeResponse.destination_sepa_reference ?? null;
+    if (bridgeResponse.destination_spei_reference !== undefined)
+      dbSync.destination_spei_reference = bridgeResponse.destination_spei_reference ?? null;
+    if (bridgeResponse.destination_reference !== undefined)
+      dbSync.destination_reference = bridgeResponse.destination_reference ?? null;
 
     if (Object.keys(dbSync).length > 0) {
       const { error: dbError } = await this.supabase
