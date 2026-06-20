@@ -2102,7 +2102,7 @@ export class WebhooksService {
         // Asentar ledger (debit confirmed on-chain) y liberar reserva en una sola
         // transacción atómica — evita la ventana donde available_amount sería negativo.
         const totalReserved = parseFloat(paymentOrder.amount ?? '0');
-        await this.supabase.rpc('settle_and_release_reserved', {
+        const { error: settleBoError } = await this.supabase.rpc('settle_and_release_reserved', {
           p_user_id: paymentOrder.user_id,
           p_currency: (
             paymentOrder.source_currency ??
@@ -2112,6 +2112,12 @@ export class WebhooksService {
           p_amount: totalReserved,
           p_reference_id: paymentOrder.id,
         });
+        if (settleBoError) {
+          this.logger.error(
+            `❌ settle_and_release_reserved falló para order ${paymentOrder.id}: ${settleBoError.message}`,
+          );
+          throw new Error(`settle_and_release_reserved failed: ${settleBoError.message}`);
+        }
 
         // Notificar staff que el PSAV recibió el crypto
         const { data: admins } = await this.supabase
@@ -2355,11 +2361,19 @@ export class WebhooksService {
     if (transfer) {
       // 3. UPDATE ledger_entry existente: pending → settled
       // NO crear uno nuevo — el trigger de balance solo se activa al cambiar a settled
-      await this.supabase
+      // Aplica al flujo payout (BridgeService.executePayout) donde el ledger tiene
+      // reference_type='payout_request' y se vincula por bridge_transfer_id (UUID local).
+      const { error: settleTrError } = await this.supabase
         .from('ledger_entries')
         .update({ status: 'settled' })
         .eq('bridge_transfer_id', transfer.id)
         .eq('status', 'pending');
+      if (settleTrError) {
+        this.logger.error(
+          `❌ Error al asentar ledger via bridge_transfer_id ${transfer.id}: ${settleTrError.message}`,
+        );
+        throw new Error(`Ledger settle (transfer path) failed: ${settleTrError.message}`);
+      }
 
       // 4. INSERT certificate — idempotente: verificar que no exista ya uno para este transfer.
       //    Un webhook retry crearía un certificado duplicado sin este check.

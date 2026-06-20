@@ -87,15 +87,18 @@ export class CreateInterbankOrderDto {
   source_network?: string;
 
   @ApiPropertyOptional()
-  @ValidateIf((o) => o.flow_type === 'wallet_to_wallet')
+  @ValidateIf((o) =>
+    ['wallet_to_wallet', 'world_to_bolivia'].includes(o.flow_type),
+  )
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @Transform(({ value }) =>
     typeof value === 'string' ? value.toLowerCase() : value,
   )
-  @IsIn([...ALLOWED_CRYPTO_CURRENCIES], {
-    message: `Moneda de origen no soportada. Monedas permitidas: ${ALLOWED_CRYPTO_CURRENCIES.join(', ')}`,
-  })
+  @IsIn(
+    [...ALLOWED_CRYPTO_CURRENCIES, 'usd', 'eur', 'mxn', 'brl', 'cop', 'gbp'],
+    { message: 'Moneda de origen no soportada.' },
+  )
   source_currency?: string;
 
   // ── destino crypto (bolivia_to_wallet) — wallet_to_wallet lo resuelve desde el supplier ──

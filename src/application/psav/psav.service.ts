@@ -8,6 +8,11 @@ import type { CreatePsavDto, UpdatePsavDto } from './dto/create-psav.dto';
 export enum PsavAccountType {
   BANK_BO = 'bank_bo',
   BANK_US = 'bank_us',
+  BANK_EU = 'bank_eu',
+  BANK_MX = 'bank_mx',
+  BANK_BR = 'bank_br',
+  BANK_CO = 'bank_co',
+  BANK_GB = 'bank_gb',
   CRYPTO = 'crypto',
 }
 

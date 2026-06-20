@@ -1023,10 +1023,33 @@ export class PaymentOrdersService {
    * 1.4 Mundo → Bolivia (Fiat/Crypto externo → cuenta bancaria BO)
    * El cliente envía dinero a Bridge VA o PSAV, luego se deposita en su cuenta bancaria BO
    */
+  // Mapa divisa de origen → tipo de canal PSAV para world_to_bolivia.
+  // Cada entrada corresponde a un tipo de cuenta en psav_accounts.
+  private static readonly WORLD_TO_BOLIVIA_PSAV_TYPE: Record<string, string> = {
+    USD: 'bank_us',
+    EUR: 'bank_eu',
+    MXN: 'bank_mx',
+    BRL: 'bank_br',
+    COP: 'bank_co',
+    GBP: 'bank_gb',
+  };
+
   private async createWorldToBolivia(
     userId: string,
     dto: CreateInterbankOrderDto,
   ) {
+    // Divisa de origen: el frontend la envía como source_currency.
+    // Se mantiene 'USD' como default para compatibilidad con clientes sin actualizar.
+    const sourceCurrency = (dto.source_currency ?? 'usd').toUpperCase();
+    const psavType =
+      PaymentOrdersService.WORLD_TO_BOLIVIA_PSAV_TYPE[sourceCurrency];
+    if (!psavType) {
+      throw new BadRequestException(
+        `Divisa de origen no soportada para world_to_bolivia: ${sourceCurrency}. ` +
+          `Divisas válidas: ${Object.keys(PaymentOrdersService.WORLD_TO_BOLIVIA_PSAV_TYPE).join(', ')}.`,
+      );
+    }
+
     // El destino bancario se obtiene de la cuenta primaria BOB aprobada del
     // cliente (igual que bridge_wallet_to_fiat_bo): no se acepta una cuenta
     // arbitraria del payload, así se garantiza que el depósito siempre llegue
@@ -1034,11 +1057,11 @@ export class PaymentOrdersService {
     const bankAccount =
       await this.bankAccountsService.getApprovedAccountForWithdrawal(userId);
 
-    // Obtener canal PSAV del usuario para depósito en USD
+    // Obtener canal PSAV del usuario según la divisa de origen seleccionada.
     const psavAccount = await this.psavService.getDepositAccountForUser(
       userId,
-      'bank_us',
-      'USD',
+      psavType,
+      sourceCurrency,
     );
     const depositInstructions =
       this.psavService.formatDepositInstructions(psavAccount);
@@ -1050,7 +1073,9 @@ export class PaymentOrdersService {
       dto.amount!,
     );
 
-    const rateData = await this.exchangeRatesService.getRate('USD_BOB');
+    const rateData = await this.exchangeRatesService.getRate(
+      `${sourceCurrency}_BOB`,
+    );
     // Tipo de cambio congelado por el cliente en la revisión (Step 4). Si llegó,
     // prevalece sobre el rate actual del servidor para honrar lo que el cliente aceptó.
     const appliedRate =
@@ -1058,8 +1083,10 @@ export class PaymentOrdersService {
         ? dto.exchange_rate_applied
         : rateData.effective_rate;
 
-    // Bloquear si ya existe un expediente world_to_bolivia activo
-    await this.assertNoConflictingPsavOrder(userId, 'world_to_bolivia', 'BOB');
+    // Bloquear si ya existe un expediente activo para la misma divisa de origen.
+    // Permite tener USD→BOB y EUR→BOB simultáneamente (igual que bolivia_to_world
+    // permite múltiples órdenes hacia distintas divisas destino).
+    await this.assertNoConflictingWorldToBoliviaOrder(userId, sourceCurrency);
 
     const { data: order, error } = await this.supabase
       .from('payment_orders')
@@ -1069,7 +1096,7 @@ export class PaymentOrdersService {
         flow_category: 'interbank',
         requires_psav: true,
         amount: dto.amount,
-        currency: 'USD', // world_to_bolivia: el usuario deposita USD
+        currency: sourceCurrency,
         fee_amount,
         net_amount,
         destination_type: 'bank_bo',
@@ -1095,7 +1122,7 @@ export class PaymentOrdersService {
     if (error) throwDbError(error);
 
     this.logger.log(
-      `📋 Orden world_to_bolivia creada: ${order.id} — $${dto.amount} USD→BOB`,
+      `📋 Orden world_to_bolivia creada: ${order.id} — ${dto.amount} ${sourceCurrency}→BOB`,
     );
     return order;
   }
@@ -1337,6 +1364,41 @@ export class PaymentOrdersService {
           `hacia ${normalized}. Completa o cancela ese expediente antes ` +
           `de crear uno nuevo.`,
       );
+    }
+  }
+
+  /**
+   * Bloquea si el usuario ya tiene un expediente world_to_bolivia activo
+   * para la misma divisa de origen. Permite múltiples expedientes activos
+   * siempre que usen divisas distintas (ej. USD→BOB + EUR→BOB en paralelo),
+   * igual que bolivia_to_world permite una orden por divisa destino.
+   * Respaldado por idx_po_w2b_active_per_src_currency.
+   */
+  private async assertNoConflictingWorldToBoliviaOrder(
+    userId: string,
+    sourceCurrency: string,
+  ): Promise<void> {
+    const normalized = sourceCurrency.toUpperCase();
+
+    const { data: conflicting } = await this.supabase
+      .from('payment_orders')
+      .select('id, status, created_at')
+      .eq('user_id', userId)
+      .eq('flow_type', 'world_to_bolivia')
+      .eq('currency', normalized)
+      .in('status', ['waiting_deposit', 'deposit_received', 'processing'])
+      .limit(1)
+      .maybeSingle();
+
+    if (conflicting) {
+      const shortId = conflicting.id.slice(0, 8);
+      throw new ConflictException({
+        code: 'ACTIVE_ORDER_CONFLICT',
+        active_order_id: conflicting.id,
+        message:
+          `Ya tienes un expediente activo (${shortId}) en ${normalized}→BOB. ` +
+          `Completa o cancela ese expediente antes de crear uno nuevo en la misma divisa.`,
+      });
     }
   }
 
