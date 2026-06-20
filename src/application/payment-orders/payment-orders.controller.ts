@@ -214,6 +214,15 @@ export class PaymentOrdersController {
     );
   }
 
+  @Get('world-to-bolivia/available-sources')
+  @ApiOperation({
+    summary:
+      'Divisas de origen disponibles para world_to_bolivia según canales PSAV activos del usuario',
+  })
+  getWorldToBoliviaAvailableSources(@CurrentUser() user: AuthenticatedUser) {
+    return this.psavService.getAvailableWorldToBoliviaCurrencies(user.id);
+  }
+
   @Get('exchange-rates')
   @ApiOperation({ summary: 'Obtener todos los tipos de cambio' })
   getExchangeRates() {

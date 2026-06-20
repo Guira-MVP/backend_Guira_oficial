@@ -50,6 +50,48 @@ export class PsavService {
   }
 
   /**
+   * Devuelve qué divisas de origen están disponibles para el flujo world_to_bolivia,
+   * consultando si existe al menos una cuenta PSAV activa del tipo correspondiente
+   * para el PSAV asignado al usuario (o globalmente si no tiene asignación).
+   * Usado por el frontend para habilitar/deshabilitar cards de países en el selector.
+   */
+  async getAvailableWorldToBoliviaCurrencies(
+    userId: string,
+  ): Promise<{ currency: string; is_active: boolean }[]> {
+    const CURRENCY_TYPE_MAP: Record<string, string> = {
+      USD: 'bank_us',
+      EUR: 'bank_eu',
+      MXN: 'bank_mx',
+      BRL: 'bank_br',
+      COP: 'bank_co',
+      GBP: 'bank_gb',
+    };
+
+    const psavId = await this.resolveUserPsavId(userId);
+
+    let query = this.supabase
+      .from('psav_accounts')
+      .select('type, is_active')
+      .in('type', Object.values(CURRENCY_TYPE_MAP));
+
+    if (psavId) {
+      query = query.eq('psav_id', psavId) as typeof query;
+    }
+
+    const { data } = await query;
+
+    // Un tipo es "activo" si tiene al menos una cuenta activa en el PSAV del usuario.
+    const activeTypes = new Set(
+      (data ?? []).filter((a) => a.is_active).map((a) => a.type),
+    );
+
+    return Object.entries(CURRENCY_TYPE_MAP).map(([currency, type]) => ({
+      currency,
+      is_active: activeTypes.has(type),
+    }));
+  }
+
+  /**
    * Obtiene todas las cuentas PSAV crypto activas para el usuario.
    * Filtra por su PSAV asignado; fallback global si no tiene.
    */
