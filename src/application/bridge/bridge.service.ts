@@ -521,6 +521,11 @@ export class BridgeService {
       }
     } else if (dto.payment_rail === 'pix') {
       // PIX (Brasil): Bridge distingue "pix_key" y "br_code" como propiedades raíz
+      if (!dto.pix_key && !dto.br_code) {
+        throw new BadRequestException(
+          'PIX requiere pix_key o br_code — al menos uno debe estar presente.',
+        );
+      }
       if (dto.pix_key) {
         bridgePayload.pix_key = {
           pix_key: dto.pix_key,
