@@ -44,10 +44,15 @@ export class ExchangeRatesService {
   ) {}
 
   /**
-   * Redondea el effective_rate con precisión adaptativa:
-   * tasas < 0.1 (ej. COP) usan 4 decimales; el resto usa 2.
+   * Calcula el effective_rate con precisión adaptativa por par:
+   * - USD_EUR: truncado a 3 decimales (sin redondeo, conservador)
+   * - tasas < 0.1 (ej. COP): redondeado a 4 decimales
+   * - resto: redondeado a 2 decimales
    */
-  private roundEffectiveRate(value: number): number {
+  private roundEffectiveRate(value: number, pair?: string): number {
+    if ((pair ?? '').toUpperCase() === 'USD_EUR') {
+      return Math.floor(value * 1000) / 1000;
+    }
     const decimals = value < 0.1 ? 4 : 2;
     const factor = Math.pow(10, decimals);
     return Math.round(value * factor) / factor;
@@ -65,7 +70,7 @@ export class ExchangeRatesService {
     const spreadMultiplier = isBobPair
       ? 1 + spreadPercent / 100
       : 1 - spreadPercent / 100;
-    const effectiveRate = this.roundEffectiveRate(baseRate * spreadMultiplier);
+    const effectiveRate = this.roundEffectiveRate(baseRate * spreadMultiplier, pair);
 
     return {
       pair,
@@ -300,7 +305,7 @@ export class ExchangeRatesService {
     const spreadMultiplier = isBobPair
       ? 1 + spreadPercent / 100 // subir tasa para penalizar al dividir
       : 1 - spreadPercent / 100; // bajar tasa para penalizar al multiplicar
-    const effectiveRate = this.roundEffectiveRate(baseRate * spreadMultiplier);
+    const effectiveRate = this.roundEffectiveRate(baseRate * spreadMultiplier, data.pair);
 
     return {
       pair: data.pair,
@@ -364,7 +369,7 @@ export class ExchangeRatesService {
         ? 1 + spreadPercent / 100
         : 1 - spreadPercent / 100;
 
-      const effectiveRate = this.roundEffectiveRate(baseRate * spreadMultiplier);
+      const effectiveRate = this.roundEffectiveRate(baseRate * spreadMultiplier, row.pair);
 
       return {
         ...row,

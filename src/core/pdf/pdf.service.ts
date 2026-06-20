@@ -213,10 +213,11 @@ export class PdfService {
     // Estos flujos guardan exchange_rate_applied = 1.0, por lo que el chequeo de
     // stablecoin DEBE tener prioridad; de lo contrario la etiqueta nunca se mostraba
     // (el valor 1.0 hacía que siempre se imprimiera el "1" crudo).
+    // bridge_wallet_to_fiat_us excluido: acepta divisas no-USD (EUR, etc.)
+    // con tipo de cambio real distinto de 1, por lo que debe leer exchange_rate_applied.
     const STABLECOIN_FLOWS = [
       'wallet_to_wallet',
       'bridge_wallet_to_crypto',
-      'bridge_wallet_to_fiat_us',
       'crypto_to_bridge_wallet',
     ];
     const exchangeRateDisplay = STABLECOIN_FLOWS.includes(ft)
