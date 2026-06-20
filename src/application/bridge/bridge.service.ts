@@ -1658,6 +1658,12 @@ export class BridgeService {
       NG: 'NGA',
       KE: 'KEN',
       GH: 'GHA',
+      // SEPA / zona IBAN — países que faltaban
+      IS: 'ISL',
+      LI: 'LIE',
+      MC: 'MCO',
+      SM: 'SMR',
+      AD: 'AND',
     };
     return map[code.toUpperCase()] ?? code.toUpperCase();
   }
