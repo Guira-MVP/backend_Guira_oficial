@@ -45,12 +45,13 @@ export class ExchangeRatesService {
 
   /**
    * Calcula el effective_rate con precisión adaptativa por par:
-   * - USD_EUR: truncado a 3 decimales (sin redondeo, conservador)
+   * - USD_EUR, USD_GBP: truncado a 3 decimales (sin redondeo, conservador)
    * - tasas < 0.1 (ej. COP): redondeado a 4 decimales
    * - resto: redondeado a 2 decimales
    */
   private roundEffectiveRate(value: number, pair?: string): number {
-    if ((pair ?? '').toUpperCase() === 'USD_EUR') {
+    const THREE_DEC_PAIRS = ['USD_EUR', 'USD_GBP'];
+    if (THREE_DEC_PAIRS.includes((pair ?? '').toUpperCase())) {
       return Math.floor(value * 1000) / 1000;
     }
     const decimals = value < 0.1 ? 4 : 2;
