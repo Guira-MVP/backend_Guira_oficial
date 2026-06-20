@@ -2215,25 +2215,12 @@ export class WebhooksService {
           updated_at: new Date().toISOString(),
         });
 
-        // Asentar ledger entries vinculadas a la payment_order
-        // Si tenemos receipt.final_amount de Bridge, actualizar el monto real recibido
-        const { data: settledEntries } = await this.supabase
-          .from('ledger_entries')
-          .update({
-            status: 'settled',
-            ...(receiptFinalAmount != null
-              ? { amount: receiptFinalAmount }
-              : {}),
-          })
-          .eq('reference_type', 'payment_order')
-          .eq('reference_id', paymentOrder.id)
-          .eq('status', 'pending')
-          .select('id');
-
-        const settledCount = settledEntries?.length ?? 0;
-
-        // Liberar saldo reservado (off-ramp completado exitosamente)
-        // Solo se reserva dto.amount (el fee lo gestiona Bridge vía developer_fee)
+        // Para off-ramp: liberar la reserva ANTES de asentar el ledger.
+        // El trigger update_balance_on_ledger_entry calcula:
+        //   available = available + LEAST(0, v_diff + reserved)
+        // Si released=0 ya, el resultado es correcto.
+        // Si released≠0 al momento del settle, el trigger podría violar
+        // CHECK (available >= 0) aunque el balance total sea suficiente.
         const offRampFlows = [
           'bridge_wallet_to_crypto',
           'bridge_wallet_to_fiat_us',
@@ -2255,6 +2242,30 @@ export class WebhooksService {
             );
           }
         }
+
+        // Asentar ledger entries vinculadas a la payment_order
+        // Si tenemos receipt.final_amount de Bridge, actualizar el monto real recibido
+        const { data: settledEntries, error: settleError } = await this.supabase
+          .from('ledger_entries')
+          .update({
+            status: 'settled',
+            ...(receiptFinalAmount != null
+              ? { amount: receiptFinalAmount }
+              : {}),
+          })
+          .eq('reference_type', 'payment_order')
+          .eq('reference_id', paymentOrder.id)
+          .eq('status', 'pending')
+          .select('id');
+
+        if (settleError) {
+          this.logger.error(
+            `❌ Error al asentar ledger entries para order ${paymentOrder.id}: ${settleError.message}`,
+          );
+          throw new Error(`Ledger settle failed for order ${paymentOrder.id}: ${settleError.message}`);
+        }
+
+        const settledCount = settledEntries?.length ?? 0;
 
         // Safety net: si no había ledger_entry pending para on-ramps,
         // crear uno settled directamente para que el trigger actualice balances.
