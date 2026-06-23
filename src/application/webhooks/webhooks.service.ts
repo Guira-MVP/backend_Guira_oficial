@@ -2162,8 +2162,7 @@ export class WebhooksService {
             completed_at: new Date().toISOString(),
             tx_hash: destinationTxHash,
             source_tx_hash: sourceTxHash,
-            // No sobreescribir receipt_url si ya tiene el PDF de evidencia PSAV generado
-            ...(!paymentOrder.receipt_url && receiptUrl ? { receipt_url: receiptUrl } : {}),
+            ...(receiptUrl ? { bridge_receipt_url: receiptUrl } : {}),
             provider_reference:
               traceNumber ??
               destinationTxHash ??

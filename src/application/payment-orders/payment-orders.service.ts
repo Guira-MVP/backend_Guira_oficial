@@ -3180,6 +3180,11 @@ export class PaymentOrdersService {
   // ═══════════════════════════════════════════════
 
   /** Lista órdenes del usuario autenticado. */
+  private toClientOrder(order: any) {
+    const { bridge_receipt_url: _br, ...rest } = order ?? {};
+    return rest;
+  }
+
   async getMyOrders(
     userId: string,
     filters?: {
@@ -3213,7 +3218,7 @@ export class PaymentOrdersService {
     const { data, count, error } = await query;
     if (error) throwDbError(error);
 
-    return { data: data ?? [], total: count ?? 0, page, limit };
+    return { data: (data ?? []).map((o) => this.toClientOrder(o)), total: count ?? 0, page, limit };
   }
 
   /**
@@ -3238,7 +3243,7 @@ export class PaymentOrdersService {
 
     const { data, error } = await query;
     if (error) throwDbError(error);
-    return data ?? [];
+    return (data ?? []).map((o) => this.toClientOrder(o));
   }
 
   /** Detalle de una orden del usuario. */
@@ -3254,7 +3259,7 @@ export class PaymentOrdersService {
       throw new NotFoundException('Orden no encontrada');
     }
 
-    return data;
+    return this.toClientOrder(data);
   }
 
   /**
@@ -5124,7 +5129,7 @@ export class PaymentOrdersService {
         .eq('id', orderId)
         .single();
 
-      if (!order || order.receipt_url) return;
+      if (!order || order.ctav_id) return;
 
       await this._storePsavReceipt(order);
     } catch (err: any) {
