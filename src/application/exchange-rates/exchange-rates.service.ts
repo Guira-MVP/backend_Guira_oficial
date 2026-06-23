@@ -196,10 +196,10 @@ export class ExchangeRatesService {
         }
 
         const upper = currency.toUpperCase();
-        // BOB_X: usuario da BOB, recibe X → Guira compra X → usa buy_rate
-        const bobXRate = Math.round((bobUsdBase / buyRate) * 10000) / 10000;
-        // X_BOB: usuario da X, recibe BOB → Guira vende X → usa sell_rate
-        const xBobRate = Math.round((usdBobBase / sellRate) * 10000) / 10000;
+        // BOB_X: usuario da BOB, recibe X → Bridge vende X a Guira → sell_rate (igual que USD_X)
+        const bobXRate = Math.round((bobUsdBase / sellRate) * 10000) / 10000;
+        // X_BOB: usuario da X, recibe BOB → Bridge compra X de Guira → buy_rate
+        const xBobRate = Math.round((usdBobBase / buyRate) * 10000) / 10000;
 
         const bridgeRates = { buy_rate: buyRate, sell_rate: sellRate };
         await this.updateRateInternal(`BOB_${upper}`, bobXRate, actorId, bridgeRates);

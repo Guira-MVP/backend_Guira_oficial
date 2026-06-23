@@ -414,12 +414,19 @@ export class PaymentOrdersController {
     }
 
     const profile = await this.profilesService.findOne(order.user_id);
-    const phone = await this.profilesService.getClientPhone(order.user_id);
+    const [phone, identity] = await Promise.all([
+      this.profilesService.getClientPhone(order.user_id),
+      this.profilesService.getClientIdentityForPdf(order.user_id),
+    ]);
     const client = {
       id: profile.id,
       full_name: profile.full_name ?? null,
       email: profile.email,
       phone,
+      identity_label: identity?.identity_label ?? null,
+      identity_value: identity?.identity_value ?? null,
+      country: identity?.country ?? null,
+      is_company: identity?.is_company ?? false,
     };
 
     let clientWallet = null;

@@ -192,6 +192,51 @@ export class ProfilesService {
     return profile?.phone ?? null;
   }
 
+  /**
+   * Devuelve los datos de identidad del cliente para el comprobante PDF:
+   * CI o NIT (persona natural), NIT (empresa), y país.
+   * Busca primero en `people`, luego en `businesses`.
+   */
+  async getClientIdentityForPdf(userId: string): Promise<{
+    identity_label: string;
+    identity_value: string | null;
+    country: string | null;
+    is_company: boolean;
+  } | null> {
+    const { data: person } = await this.supabase
+      .from('people')
+      .select('id_number, id_type, tax_id, country, nationality')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (person) {
+      const hasTaxId = !!person.tax_id;
+      return {
+        identity_label: hasTaxId ? 'NIT' : 'C.I.',
+        identity_value: hasTaxId ? person.tax_id : (person.id_number ?? null),
+        country: person.country ?? person.nationality ?? null,
+        is_company: false,
+      };
+    }
+
+    const { data: business } = await this.supabase
+      .from('businesses')
+      .select('tax_id, country_of_incorporation, country')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (business) {
+      return {
+        identity_label: 'NIT',
+        identity_value: business.tax_id ?? null,
+        country: business.country_of_incorporation ?? business.country ?? null,
+        is_company: true,
+      };
+    }
+
+    return null;
+  }
+
   // ───────────────────────────────────────────────
   //  Endpoints de administración (Admin / Staff)
   // ───────────────────────────────────────────────
