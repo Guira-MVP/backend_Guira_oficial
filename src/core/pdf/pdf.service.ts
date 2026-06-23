@@ -1076,14 +1076,36 @@ export class PdfService {
     const ctavStatusColor = this.statusColor(ctavStatusUpper);
     const refCode = nd(order.deposit_reference_code);
     const ctavShort = `N° CTAV-${ctavId.slice(0, 8).toUpperCase()}`;
-    const amountBob = this.fmtAmount(order.amount);
-    const amountDest = this.fmtAmount(order.amount_destination ?? order.net_amount);
+
+    // Detectar flujo: world_to_bolivia (origen divisa extranjera, destino BOB)
+    const isWorldToBolivia = (order.currency ?? 'BOB').toUpperCase() !== 'BOB' &&
+                              (order.destination_currency ?? '').toUpperCase() === 'BOB';
+
     const currency = (order.currency ?? 'BOB').toUpperCase();
     const destCcy = (order.destination_currency ?? '').toUpperCase();
+    const exRate = nd(order.exchange_rate_applied);
+
+    // Para world_to_bolivia: amountBob es monto en divisa origen, amountDest es monto en BOB
+    // Para flujos BOB→Cripto: amountBob es monto BOB, amountDest es monto cripto
+    const amountOrigin = this.fmtAmount(order.amount);
+    const amountDest = this.fmtAmount(order.amount_destination ?? order.net_amount);
+
+    // Variables formateadas según el flujo
+    const amountDisplay = isWorldToBolivia
+      ? `${amountOrigin} ${currency}`  // ej: "1000.00 USD"
+      : `Bs. ${amountOrigin}`;         // ej: "Bs. 1000.00"
+
+    const amountDestDisplay = isWorldToBolivia
+      ? `Bs. ${amountDest}`            // ej: "Bs. 7186.94"
+      : `${amountDest} ${destCcy}`;    // ej: "100.00 USDT"
+
+    const exRateDisplay = isWorldToBolivia
+      ? `${exRate} ${currency}/BOB`     // ej: "7.5652 USD/BOB"
+      : exRate;                         // ej: "6.96"
+
     const destNet = nd(order.destination_network);
     const txRef = nd(order.tx_hash ?? order.source_tx_hash);
     const walletDest = nd(liquidationAddress?.address);
-    const exRate = nd(order.exchange_rate_applied);
 
     // ── Layout helpers ──
     const borderedLayout = {
@@ -1137,25 +1159,50 @@ export class PdfService {
     if (client.phone) clientRows.push(dr('Teléfono', client.phone, !client.nit));
 
     // ── Sección 4: Detalles (grid 4 columnas) ──
+    // Para world_to_bolivia: mostrar cuenta bancaria destino
+    // Para flujos BOB→Cripto: mostrar wallet blockchain
     const detailRows: any[][] = [
       secHdr('DETALLES DE LA OPERACIÓN', 4),
-      [
+    ];
+
+    if (isWorldToBolivia) {
+      // world_to_bolivia: mostrar datos bancarios destino
+      detailRows.push([
         { text: 'Monto Acreditado', fontSize: 7.5, color: C.label, fillColor: C.white },
-        { text: `${amountDest} ${destCcy}`, fontSize: 8.5, bold: true, color: C.body, fillColor: C.white },
+        { text: amountDestDisplay, fontSize: 8.5, bold: true, color: C.body, fillColor: C.white },
+        { text: 'Referencia', fontSize: 7.5, color: C.label, fillColor: C.white },
+        { text: refCode, fontSize: 8.5, bold: true, color: C.body, fillColor: C.white },
+      ]);
+      detailRows.push([
+        { text: 'Banco Destino', fontSize: 7.5, color: C.label, fillColor: C.rowAlt },
+        { text: nd(order.destination_bank_name), fontSize: 8.5, bold: true, color: C.body, fillColor: C.rowAlt, colSpan: 3 },
+        {}, {},
+      ]);
+      detailRows.push([
+        { text: 'Cuenta Destino', fontSize: 7.5, color: C.label, fillColor: C.white },
+        { text: nd(order.destination_account_number), fontSize: 8.5, bold: true, color: C.body, fillColor: C.white },
+        { text: 'Titular', fontSize: 7.5, color: C.label, fillColor: C.white },
+        { text: nd(order.destination_account_holder), fontSize: 8.5, bold: true, color: C.body, fillColor: C.white },
+      ]);
+    } else {
+      // Flujos BOB→Cripto: mostrar wallet blockchain
+      detailRows.push([
+        { text: 'Monto Acreditado', fontSize: 7.5, color: C.label, fillColor: C.white },
+        { text: amountDestDisplay, fontSize: 8.5, bold: true, color: C.body, fillColor: C.white },
         { text: 'Red / Blockchain', fontSize: 7.5, color: C.label, fillColor: C.white },
         { text: destNet, fontSize: 8.5, bold: true, color: C.body, fillColor: C.white },
-      ],
-      [
+      ]);
+      detailRows.push([
         { text: 'Wallet Destino', fontSize: 7.5, color: C.label, fillColor: C.rowAlt },
         { text: walletDest, fontSize: 7, bold: true, color: C.body, fillColor: C.rowAlt, colSpan: 3 },
         {}, {},
-      ],
-      [
+      ]);
+      detailRows.push([
         { text: 'Hash / ID Transacción', fontSize: 7.5, color: C.label, fillColor: C.white },
         { text: txRef, fontSize: 7, bold: true, color: C.body, fillColor: C.white, colSpan: 3 },
         {}, {},
-      ],
-    ];
+      ]);
+    }
 
     const docDefinition: TDocumentDefinitions = {
       pageSize: 'A4',
@@ -1242,8 +1289,16 @@ export class PdfService {
             body: [[
               {
                 stack: [
-                  { text: 'MONTO TRANSFERIDO POR EL CLIENTE', fontSize: 6.5, bold: true, color: C.summaryLbl, characterSpacing: 0.5 },
-                  { text: `Bs. ${amountBob}`, fontSize: 20, bold: true, color: C.sectionBg, margin: [0, 3, 0, 0] },
+                  {
+                    text: isWorldToBolivia
+                      ? 'MONTO ENVIADO DESDE EL EXTERIOR'
+                      : 'MONTO TRANSFERIDO POR EL CLIENTE',
+                    fontSize: 6.5,
+                    bold: true,
+                    color: C.summaryLbl,
+                    characterSpacing: 0.5,
+                  },
+                  { text: amountDisplay, fontSize: 20, bold: true, color: C.sectionBg, margin: [0, 3, 0, 0] },
                 ],
                 fillColor: C.summaryBg,
                 border: [true, true, false, true],
@@ -1252,7 +1307,7 @@ export class PdfService {
               {
                 stack: [
                   { text: 'TIPO DE CAMBIO APLICADO', fontSize: 6.5, bold: true, color: C.summaryLbl, characterSpacing: 0.5 },
-                  { text: exRate, fontSize: 14, bold: true, color: C.sectionBg, margin: [0, 6, 0, 0], decoration: 'underline' as const },
+                  { text: exRateDisplay, fontSize: 14, bold: true, color: C.sectionBg, margin: [0, 6, 0, 0], decoration: 'underline' as const },
                 ],
                 fillColor: C.summaryBg,
                 border: [false, true, false, true],
@@ -1260,8 +1315,16 @@ export class PdfService {
               },
               {
                 stack: [
-                  { text: 'ACTIVO VIRTUAL ADQUIRIDO', fontSize: 6.5, bold: true, color: C.summaryLbl, characterSpacing: 0.5 },
-                  { text: destCcy || 'N/D', fontSize: 14, bold: true, color: C.sectionBg, margin: [0, 6, 0, 0], decoration: 'underline' as const },
+                  {
+                    text: isWorldToBolivia
+                      ? 'MONTO ACREDITADO EN BOB'
+                      : 'ACTIVO VIRTUAL ADQUIRIDO',
+                    fontSize: 6.5,
+                    bold: true,
+                    color: C.summaryLbl,
+                    characterSpacing: 0.5,
+                  },
+                  { text: amountDestDisplay, fontSize: 14, bold: true, color: C.sectionBg, margin: [0, 6, 0, 0], decoration: 'underline' as const },
                 ],
                 fillColor: C.summaryBg,
                 border: [false, true, true, true],
@@ -1299,12 +1362,24 @@ export class PdfService {
           layout: 'noBorders',
           margin: [0, 0, 0, 0] as [number, number, number, number],
         },
-        // Párrafo narrativo
+        // Párrafo narrativo (condicional según flujo)
         {
           table: {
             widths: ['*'],
             body: [[{
-              text: [
+              text: isWorldToBolivia ? [
+                'Se deja constancia de que el PSAV ',
+                { text: psavAgent.name, bold: true },
+                ' recibió la suma de ',
+                { text: amountDisplay, bold: true },
+                ' en favor de ',
+                { text: nd(client.full_name), bold: true },
+                ', aplicando el tipo de cambio de ',
+                { text: exRateDisplay, bold: true },
+                ' y acreditando en su cuenta bancaria la suma de ',
+                { text: amountDestDisplay, bold: true },
+                '.',
+              ] : [
                 'Se deja constancia de que el PSAV ',
                 { text: psavAgent.name, bold: true },
                 ' realizó la compra de ',
@@ -1312,9 +1387,9 @@ export class PdfService {
                 ' en favor de ',
                 { text: nd(client.full_name), bold: true },
                 ', por la suma transferida de ',
-                { text: `Bs. ${amountBob}`, bold: true },
+                { text: amountDisplay, bold: true },
                 ', aplicando el tipo de cambio vigente/referencial de ',
-                { text: exRate, bold: true },
+                { text: exRateDisplay, bold: true },
                 ' de fecha ',
                 { text: createdDate, bold: true },
                 '.',

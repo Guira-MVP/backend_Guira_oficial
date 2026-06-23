@@ -4232,6 +4232,11 @@ export class PaymentOrdersService {
       description: `Orden ${orderId} (${order.flow_type}) completada por admin`,
     });
 
+    // Comprobante PSAV — generado automáticamente al completar world_to_bolivia (fire-and-forget)
+    if (order.flow_type === 'world_to_bolivia') {
+      void this.storePsavReceiptOnCompletion(orderId);
+    }
+
     // Notificar al usuario y al staff del cambio de estado
     this.ordersGateway.emitOrderUpdated(updated.user_id, {
       id: updated.id,
@@ -5149,8 +5154,8 @@ export class PaymentOrdersService {
       .single();
 
     if (orderErr || !order) throw new NotFoundException('Orden no encontrada');
-    if (!['bolivia_to_world', 'bolivia_to_wallet', 'fiat_bo_to_bridge_wallet'].includes(order.flow_type ?? '')) {
-      throw new BadRequestException('La generación de evidencia PSAV solo aplica a los flujos bolivia_to_world, bolivia_to_wallet y fiat_bo_to_bridge_wallet');
+    if (!['bolivia_to_world', 'bolivia_to_wallet', 'fiat_bo_to_bridge_wallet', 'world_to_bolivia'].includes(order.flow_type ?? '')) {
+      throw new BadRequestException('La generación de evidencia PSAV solo aplica a los flujos bolivia_to_world, bolivia_to_wallet, fiat_bo_to_bridge_wallet y world_to_bolivia');
     }
     if (['failed', 'cancelled', 'refunded'].includes(order.status)) {
       throw new BadRequestException(
