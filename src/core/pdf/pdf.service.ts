@@ -33,7 +33,7 @@ const FLOW_LABELS: Record<string, string> = {
   // aún NO tiene método de creación en payment-orders.service.ts (flujo planificado).
   fiat_us_to_bridge_wallet: 'Deposito USD - Billetera Guira',
   bridge_wallet_to_fiat_bo: 'Retiro Guira - Cuenta BOB',
-  bridge_wallet_to_fiat_us: 'Retiro Guira - Cuenta USD',
+  bridge_wallet_to_fiat_us: 'Retiro Guira - Cuenta Exterior',
   bridge_wallet_to_crypto: 'Retiro Guira - Wallet Crypto',
   bolivia_to_world: 'Bolivia - Exterior',
   bolivia_to_wallet: 'Bolivia - Wallet Crypto',
@@ -233,9 +233,24 @@ export class PdfService {
       'bridge_wallet_to_crypto',
       'crypto_to_bridge_wallet',
     ];
-    const exchangeRateDisplay = STABLECOIN_FLOWS.includes(ft)
+    const exchangeRateRaw = STABLECOIN_FLOWS.includes(ft)
       ? '1.00 (stablecoin)'
       : this.toDisplay(order.exchange_rate_applied);
+
+    // Añadir par de divisas al tipo de cambio para flujos con conversión real.
+    // La tasa siempre representa "unidades de originCcy por 1 unidad de la divisa no-BOB".
+    const destCcyForRate = (order.destination_currency ?? '').toUpperCase();
+    const isBobOrigin = ['BOB', 'BS'].includes(originCcy.toUpperCase());
+    const foreignCcy = isBobOrigin ? destCcyForRate : originCcy;
+    const baseCcy = isBobOrigin ? originCcy : destCcyForRate;
+    const showPair = !STABLECOIN_FLOWS.includes(ft)
+      && exchangeRateRaw !== 'N/D'
+      && foreignCcy
+      && baseCcy
+      && foreignCcy !== baseCcy;
+    const exchangeRateDisplay = showPair
+      ? `${exchangeRateRaw}  (1 ${foreignCcy} = ${exchangeRateRaw} ${baseCcy})`
+      : exchangeRateRaw;
 
     const rows: any[][] = [
       this.row('Monto Origen', `${this.fmtAmount(order.amount)} ${originCcy}`),
@@ -894,6 +909,9 @@ export class PdfService {
     const emitDate   = this.fmtDate(new Date().toISOString());
     const createdDate = this.fmtDate(order.created_at);
     const completedDate = order.completed_at ? this.fmtDate(order.completed_at) : emitDate;
+    const ctavStatusUpper = this.toDisplay(order.status).toUpperCase();
+    const ctavStatusLabel = STATUS_LABELS[ctavStatusUpper] ?? ctavStatusUpper;
+    const ctavStatusColor = this.statusColor(ctavStatusUpper);
     const refCode    = nd(order.deposit_reference_code);
     const ctavShort  = `N° CTAV-${ctavId.slice(0, 8).toUpperCase()}`;
     const amountBob  = this.fmtAmount(order.amount);
@@ -1036,7 +1054,7 @@ export class PdfService {
               {
                 stack: [
                   { text: 'ESTADO', fontSize: 7, bold: true, color: C.label, characterSpacing: 0.6 },
-                  { text: 'COMPLETADO', fontSize: 8.5, bold: true, color: C.accent, margin: [0, 3, 0, 0] },
+                  { text: ctavStatusLabel, fontSize: 8.5, bold: true, color: ctavStatusColor, margin: [0, 3, 0, 0] },
                 ],
                 border: [true, true, true, true],
                 margin: [0, 6, 0, 6],
