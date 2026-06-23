@@ -355,7 +355,7 @@ export class PdfService {
 
   // ─── Destination details (per service) ────────────────
 
-  private buildDestinationRows(order: any, supplier: any, clientWallet: any): any[][] {
+  private buildDestinationRows(order: any, supplier: any, clientWallet: any, clientBankAccount?: any): any[][] {
     const rows: any[][] = [];
     const ft = order.flow_type;
 
@@ -413,6 +413,11 @@ export class PdfService {
         this.row('Titular', this.toDisplay(order.destination_account_holder)),
         this.row('Moneda Destino', this.toDisplay(order.destination_currency)),
       );
+      // País del banco — desde iban_country (SEPA ya lo muestra), o desde address.country para otros rails
+      if (!['sepa'].includes(rail)) {
+        const addrCountry = bd.address?.country;
+        if (addrCountry) rows.push(this.row('País Destino', this.resolveCountryName(addrCountry)));
+      }
       const addr = supplier?.bank_details?.address;
       if (addr) rows.push(this.row('Dirección del Beneficiario', this.formatSupplierAddress(addr)));
       if (supplier?.contact_email) rows.push(this.row('Email de Contacto', this.toDisplay(supplier.contact_email)));
@@ -420,12 +425,22 @@ export class PdfService {
 
     // ── world_to_bolivia ─────────────────────────────────
     else if (ft === 'world_to_bolivia') {
+      // Preferir datos completos de client_bank_accounts sobre los de la orden (puede estar enmascarado)
+      const cba = clientBankAccount;
+      const bankName    = cba?.bank_name    || order.destination_bank_name    || '';
+      const acctNumber  = cba?.account_number || order.destination_account_number || '';
+      const acctHolder  = cba?.account_holder || order.destination_account_holder || '';
+      const acctType    = this.ACCOUNT_TYPE_LABELS[cba?.account_type ?? ''] ?? null;
       rows.push(
         this.row('Método de Recepción', 'Transferencia Bancaria Local'),
-        this.row('Banco Destino', this.toDisplay(order.destination_bank_name)),
-        this.row('Cuenta Destino', this.toDisplay(order.destination_account_number)),
-        this.row('Titular', this.toDisplay(order.destination_account_holder)),
+        this.row('Banco Destino', this.toDisplay(bankName)),
+        this.row('Cuenta Destino', this.toDisplay(acctNumber)),
+        this.row('Titular', this.toDisplay(acctHolder)),
+      );
+      if (acctType) rows.push(this.row('Tipo de Cuenta', acctType));
+      rows.push(
         this.row('Moneda Destino', this.toDisplay(order.destination_currency ?? 'BOB')),
+        this.row('País Destino', 'Bolivia'),
       );
     }
 
@@ -436,7 +451,8 @@ export class PdfService {
       rows.push(
         this.row('Proveedor', this.toDisplay(supplier?.name)),
         this.row('Método de Envío', this.RAIL_LABELS['crypto']),
-        this.linkRow('Wallet Destino', this.truncateAddress(walletAddr), this.buildExplorerUrl(walletAddr, walletNet, 'address')),
+        // Dirección completa en comprobante (documento legal); link a explorer si disponible
+        this.linkRow('Wallet Destino', this.toDisplay(walletAddr), this.buildExplorerUrl(walletAddr, walletNet, 'address')),
         this.row('Red Destino', this.toDisplay(walletNet)),
         this.row('Moneda Destino', this.toDisplay(supplier?.bank_details?.wallet_currency ?? order.destination_currency)),
       );
@@ -446,7 +462,7 @@ export class PdfService {
     // ── On-ramps: fiat/crypto/usd → bridge_wallet ─────────
     else if (['fiat_bo_to_bridge_wallet', 'crypto_to_bridge_wallet', 'fiat_us_to_bridge_wallet'].includes(ft)) {
       rows.push(
-        this.linkRow('Billetera Destino', this.truncateAddress(clientWallet?.address), this.buildExplorerUrl(clientWallet?.address, clientWallet?.network, 'address')),
+        this.linkRow('Billetera Destino', this.toDisplay(clientWallet?.address), this.buildExplorerUrl(clientWallet?.address, clientWallet?.network, 'address')),
         this.row('Red Destino', this.toDisplay(clientWallet?.network)),
         this.row('Moneda Destino', this.toDisplay(order.destination_currency ?? order.currency)),
       );
@@ -469,16 +485,23 @@ export class PdfService {
 
     // ── bridge_wallet_to_fiat_bo ─────────────────────────
     else if (ft === 'bridge_wallet_to_fiat_bo') {
-      // Primary source: dedicated columns populated at order creation
-      const bankName = order.destination_bank_name;
-      const acctNum = order.destination_account_number ?? order.destination_address;
-      const holder = order.destination_account_holder;
+      // Preferir datos completos de client_bank_accounts (número sin máscara, tipo de cuenta)
+      const cba = clientBankAccount;
+      const bankName   = cba?.bank_name    || order.destination_bank_name    || '';
+      const acctNumber = cba?.account_number || order.destination_account_number || order.destination_address || '';
+      const holder     = cba?.account_holder || order.destination_account_holder || '';
+      const acctType   = this.ACCOUNT_TYPE_LABELS[cba?.account_type ?? ''] ?? null;
       rows.push(
+        this.row('Método de Retiro', 'Transferencia Bancaria Local'),
         this.row('Banco Destino', this.toDisplay(bankName)),
-        this.row('Cuenta Destino', this.toDisplay(acctNum)),
+        this.row('Cuenta Destino', this.toDisplay(acctNumber)),
       );
       if (holder) rows.push(this.row('Titular', this.toDisplay(holder)));
-      rows.push(this.row('Moneda Destino', this.toDisplay(order.destination_currency ?? 'BOB')));
+      if (acctType) rows.push(this.row('Tipo de Cuenta', acctType));
+      rows.push(
+        this.row('Moneda Destino', this.toDisplay(order.destination_currency ?? 'BOB')),
+        this.row('País Destino', 'Bolivia'),
+      );
     }
 
     // ── bridge_wallet_to_fiat_us ─────────────────────────
@@ -543,7 +566,7 @@ export class PdfService {
       if (supplier?.name) rows.push(this.row('Proveedor', this.toDisplay(supplier.name)));
       rows.push(this.row('Método de Envío', this.RAIL_LABELS['crypto']));
       rows.push(
-        this.linkRow('Wallet Destino', this.truncateAddress(destAddr), this.buildExplorerUrl(destAddr, destNet, 'address')),
+        this.linkRow('Wallet Destino', this.toDisplay(destAddr), this.buildExplorerUrl(destAddr, destNet, 'address')),
         this.row('Red Destino', this.toDisplay(destNet)),
         this.row('Moneda Destino', this.toDisplay(destCcy)),
       );
@@ -620,6 +643,7 @@ export class PdfService {
     supplier: any | null,
     client?: any,
     clientWallet?: any,
+    clientBankAccount?: any,
   ): Promise<Buffer> {
     try {
       const ft = order.flow_type ?? 'N/D';
@@ -645,7 +669,7 @@ export class PdfService {
 
       const stablecoin = this.resolveStablecoin(order);
       const originRows = this.filterNd(this.buildOriginRows(order, clientWallet));
-      const destRows = this.filterNd(this.buildDestinationRows(order, supplier, clientWallet));
+      const destRows = this.filterNd(this.buildDestinationRows(order, supplier, clientWallet, clientBankAccount));
 
       // ── Traceability rows ──────────────────────────────
       const traceRows: any[][] = [

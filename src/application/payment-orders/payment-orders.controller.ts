@@ -38,6 +38,7 @@ import { SuppliersService } from '../suppliers/suppliers.service';
 import { ExportService } from '../../core/export/export.service';
 import { ProfilesService } from '../profiles/profiles.service';
 import { WalletsService } from '../wallets/wallets.service';
+import { ClientBankAccountsService } from '../client-bank-accounts/client-bank-accounts.service';
 import { CreateInterbankOrderDto } from './dto/create-interbank-order.dto';
 import { CreateWalletRampOrderDto } from './dto/create-wallet-ramp-order.dto';
 import { ConfirmDepositDto } from './dto/confirm-deposit.dto';
@@ -79,6 +80,7 @@ export class PaymentOrdersController {
     private readonly profilesService: ProfilesService,
     private readonly walletsService: WalletsService,
     private readonly orderReviewService: OrderReviewService,
+    private readonly clientBankAccountsService: ClientBankAccountsService,
   ) {}
 
   // ── Crear órdenes ──
@@ -441,11 +443,18 @@ export class PaymentOrdersController {
       }
     }
 
+    // Cuenta bancaria BOB del cliente — para flujos de retiro a Bolivia y world_to_bolivia
+    const needsBankAccount = ['bridge_wallet_to_fiat_bo', 'world_to_bolivia'].includes(order.flow_type);
+    const clientBankAccount = needsBankAccount
+      ? await this.clientBankAccountsService.findPrimary(order.user_id)
+      : null;
+
     const buffer = await this.pdfService.generatePaymentPdf(
       order,
       supplier,
       client,
       clientWallet,
+      clientBankAccount,
     );
 
     res.set({
