@@ -227,22 +227,22 @@ export class PdfService {
 
   /** Etiquetas legibles para cada payment_rail. */
   private readonly RAIL_LABELS: Record<string, string> = {
-    ach:              'ACH – EE.UU.',
-    wire:             'Wire Transfer',
-    sepa:             'SEPA – Europa',
-    spei:             'SPEI – México',
-    pix:              'PIX – Brasil',
-    bre_b:            'Bre-B – Colombia',
-    faster_payments:  'Faster Payments – Reino Unido',
+    ach: 'ACH – EE.UU.',
+    wire: 'Wire Transfer',
+    sepa: 'SEPA – Europa',
+    spei: 'SPEI – México',
+    pix: 'PIX – Brasil',
+    bre_b: 'Bre-B – Colombia',
+    faster_payments: 'Faster Payments – Reino Unido',
     co_bank_transfer: 'Transferencia Bancaria – Colombia',
-    crypto:           'Transferencia Crypto',
+    crypto: 'Transferencia Crypto',
   };
 
   /** Etiquetas legibles para tipo de cuenta bancaria. */
   private readonly ACCOUNT_TYPE_LABELS: Record<string, string> = {
-    checking:          'Cuenta Corriente',
-    savings:           'Caja de Ahorro',
-    electronic_deposit:'Depósito Electrónico',
+    checking: 'Cuenta Corriente',
+    savings: 'Caja de Ahorro',
+    electronic_deposit: 'Depósito Electrónico',
   };
 
   /** Horizontal divider line */
@@ -457,9 +457,9 @@ export class PdfService {
     // ── world_to_bolivia ─────────────────────────────────
     else if (ft === 'world_to_bolivia') {
       const cba = clientBankAccount;
-      const bankName   = cba?.bank_name   || order.destination_bank_name   || '';
+      const bankName = cba?.bank_name || order.destination_bank_name || '';
       const acctNumber = cba?.account_number || order.destination_account_number || '';
-      const acctType   = this.ACCOUNT_TYPE_LABELS[cba?.account_type ?? ''] ?? null;
+      const acctType = this.ACCOUNT_TYPE_LABELS[cba?.account_type ?? ''] ?? null;
       rows.push(
         this.row('Método de Recepción', 'Transferencia Bancaria Local'),
         this.row('Banco Destino', this.toDisplay(bankName)),
@@ -475,7 +475,7 @@ export class PdfService {
     // ── bolivia_to_wallet / wallet_to_wallet ─────────────
     else if (['bolivia_to_wallet', 'wallet_to_wallet'].includes(ft)) {
       const walletAddr = supplier?.bank_details?.wallet_address ?? order.destination_address;
-      const walletNet  = supplier?.bank_details?.wallet_network  ?? order.destination_network;
+      const walletNet = supplier?.bank_details?.wallet_network ?? order.destination_network;
       rows.push(
         this.row('Método de Envío', this.RAIL_LABELS['crypto']),
         this.linkRow('Wallet Destino', this.toDisplay(walletAddr), this.buildExplorerUrl(walletAddr, walletNet, 'address')),
@@ -507,9 +507,9 @@ export class PdfService {
     // ── bridge_wallet_to_fiat_bo ─────────────────────────
     else if (ft === 'bridge_wallet_to_fiat_bo') {
       const cba = clientBankAccount;
-      const bankName   = cba?.bank_name   || order.destination_bank_name   || '';
+      const bankName = cba?.bank_name || order.destination_bank_name || '';
       const acctNumber = cba?.account_number || order.destination_account_number || order.destination_address || '';
-      const acctType   = this.ACCOUNT_TYPE_LABELS[cba?.account_type ?? ''] ?? null;
+      const acctType = this.ACCOUNT_TYPE_LABELS[cba?.account_type ?? ''] ?? null;
       rows.push(
         this.row('Método de Retiro', 'Transferencia Bancaria Local'),
         this.row('Banco Destino', this.toDisplay(bankName)),
@@ -561,8 +561,8 @@ export class PdfService {
     // ── bridge_wallet_to_crypto ──────────────────────────
     else if (ft === 'bridge_wallet_to_crypto') {
       const destAddr = supplier?.bank_details?.wallet_address ?? order.destination_address;
-      const destNet  = supplier?.bank_details?.wallet_network  ?? order.destination_network;
-      const destCcy  = supplier?.bank_details?.wallet_currency  ?? order.destination_currency;
+      const destNet = supplier?.bank_details?.wallet_network ?? order.destination_network;
+      const destCcy = supplier?.bank_details?.wallet_currency ?? order.destination_currency;
       rows.push(
         this.row('Método de Envío', this.RAIL_LABELS['crypto']),
         this.linkRow('Wallet Destino', this.toDisplay(destAddr), this.buildExplorerUrl(destAddr, destNet, 'address')),
@@ -773,10 +773,10 @@ export class PdfService {
           widths: ['25%', '25%', '25%', '25%'],
           body: [
             sectionHeader('CLIENTE Y BENEFICIARIO', 4),
-            // [
-            //   { text: 'CLIENTE', style: 'subHeader', colSpan: 2 }, {},
-            //   { text: 'BENEFICIARIO', style: 'subHeader', colSpan: 2 }, {},
-            // ],
+            [
+              { text: 'CLIENTE', style: 'subHeader', colSpan: 2 }, {},
+              { text: 'BENEFICIARIO', style: 'subHeader', colSpan: 2 }, {},
+            ],
             ...this.mergeColumns(clientRows, beneficiarySummaryRows),
           ],
         },
@@ -1052,38 +1052,38 @@ export class PdfService {
     liquidationAddress?: { address: string; chain?: string | null } | null,
   ): Promise<Buffer> {
     const C = {
-      headerBg:    '#1C3A3A',
-      headerText:  '#FFFFFF',
-      headerSub:   '#A8CCCA',
-      accent:      '#00968A',
-      sectionBg:   '#1A2E2E',
+      headerBg: '#1C3A3A',
+      headerText: '#FFFFFF',
+      headerSub: '#A8CCCA',
+      accent: '#00968A',
+      sectionBg: '#1A2E2E',
       sectionText: '#FFFFFF',
-      summaryBg:   '#D6EEEC',
-      summaryLbl:  '#4A7A75',
-      body:        '#1A1A1A',
-      label:       '#888888',
-      border:      '#CCCCCC',
-      rowAlt:      '#F5F5F5',
-      white:       '#FFFFFF',
+      summaryBg: '#D6EEEC',
+      summaryLbl: '#4A7A75',
+      body: '#1A1A1A',
+      label: '#888888',
+      border: '#CCCCCC',
+      rowAlt: '#F5F5F5',
+      white: '#FFFFFF',
     };
 
     const nd = (val: any) => (val == null || val === '' ? 'N/D' : String(val));
-    const emitDate   = this.fmtDate(new Date().toISOString());
+    const emitDate = this.fmtDate(new Date().toISOString());
     const createdDate = this.fmtDate(order.created_at);
     const completedDate = order.completed_at ? this.fmtDate(order.completed_at) : emitDate;
     const ctavStatusUpper = this.toDisplay(order.status).toUpperCase();
     const ctavStatusLabel = STATUS_LABELS[ctavStatusUpper] ?? ctavStatusUpper;
     const ctavStatusColor = this.statusColor(ctavStatusUpper);
-    const refCode    = nd(order.deposit_reference_code);
-    const ctavShort  = `N° CTAV-${ctavId.slice(0, 8).toUpperCase()}`;
-    const amountBob  = this.fmtAmount(order.amount);
+    const refCode = nd(order.deposit_reference_code);
+    const ctavShort = `N° CTAV-${ctavId.slice(0, 8).toUpperCase()}`;
+    const amountBob = this.fmtAmount(order.amount);
     const amountDest = this.fmtAmount(order.amount_destination ?? order.net_amount);
-    const currency   = (order.currency ?? 'BOB').toUpperCase();
-    const destCcy    = (order.destination_currency ?? '').toUpperCase();
-    const destNet    = nd(order.destination_network);
-    const txRef      = nd(order.tx_hash ?? order.source_tx_hash);
+    const currency = (order.currency ?? 'BOB').toUpperCase();
+    const destCcy = (order.destination_currency ?? '').toUpperCase();
+    const destNet = nd(order.destination_network);
+    const txRef = nd(order.tx_hash ?? order.source_tx_hash);
     const walletDest = nd(liquidationAddress?.address);
-    const exRate     = nd(order.exchange_rate_applied);
+    const exRate = nd(order.exchange_rate_applied);
 
     // ── Layout helpers ──
     const borderedLayout = {
@@ -1125,7 +1125,7 @@ export class PdfService {
 
     const dr = (label: string, value: string, alt = false): any[] => [
       { text: label, fontSize: 7.5, color: C.label, fillColor: alt ? C.rowAlt : C.white },
-      { text: value,  fontSize: 8.5, bold: true, color: C.body, fillColor: alt ? C.rowAlt : C.white },
+      { text: value, fontSize: 8.5, bold: true, color: C.body, fillColor: alt ? C.rowAlt : C.white },
     ];
 
     // ── Sección 3: Datos del cliente ──
@@ -1140,9 +1140,9 @@ export class PdfService {
     const detailRows: any[][] = [
       secHdr('DETALLES DE LA OPERACIÓN', 4),
       [
-        { text: 'Monto Acreditado',  fontSize: 7.5, color: C.label, fillColor: C.white },
+        { text: 'Monto Acreditado', fontSize: 7.5, color: C.label, fillColor: C.white },
         { text: `${amountDest} ${destCcy}`, fontSize: 8.5, bold: true, color: C.body, fillColor: C.white },
-        { text: 'Red / Blockchain',  fontSize: 7.5, color: C.label, fillColor: C.white },
+        { text: 'Red / Blockchain', fontSize: 7.5, color: C.label, fillColor: C.white },
         { text: destNet, fontSize: 8.5, bold: true, color: C.body, fillColor: C.white },
       ],
       [
