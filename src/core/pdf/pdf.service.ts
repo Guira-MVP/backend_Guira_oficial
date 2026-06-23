@@ -773,10 +773,10 @@ export class PdfService {
           widths: ['25%', '25%', '25%', '25%'],
           body: [
             sectionHeader('CLIENTE Y BENEFICIARIO', 4),
-            [
-              { text: 'CLIENTE', style: 'subHeader', colSpan: 2 }, {},
-              { text: 'BENEFICIARIO', style: 'subHeader', colSpan: 2 }, {},
-            ],
+            // [
+            //   { text: 'CLIENTE', style: 'subHeader', colSpan: 2 }, {},
+            //   { text: 'BENEFICIARIO', style: 'subHeader', colSpan: 2 }, {},
+            // ],
             ...this.mergeColumns(clientRows, beneficiarySummaryRows),
           ],
         },
