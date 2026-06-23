@@ -353,15 +353,57 @@ export class PdfService {
     return rows;
   }
 
-  // ─── Destination details (per service) ────────────────
+  // ─── Beneficiary summary (right column of party grid) ─
 
-  private buildDestinationRows(order: any, supplier: any, clientWallet: any, clientBankAccount?: any): any[][] {
+  private buildBeneficiarySummaryRows(order: any, supplier: any, clientBankAccount?: any): any[][] {
     const rows: any[][] = [];
     const ft = order.flow_type;
+    const bd: any = supplier?.bank_details ?? {};
 
-    // Purpose (common to all)
-    const purpose = order.business_purpose;
-    if (purpose) rows.push(this.row('Propósito', this.toDisplay(purpose)));
+    if (ft === 'bolivia_to_world') {
+      if (supplier?.name) rows.push(this.row('Proveedor', this.toDisplay(supplier.name)));
+      if (order.destination_account_holder) rows.push(this.row('Titular', this.toDisplay(order.destination_account_holder)));
+      if (supplier?.contact_email) rows.push(this.row('Email de Contacto', this.toDisplay(supplier.contact_email)));
+      const rail = (supplier?.payment_rail ?? '').toLowerCase();
+      const country = rail === 'sepa' ? bd.iban_country : bd.address?.country;
+      if (country) rows.push(this.row('País', this.resolveCountryName(country)));
+    } else if (ft === 'world_to_bolivia') {
+      const holder = clientBankAccount?.account_holder || order.destination_account_holder;
+      if (holder) rows.push(this.row('Titular', this.toDisplay(holder)));
+      rows.push(this.row('País', 'Bolivia'));
+    } else if (['bolivia_to_wallet', 'wallet_to_wallet'].includes(ft)) {
+      if (supplier?.name) rows.push(this.row('Proveedor', this.toDisplay(supplier.name)));
+      if (supplier?.contact_email) rows.push(this.row('Email de Contacto', this.toDisplay(supplier.contact_email)));
+    } else if (['fiat_bo_to_bridge_wallet', 'crypto_to_bridge_wallet'].includes(ft)) {
+      rows.push(this.row('Titular', 'Billetera Propia'));
+    } else if (ft === 'bridge_wallet_to_fiat_bo') {
+      const holder = clientBankAccount?.account_holder || order.destination_account_holder;
+      if (holder) rows.push(this.row('Titular', this.toDisplay(holder)));
+      rows.push(this.row('País', 'Bolivia'));
+    } else if (ft === 'bridge_wallet_to_fiat_us') {
+      if (supplier?.name) rows.push(this.row('Proveedor', this.toDisplay(supplier.name)));
+      const holder = order.destination_account_holder
+        || bd.business_name
+        || [bd.first_name, bd.last_name].filter(Boolean).join(' ')
+        || supplier?.name;
+      if (holder) rows.push(this.row('Titular', this.toDisplay(holder)));
+      if (supplier?.contact_email) rows.push(this.row('Email de Contacto', this.toDisplay(supplier.contact_email)));
+      const rail = (supplier?.payment_rail ?? '').toLowerCase();
+      const country = rail === 'sepa' ? bd.iban_country : bd.address?.country;
+      if (country) rows.push(this.row('País', this.resolveCountryName(country)));
+    } else if (ft === 'bridge_wallet_to_crypto') {
+      if (supplier?.name) rows.push(this.row('Proveedor', this.toDisplay(supplier.name)));
+      if (supplier?.contact_email) rows.push(this.row('Email de Contacto', this.toDisplay(supplier.contact_email)));
+    }
+
+    return rows;
+  }
+
+  // ─── Banking details (section 2 — no identity fields) ──
+
+  private buildBankingRows(order: any, supplier: any, clientWallet: any, clientBankAccount?: any): any[][] {
+    const rows: any[][] = [];
+    const ft = order.flow_type;
 
     // ── bolivia_to_world ─────────────────────────────────
     if (ft === 'bolivia_to_world') {
@@ -370,27 +412,22 @@ export class PdfService {
       const railLabel = this.RAIL_LABELS[rail] ?? (rail ? rail.toUpperCase() : 'N/D');
 
       rows.push(
-        this.row('Proveedor', this.toDisplay(supplier?.name)),
         this.row('Método de Envío', railLabel),
         this.row('Banco Destino', this.toDisplay(order.destination_bank_name)),
       );
 
-      // ── Campos específicos por rail ──────────────────────
       if (rail === 'sepa') {
         const iban = bd.iban || order.destination_account_number;
         if (iban) rows.push(this.row('IBAN', this.toDisplay(iban)));
         if (bd.swift_bic) rows.push(this.row('SWIFT / BIC', this.toDisplay(bd.swift_bic)));
         if (bd.iban_country) rows.push(this.row('País (IBAN)', this.resolveCountryName(bd.iban_country)));
       } else if (rail === 'spei') {
-        const clabe = bd.clabe || order.destination_account_number;
-        rows.push(this.row('CLABE', this.toDisplay(clabe)));
+        rows.push(this.row('CLABE', this.toDisplay(bd.clabe || order.destination_account_number)));
       } else if (rail === 'pix') {
-        const pixKey = bd.pix_key || order.destination_account_number;
-        rows.push(this.row('Clave PIX', this.toDisplay(pixKey)));
+        rows.push(this.row('Clave PIX', this.toDisplay(bd.pix_key || order.destination_account_number)));
         if (bd.document_number) rows.push(this.row('CPF / CNPJ', this.toDisplay(bd.document_number)));
       } else if (rail === 'bre_b') {
-        const breKey = bd.bre_b_key || order.destination_account_number;
-        rows.push(this.row('Clave Bre-B', this.toDisplay(breKey)));
+        rows.push(this.row('Clave Bre-B', this.toDisplay(bd.bre_b_key || order.destination_account_number)));
       } else if (rail === 'faster_payments') {
         rows.push(this.row('Cuenta Destino', this.toDisplay(order.destination_account_number)));
         if (bd.sort_code) rows.push(this.row('Sort Code', this.toDisplay(bd.sort_code)));
@@ -401,7 +438,6 @@ export class PdfService {
         if (docStr) rows.push(this.row('Documento Beneficiario', docStr));
         if (bd.phone_number) rows.push(this.row('Teléfono Beneficiario', this.toDisplay(bd.phone_number)));
       } else {
-        // ACH / Wire / default fiat
         rows.push(this.row('Cuenta Destino', this.toDisplay(order.destination_account_number)));
         if (bd.routing_number) rows.push(this.row('Routing Number', this.toDisplay(bd.routing_number)));
         if (bd.swift_bic) rows.push(this.row('SWIFT / BIC', this.toDisplay(bd.swift_bic)));
@@ -409,33 +445,25 @@ export class PdfService {
         if (acctTypeLabel) rows.push(this.row('Tipo de Cuenta', acctTypeLabel));
       }
 
-      rows.push(
-        this.row('Titular', this.toDisplay(order.destination_account_holder)),
-        this.row('Moneda Destino', this.toDisplay(order.destination_currency)),
-      );
-      // País del banco — desde iban_country (SEPA ya lo muestra), o desde address.country para otros rails
+      rows.push(this.row('Moneda Destino', this.toDisplay(order.destination_currency)));
       if (!['sepa'].includes(rail)) {
         const addrCountry = bd.address?.country;
         if (addrCountry) rows.push(this.row('País Destino', this.resolveCountryName(addrCountry)));
       }
       const addr = supplier?.bank_details?.address;
       if (addr) rows.push(this.row('Dirección del Beneficiario', this.formatSupplierAddress(addr)));
-      if (supplier?.contact_email) rows.push(this.row('Email de Contacto', this.toDisplay(supplier.contact_email)));
     }
 
     // ── world_to_bolivia ─────────────────────────────────
     else if (ft === 'world_to_bolivia') {
-      // Preferir datos completos de client_bank_accounts sobre los de la orden (puede estar enmascarado)
       const cba = clientBankAccount;
-      const bankName    = cba?.bank_name    || order.destination_bank_name    || '';
-      const acctNumber  = cba?.account_number || order.destination_account_number || '';
-      const acctHolder  = cba?.account_holder || order.destination_account_holder || '';
-      const acctType    = this.ACCOUNT_TYPE_LABELS[cba?.account_type ?? ''] ?? null;
+      const bankName   = cba?.bank_name   || order.destination_bank_name   || '';
+      const acctNumber = cba?.account_number || order.destination_account_number || '';
+      const acctType   = this.ACCOUNT_TYPE_LABELS[cba?.account_type ?? ''] ?? null;
       rows.push(
         this.row('Método de Recepción', 'Transferencia Bancaria Local'),
         this.row('Banco Destino', this.toDisplay(bankName)),
         this.row('Cuenta Destino', this.toDisplay(acctNumber)),
-        this.row('Titular', this.toDisplay(acctHolder)),
       );
       if (acctType) rows.push(this.row('Tipo de Cuenta', acctType));
       rows.push(
@@ -447,19 +475,16 @@ export class PdfService {
     // ── bolivia_to_wallet / wallet_to_wallet ─────────────
     else if (['bolivia_to_wallet', 'wallet_to_wallet'].includes(ft)) {
       const walletAddr = supplier?.bank_details?.wallet_address ?? order.destination_address;
-      const walletNet = supplier?.bank_details?.wallet_network ?? order.destination_network;
+      const walletNet  = supplier?.bank_details?.wallet_network  ?? order.destination_network;
       rows.push(
-        this.row('Proveedor', this.toDisplay(supplier?.name)),
         this.row('Método de Envío', this.RAIL_LABELS['crypto']),
-        // Dirección completa en comprobante (documento legal); link a explorer si disponible
         this.linkRow('Wallet Destino', this.toDisplay(walletAddr), this.buildExplorerUrl(walletAddr, walletNet, 'address')),
         this.row('Red Destino', this.toDisplay(walletNet)),
         this.row('Moneda Destino', this.toDisplay(supplier?.bank_details?.wallet_currency ?? order.destination_currency)),
       );
-      if (supplier?.contact_email) rows.push(this.row('Email de Contacto', this.toDisplay(supplier.contact_email)));
     }
 
-    // ── On-ramps: fiat/crypto/usd → bridge_wallet ─────────
+    // ── On-ramps: fiat/crypto → bridge_wallet ─────────────
     else if (['fiat_bo_to_bridge_wallet', 'crypto_to_bridge_wallet', 'fiat_us_to_bridge_wallet'].includes(ft)) {
       rows.push(
         this.linkRow('Billetera Destino', this.toDisplay(clientWallet?.address), this.buildExplorerUrl(clientWallet?.address, clientWallet?.network, 'address')),
@@ -468,35 +493,28 @@ export class PdfService {
       );
     }
 
-    // ── va_deposit (Virtual Account / Cuenta Virtual) ─────
+    // ── va_deposit ────────────────────────────────────────
     else if (ft === 'va_deposit') {
       const destCcy = (order.destination_currency ?? order.currency ?? 'USDC').toUpperCase();
       rows.push(
         this.row('Canal de Depósito', 'Cuenta Virtual (ACH / Wire)'),
         this.row('Moneda Recibida', destCcy),
       );
-      if (order.sender_name) {
-        rows.push(this.row('Remitente', this.toDisplay(order.sender_name)));
-      }
-      if (order.va_deposit_status) {
-        rows.push(this.row('Estado del Depósito', this.toDisplay(order.va_deposit_status)));
-      }
+      if (order.sender_name) rows.push(this.row('Remitente', this.toDisplay(order.sender_name)));
+      if (order.va_deposit_status) rows.push(this.row('Estado del Depósito', this.toDisplay(order.va_deposit_status)));
     }
 
     // ── bridge_wallet_to_fiat_bo ─────────────────────────
     else if (ft === 'bridge_wallet_to_fiat_bo') {
-      // Preferir datos completos de client_bank_accounts (número sin máscara, tipo de cuenta)
       const cba = clientBankAccount;
-      const bankName   = cba?.bank_name    || order.destination_bank_name    || '';
+      const bankName   = cba?.bank_name   || order.destination_bank_name   || '';
       const acctNumber = cba?.account_number || order.destination_account_number || order.destination_address || '';
-      const holder     = cba?.account_holder || order.destination_account_holder || '';
       const acctType   = this.ACCOUNT_TYPE_LABELS[cba?.account_type ?? ''] ?? null;
       rows.push(
         this.row('Método de Retiro', 'Transferencia Bancaria Local'),
         this.row('Banco Destino', this.toDisplay(bankName)),
         this.row('Cuenta Destino', this.toDisplay(acctNumber)),
       );
-      if (holder) rows.push(this.row('Titular', this.toDisplay(holder)));
       if (acctType) rows.push(this.row('Tipo de Cuenta', acctType));
       rows.push(
         this.row('Moneda Destino', this.toDisplay(order.destination_currency ?? 'BOB')),
@@ -506,78 +524,56 @@ export class PdfService {
 
     // ── bridge_wallet_to_fiat_us ─────────────────────────
     else if (ft === 'bridge_wallet_to_fiat_us') {
-      // bank_details guarda los datos según el rail (ACH, SEPA, SPEI, PIX, etc.).
-      // order.destination_account_number se guarda ENMASCARADO (****1234), por lo que
-      // preferimos el número completo de supplier.bank_details para el comprobante.
       const bd: any = supplier?.bank_details ?? {};
       const rail = (supplier?.payment_rail ?? '').toLowerCase();
       const railLabel = this.RAIL_LABELS[rail] ?? (rail ? rail.toUpperCase() : 'N/D');
       const bankName = bd.bank_name || order.destination_bank_name || '';
-      const holder = order.destination_account_holder
-        || bd.business_name
-        || [bd.first_name, bd.last_name].filter(Boolean).join(' ')
-        || supplier?.name
-        || '';
 
-      if (supplier?.name) rows.push(this.row('Proveedor', this.toDisplay(supplier.name)));
       if (rail) rows.push(this.row('Método de Envío', railLabel));
       rows.push(this.row('Banco Destino', this.toDisplay(bankName)));
 
-      // Rail-specific fields
       if (rail === 'sepa') {
         const iban = bd.iban || bd.account_number || order.destination_account_number || '';
         if (iban) rows.push(this.row('IBAN', this.toDisplay(iban)));
         if (bd.swift_bic) rows.push(this.row('SWIFT / BIC', this.toDisplay(bd.swift_bic)));
         if (bd.iban_country) rows.push(this.row('País (IBAN)', this.resolveCountryName(bd.iban_country)));
       } else if (rail === 'spei') {
-        const clabe = bd.clabe || bd.account_number || order.destination_account_number || '';
-        rows.push(this.row('CLABE', this.toDisplay(clabe)));
+        rows.push(this.row('CLABE', this.toDisplay(bd.clabe || bd.account_number || order.destination_account_number)));
       } else if (rail === 'pix') {
-        const pixKey = bd.pix_key || bd.account_number || order.destination_account_number || '';
-        rows.push(this.row('Clave PIX', this.toDisplay(pixKey)));
+        rows.push(this.row('Clave PIX', this.toDisplay(bd.pix_key || bd.account_number || order.destination_account_number)));
         if (bd.document_number) rows.push(this.row('CPF / CNPJ', this.toDisplay(bd.document_number)));
       } else if (rail === 'faster_payments') {
-        const acctNum = bd.account_number || order.destination_account_number || '';
-        rows.push(this.row('Cuenta Destino', this.toDisplay(acctNum)));
+        rows.push(this.row('Cuenta Destino', this.toDisplay(bd.account_number || order.destination_account_number)));
         if (bd.sort_code) rows.push(this.row('Sort Code', this.toDisplay(bd.sort_code)));
       } else {
-        // ACH / Wire / default
-        const acctNum = bd.account_number || order.destination_account_number || order.destination_address || '';
-        rows.push(this.row('Cuenta Destino', this.toDisplay(acctNum)));
+        rows.push(this.row('Cuenta Destino', this.toDisplay(bd.account_number || order.destination_account_number || order.destination_address)));
         if (bd.routing_number) rows.push(this.row('Routing Number', this.toDisplay(bd.routing_number)));
         if (bd.swift_bic) rows.push(this.row('SWIFT / BIC', this.toDisplay(bd.swift_bic)));
         const acctTypeLabel = this.ACCOUNT_TYPE_LABELS[bd.checking_or_savings ?? ''];
         if (acctTypeLabel) rows.push(this.row('Tipo de Cuenta', acctTypeLabel));
       }
 
-      if (holder) rows.push(this.row('Titular', holder));
       rows.push(this.row('Moneda Destino', this.toDisplay(order.destination_currency ?? 'USD')));
       const addrUs = bd.address;
       if (addrUs) rows.push(this.row('Dirección del Beneficiario', this.formatSupplierAddress(addrUs)));
-      if (supplier?.contact_email) rows.push(this.row('Email de Contacto', this.toDisplay(supplier.contact_email)));
     }
 
     // ── bridge_wallet_to_crypto ──────────────────────────
     else if (ft === 'bridge_wallet_to_crypto') {
-      // Preferir datos del supplier (fuente autoritativa) con fallback a la orden
       const destAddr = supplier?.bank_details?.wallet_address ?? order.destination_address;
-      const destNet = supplier?.bank_details?.wallet_network ?? order.destination_network;
-      const destCcy = supplier?.bank_details?.wallet_currency ?? order.destination_currency;
-      if (supplier?.name) rows.push(this.row('Proveedor', this.toDisplay(supplier.name)));
-      rows.push(this.row('Método de Envío', this.RAIL_LABELS['crypto']));
+      const destNet  = supplier?.bank_details?.wallet_network  ?? order.destination_network;
+      const destCcy  = supplier?.bank_details?.wallet_currency  ?? order.destination_currency;
       rows.push(
+        this.row('Método de Envío', this.RAIL_LABELS['crypto']),
         this.linkRow('Wallet Destino', this.toDisplay(destAddr), this.buildExplorerUrl(destAddr, destNet, 'address')),
         this.row('Red Destino', this.toDisplay(destNet)),
         this.row('Moneda Destino', this.toDisplay(destCcy)),
       );
-      if (supplier?.contact_email) rows.push(this.row('Email de Contacto', this.toDisplay(supplier.contact_email)));
     }
 
     // ── Generic fallback ─────────────────────────────────
     else {
-      rows.push(
-        this.row('Dirección Destino', this.toDisplay(order.destination_address)),
-      );
+      rows.push(this.row('Dirección Destino', this.toDisplay(order.destination_address)));
       if (order.destination_currency) {
         rows.push(this.row('Moneda Destino', order.destination_currency.toUpperCase()));
       }
@@ -668,8 +664,12 @@ export class PdfService {
         : 'Pendiente';
 
       const stablecoin = this.resolveStablecoin(order);
-      const originRows = this.filterNd(this.buildOriginRows(order, clientWallet));
-      const destRows = this.filterNd(this.buildDestinationRows(order, supplier, clientWallet, clientBankAccount));
+      const beneficiarySummaryRows = this.filterNd(this.buildBeneficiarySummaryRows(order, supplier, clientBankAccount));
+      const bankingRows = this.filterNd(this.buildBankingRows(order, supplier, clientWallet, clientBankAccount));
+      const purposeRow: any[][] = order.business_purpose
+        ? [this.row('Propósito', this.toDisplay(order.business_purpose))]
+        : [];
+      const operationRows = this.filterNd([...purposeRow, ...this.buildOriginRows(order, clientWallet)]);
 
       // ── Traceability rows ──────────────────────────────
       const traceRows: any[][] = [
@@ -739,85 +739,84 @@ export class PdfService {
         return cells;
       };
 
-      // ── Client table ──
+      // ── Sección 1: CLIENTE Y BENEFICIARIO (grid 4 cols) ──
       const identityLabel = client?.identity_label ?? null;
       const identityValue = client?.identity_value ?? null;
       const countryDisplay = client?.country ? this.resolveCountryName(client.country) : null;
 
-      const clientRows: any[][] = [
-        sectionHeader('DATOS DEL CLIENTE', 4),
-        [
-          { text: 'Nombre / Razón Social', style: 'cellLabel' },
-          { text: this.toDisplay(client?.full_name), style: 'cellValue', colSpan: 3 },
-          {}, {},
-        ],
-      ];
-
-      // CI/NIT + País en la misma fila cuando ambos existen, o en filas separadas
-      if (identityLabel && identityValue && countryDisplay) {
+      // Filas del cliente (columna izquierda del grid)
+      const clientRows: any[][] = [];
+      clientRows.push([
+        { text: 'Nombre / Razón Social', style: 'tLabel' },
+        { text: this.toDisplay(client?.full_name), style: 'tValue' },
+      ]);
+      if (identityLabel && identityValue) {
         clientRows.push([
-          { text: identityLabel, style: 'cellLabel' },
-          { text: this.toDisplay(identityValue), style: 'cellValue' },
-          { text: 'País', style: 'cellLabel' },
-          { text: countryDisplay, style: 'cellValue' },
-        ]);
-      } else if (identityLabel && identityValue) {
-        clientRows.push([
-          { text: identityLabel, style: 'cellLabel' },
-          { text: this.toDisplay(identityValue), style: 'cellValue', colSpan: 3 },
-          {}, {},
-        ]);
-      } else if (countryDisplay) {
-        clientRows.push([
-          { text: 'País', style: 'cellLabel' },
-          { text: countryDisplay, style: 'cellValue', colSpan: 3 },
-          {}, {},
+          { text: identityLabel, style: 'tLabel' },
+          { text: this.toDisplay(identityValue), style: 'tValue' },
         ]);
       }
+      if (countryDisplay) {
+        clientRows.push([
+          { text: 'País', style: 'tLabel' },
+          { text: countryDisplay, style: 'tValue' },
+        ]);
+      }
+      clientRows.push(
+        [{ text: 'Correo Electrónico', style: 'tLabel' }, { text: this.toDisplay(client?.email), style: 'tValue' }],
+        [{ text: 'Teléfono', style: 'tLabel' }, { text: this.toDisplay(client?.phone), style: 'tValue' }],
+      );
 
-      clientRows.push([
-        { text: 'Correo Electrónico', style: 'cellLabel' },
-        { text: this.toDisplay(client?.email), style: 'cellValue' },
-        { text: 'Teléfono', style: 'cellLabel' },
-        { text: this.toDisplay(client?.phone), style: 'cellValue' },
-      ]);
-
-      const clientTable = {
+      const partyTable = {
         table: {
           headerRows: 1,
           widths: ['25%', '25%', '25%', '25%'],
-          body: clientRows,
+          body: [
+            sectionHeader('CLIENTE Y BENEFICIARIO', 4),
+            [
+              { text: 'CLIENTE', style: 'subHeader', colSpan: 2 }, {},
+              { text: 'BENEFICIARIO', style: 'subHeader', colSpan: 2 }, {},
+            ],
+            ...this.mergeColumns(clientRows, beneficiarySummaryRows),
+          ],
+        },
+        layout: {
+          ...borderedLayout,
+          vLineWidth: (i: number, node: any) => {
+            if (i === 0 || i === node.table.widths.length) return 0.6;
+            if (i === 2) return 0.4;
+            return 0;
+          },
+          vLineColor: (i: number) => i === 2 ? COLORS.borderLight : COLORS.border,
+        },
+        margin: [0, 0, 0, 14] as [number, number, number, number],
+      };
+
+      // ── Sección 2: DATOS BANCARIOS DEL BENEFICIARIO ──
+      const bankingTable = {
+        table: {
+          headerRows: 1,
+          widths: ['30%', '70%'],
+          body: [
+            sectionHeader('DATOS BANCARIOS DEL BENEFICIARIO', 2),
+            ...bankingRows,
+          ],
         },
         layout: borderedLayout,
         margin: [0, 0, 0, 14] as [number, number, number, number],
       };
 
-      // ── Origin / Destination side-by-side ──
-      const operationTable = {
+      // ── Sección 3: DETALLES DE LA OPERACIÓN ──
+      const operationDetailTable = {
         table: {
           headerRows: 1,
-          widths: ['25%', '25%', '25%', '25%'],
+          widths: ['30%', '70%'],
           body: [
-            sectionHeader('DETALLES DE LA OPERACIÓN', 4),
-            // Sub-headers
-            [
-              { text: 'ORIGEN', style: 'subHeader', colSpan: 2 }, {},
-              { text: 'DESTINO', style: 'subHeader', colSpan: 2 }, {},
-            ],
-            // Merge origin and destination rows side by side
-            ...this.mergeColumns(originRows, destRows),
+            sectionHeader('DETALLES DE LA OPERACIÓN', 2),
+            ...operationRows,
           ],
         },
-        layout: {
-          ...borderedLayout,
-          // Subtle vertical divider between origin and destination columns
-          vLineWidth: (i: number, node: any) => {
-            if (i === 0 || i === node.table.widths.length) return 0.6;
-            if (i === 2) return 0.4; // center divider
-            return 0;
-          },
-          vLineColor: (i: number) => i === 2 ? COLORS.borderLight : COLORS.border,
-        },
+        layout: borderedLayout,
         margin: [0, 0, 0, 14] as [number, number, number, number],
       };
 
@@ -948,8 +947,9 @@ export class PdfService {
           },
 
           // ═══ SECTION TABLES ═══
-          clientTable,
-          operationTable,
+          partyTable,
+          bankingTable,
+          operationDetailTable,
           traceTable,
 
           // ═══ ACCENT BOTTOM LINE ═══
