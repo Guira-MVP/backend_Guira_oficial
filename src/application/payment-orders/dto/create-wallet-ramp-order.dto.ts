@@ -187,7 +187,7 @@ export class CreateWalletRampOrderDto {
       'bridge_wallet_to_crypto',
     ].includes(o.flow_type),
   )
-  @IsOptional()
+  @IsNotEmpty({ message: 'supplier_id es obligatorio para wallet_to_fiat, bridge_wallet_to_fiat_us y bridge_wallet_to_crypto' })
   @IsUUID()
   supplier_id?: string;
 

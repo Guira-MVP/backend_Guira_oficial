@@ -190,6 +190,19 @@ export class PdfService {
     return this.row(label, displayValue, opts);
   }
 
+  /** Formats a bank_details.address object into a single display line */
+  private formatSupplierAddress(addr: any): string {
+    if (!addr || typeof addr !== 'object') return 'N/D';
+    const parts: string[] = [];
+    if (addr.street_line_1) parts.push(addr.street_line_1);
+    if (addr.street_line_2) parts.push(addr.street_line_2);
+    const cityState = [addr.city, addr.state].filter(Boolean).join(', ');
+    if (cityState) parts.push(cityState);
+    if (addr.postal_code) parts.push(addr.postal_code);
+    if (addr.country) parts.push(addr.country);
+    return parts.length ? parts.join(', ') : 'N/D';
+  }
+
   /** Horizontal divider line */
   private divider(width = 515): any {
     return {
@@ -296,12 +309,15 @@ export class PdfService {
     // ── bolivia_to_world ─────────────────────────────────
     if (ft === 'bolivia_to_world') {
       rows.push(
-        this.row('Proveedor', this.toDisplay(supplier?.name ?? 'No asignado')),
+        this.row('Proveedor', this.toDisplay(supplier?.name)),
         this.row('Banco Destino', this.toDisplay(order.destination_bank_name)),
         this.row('Cuenta Destino', this.toDisplay(order.destination_account_number)),
         this.row('Titular', this.toDisplay(order.destination_account_holder)),
         this.row('Moneda Destino', this.toDisplay(order.destination_currency)),
       );
+      const addr = supplier?.bank_details?.address;
+      if (addr) rows.push(this.row('Dirección del Beneficiario', this.formatSupplierAddress(addr)));
+      if (supplier?.contact_email) rows.push(this.row('Email de Contacto', this.toDisplay(supplier.contact_email)));
     }
 
     // ── world_to_bolivia ─────────────────────────────────
@@ -310,6 +326,7 @@ export class PdfService {
         this.row('Banco Destino', this.toDisplay(order.destination_bank_name)),
         this.row('Cuenta Destino', this.toDisplay(order.destination_account_number)),
         this.row('Titular', this.toDisplay(order.destination_account_holder)),
+        this.row('Moneda Destino', this.toDisplay(order.destination_currency ?? 'BOB')),
       );
     }
 
@@ -318,11 +335,12 @@ export class PdfService {
       const walletAddr = supplier?.bank_details?.wallet_address ?? order.destination_address;
       const walletNet = supplier?.bank_details?.wallet_network ?? order.destination_network;
       rows.push(
-        this.row('Proveedor', this.toDisplay(supplier?.name ?? 'No asignado')),
+        this.row('Proveedor', this.toDisplay(supplier?.name)),
         this.linkRow('Wallet Destino', this.truncateAddress(walletAddr), this.buildExplorerUrl(walletAddr, walletNet, 'address')),
         this.row('Red Destino', this.toDisplay(walletNet)),
         this.row('Moneda Destino', this.toDisplay(supplier?.bank_details?.wallet_currency ?? order.destination_currency)),
       );
+      if (supplier?.contact_email) rows.push(this.row('Email de Contacto', this.toDisplay(supplier.contact_email)));
     }
 
     // ── On-ramps: fiat/crypto/usd → bridge_wallet ─────────
@@ -330,6 +348,7 @@ export class PdfService {
       rows.push(
         this.linkRow('Billetera Destino', this.truncateAddress(clientWallet?.address), this.buildExplorerUrl(clientWallet?.address, clientWallet?.network, 'address')),
         this.row('Red Destino', this.toDisplay(clientWallet?.network)),
+        this.row('Moneda Destino', this.toDisplay(order.destination_currency ?? order.currency)),
       );
     }
 
@@ -368,7 +387,7 @@ export class PdfService {
       // order.destination_account_number se guarda ENMASCARADO (****1234), por lo que
       // preferimos el número completo de supplier.bank_details para el comprobante.
       const bd: any = supplier?.bank_details ?? {};
-      let bankName = order.destination_bank_name || bd.bank_name || '';
+      let bankName = bd.bank_name || order.destination_bank_name || '';
       let acctNum = bd.account_number || order.destination_account_number || order.destination_address || '';
       const routing = bd.routing_number || '';
       let holder = order.destination_account_holder
@@ -377,16 +396,9 @@ export class PdfService {
         || supplier?.name
         || '';
 
-      // Último recurso: supplier.external_accounts
-      if (!bankName && supplier?.external_accounts?.length) {
-        const ext = supplier.external_accounts.find((a: any) => a.id === order.external_account_id);
-        if (ext) {
-          bankName = ext.bank_name || '';
-          if (!acctNum) acctNum = ext.account_number || '';
-          if (!holder) holder = ext.account_holder_name || '';
-        }
+      if (supplier?.name) {
+        rows.push(this.row('Proveedor', this.toDisplay(supplier.name)));
       }
-
       rows.push(
         this.row('Banco Destino', this.toDisplay(bankName)),
         this.row('Cuenta Destino', this.toDisplay(acctNum)),
@@ -394,17 +406,24 @@ export class PdfService {
       if (routing) rows.push(this.row('Routing Number', routing));
       if (holder) rows.push(this.row('Titular', holder));
       rows.push(this.row('Moneda Destino', this.toDisplay(order.destination_currency ?? 'USD')));
+      const addrUs = bd.address;
+      if (addrUs) rows.push(this.row('Dirección del Beneficiario', this.formatSupplierAddress(addrUs)));
+      if (supplier?.contact_email) rows.push(this.row('Email de Contacto', this.toDisplay(supplier.contact_email)));
     }
 
     // ── bridge_wallet_to_crypto ──────────────────────────
     else if (ft === 'bridge_wallet_to_crypto') {
       const destAddr = order.destination_address;
       const destNet = order.destination_network;
+      if (supplier?.name) {
+        rows.push(this.row('Proveedor', this.toDisplay(supplier.name)));
+      }
       rows.push(
         this.linkRow('Wallet Destino', this.truncateAddress(destAddr), this.buildExplorerUrl(destAddr, destNet, 'address')),
         this.row('Red Destino', this.toDisplay(destNet)),
         this.row('Moneda Destino', this.toDisplay(order.destination_currency)),
       );
+      if (supplier?.contact_email) rows.push(this.row('Email de Contacto', this.toDisplay(supplier.contact_email)));
     }
 
     // ── Generic fallback ─────────────────────────────────
