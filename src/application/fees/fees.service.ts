@@ -565,6 +565,103 @@ export class FeesService {
     };
   }
 
+  /**
+   * Inicializa overrides de fee para todas las divisas configuradas en fees_config
+   * para una operación dada. Crea entradas con 0% e is_active=false para las divisas
+   * que aún no tienen override. Las existentes se conservan intactas.
+   */
+  async initOperationOverrides(
+    userId: string,
+    operationType: string,
+    actorId: string,
+    actorRole: string,
+  ): Promise<{ created: number; skipped: number; overrides: unknown[] }> {
+    // 1. Obtener todas las divisas configuradas en fees_config para esta operación
+    const { data: feeRows, error: feeErr } = await this.supabase
+      .from('fees_config')
+      .select('currency, payment_rail')
+      .eq('operation_type', operationType);
+
+    if (feeErr) throwDbError(feeErr);
+    if (!feeRows?.length) {
+      throw new NotFoundException(
+        `No hay tarifas configuradas en fees_config para operation_type="${operationType}". Configura la tarifa global primero.`,
+      );
+    }
+
+    // 2. Obtener overrides existentes para este usuario y operación
+    const { data: existing } = await this.supabase
+      .from('customer_fee_overrides')
+      .select('currency')
+      .eq('user_id', userId)
+      .eq('operation_type', operationType);
+
+    const existingCurrencies = new Set(
+      (existing ?? []).map((e) => (e.currency as string).toLowerCase()),
+    );
+
+    const today = new Date().toISOString().split('T')[0];
+    let created = 0;
+
+    // 3. Crear solo las que no existen
+    for (const feeRow of feeRows) {
+      const cur = (feeRow.currency as string).toLowerCase();
+      if (existingCurrencies.has(cur)) continue;
+
+      const { error: insertErr } = await this.supabase
+        .from('customer_fee_overrides')
+        .insert({
+          user_id:        userId,
+          operation_type: operationType,
+          payment_rail:   feeRow.payment_rail,
+          currency:       cur,
+          fee_type:       'percent',
+          fee_percent:    0,
+          fee_fixed:      null,
+          min_fee:        null,
+          max_fee:        null,
+          is_active:      false,
+          valid_from:     today,
+          created_by:     actorId,
+          notes:          'Generado automáticamente — activar y ajustar según necesidad.',
+        });
+
+      if (insertErr) {
+        this.logger.warn(
+          `[initOperationOverrides] No se pudo crear override para ${operationType}/${cur}: ${insertErr.message}`,
+        );
+        continue;
+      }
+      created++;
+    }
+
+    // 4. Devolver todos los overrides actuales para esta operación
+    const { data: allOverrides } = await this.supabase
+      .from('customer_fee_overrides')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('operation_type', operationType)
+      .order('currency');
+
+    if (created > 0) {
+      await this.supabase.from('audit_logs').insert({
+        performed_by: actorId,
+        role:         actorRole,
+        action:       'FEE_OVERRIDES_INITIALIZED',
+        table_name:   'customer_fee_overrides',
+        reason:       `Inicializadas ${created} divisas para ${operationType} del usuario ${userId}`,
+        new_values:   { operation_type: operationType, created, skipped: feeRows.length - created },
+        source:       'admin_panel',
+      });
+    }
+
+    return {
+      created,
+      skipped: feeRows.length - created,
+      overrides: allOverrides ?? [],
+    };
+  }
+
   /** Elimina permanentemente una tarifa global. Solo super_admin. */
   async deleteFee(feeId: string, actorId: string, actorRole: string) {
     const { data: current, error: findError } = await this.supabase

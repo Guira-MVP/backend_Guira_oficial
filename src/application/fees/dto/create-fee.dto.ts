@@ -12,6 +12,20 @@ import {
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
+export class InitOperationOverridesDto {
+  @ApiProperty({ description: 'ID del usuario al que se inicializan los overrides' })
+  @IsUUID()
+  user_id: string;
+
+  @ApiProperty({
+    example: 'ramp_off_bo',
+    description: 'operation_type para el que se crean overrides de todas las divisas configuradas en fees_config',
+  })
+  @IsString()
+  @IsNotEmpty()
+  operation_type: string;
+}
+
 export class CreateFeeDto {
   @ApiProperty({
     example: 'payout',

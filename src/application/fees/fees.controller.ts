@@ -24,6 +24,7 @@ import {
   CreateFeeDto,
   UpdateFeeDto,
   CreateFeeOverrideDto,
+  InitOperationOverridesDto,
 } from './dto/create-fee.dto';
 import { UpdateFeeOverrideDto } from './dto/update-fee-override.dto';
 import { CurrentUser } from '../../core/decorators/current-user.decorator';
@@ -128,6 +129,28 @@ export class AdminFeesController {
   @ApiOperation({ summary: 'Overrides de fee para un usuario' })
   getOverrides(@Param('userId', new ParseUUIDPipe()) userId: string) {
     return this.feesService.getOverrides(userId);
+  }
+
+  @Post('overrides/init-operation')
+  @Roles('admin', 'super_admin')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Inicializar overrides para todas las divisas de una operación',
+    description:
+      'Crea overrides con 0% e is_active=false para cada divisa configurada en fees_config. ' +
+      'Las divisas que ya tienen override para este usuario se omiten (no se sobrescriben).',
+  })
+  @ApiResponse({ status: 200, description: 'Overrides inicializados' })
+  initOperationOverrides(
+    @Body() dto: InitOperationOverridesDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ) {
+    return this.feesService.initOperationOverrides(
+      dto.user_id,
+      dto.operation_type,
+      actor.id,
+      actor.profile.role,
+    );
   }
 
   @Post('overrides')
