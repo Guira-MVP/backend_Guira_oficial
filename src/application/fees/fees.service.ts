@@ -156,8 +156,8 @@ export class FeesService {
     dto: {
       user_id: string;
       operation_type: string;
-      payment_rail?: string;
-      currency?: string;
+      payment_rail: string;
+      currency: string;
       fee_type: string;
       fee_percent?: number;
       fee_fixed?: number;
@@ -170,23 +170,21 @@ export class FeesService {
     actorId: string,
     actorRole: string,
   ) {
-    // D3 Fix: Validar que no exista un override activo duplicado
-    const conflictQuery = this.supabase
+    // Validar que no exista un override activo duplicado para la misma
+    // combinación user + operation + rail + currency
+    const { data: conflict } = await this.supabase
       .from('customer_fee_overrides')
       .select('id')
       .eq('user_id', dto.user_id)
       .eq('operation_type', dto.operation_type)
-      .eq('is_active', true);
-
-    if (dto.payment_rail) {
-      conflictQuery.eq('payment_rail', dto.payment_rail);
-    }
-
-    const { data: conflict } = await conflictQuery.maybeSingle();
+      .eq('payment_rail', dto.payment_rail)
+      .eq('currency', dto.currency.toLowerCase())
+      .eq('is_active', true)
+      .maybeSingle();
 
     if (conflict) {
       throw new BadRequestException(
-        `Ya existe un override activo para ${dto.operation_type}/${dto.payment_rail ?? 'any'}. Desactívalo o elimínalo primero.`,
+        `Ya existe un override activo para ${dto.operation_type}/${dto.payment_rail}/${dto.currency}. Desactívalo o elimínalo primero.`,
       );
     }
 
@@ -257,7 +255,7 @@ export class FeesService {
       throw new NotFoundException('Override no encontrado');
 
     // 2. Si se está activando, verificar que no haya otro activo
-    //    para el mismo user + operation_type + payment_rail
+    //    para la misma combinación user + operation + rail + currency
     if (dto.is_active === true && !current.is_active) {
       const { data: conflict } = await this.supabase
         .from('customer_fee_overrides')
@@ -265,13 +263,14 @@ export class FeesService {
         .eq('user_id', current.user_id)
         .eq('operation_type', current.operation_type)
         .eq('payment_rail', current.payment_rail)
+        .eq('currency', current.currency)
         .eq('is_active', true)
         .neq('id', overrideId)
         .maybeSingle();
 
       if (conflict) {
         throw new BadRequestException(
-          `Ya existe un override activo para ${current.operation_type}/${current.payment_rail}. Desactívalo primero.`,
+          `Ya existe un override activo para ${current.operation_type}/${current.payment_rail}/${current.currency}. Desactívalo primero.`,
         );
       }
     }
@@ -359,6 +358,7 @@ export class FeesService {
     userId: string,
     operationType: string,
     paymentRail: string,
+    currency: string,
     amount: number,
   ): Promise<{
     fee_amount: number;
@@ -371,6 +371,7 @@ export class FeesService {
     is_override: boolean;
   }> {
     const today = new Date().toISOString().split('T')[0];
+    const normalizedCurrency = currency.toLowerCase();
 
     const { data: override } = await this.supabase
       .from('customer_fee_overrides')
@@ -378,6 +379,7 @@ export class FeesService {
       .eq('user_id', userId)
       .eq('operation_type', operationType)
       .eq('payment_rail', paymentRail)
+      .eq('currency', normalizedCurrency)
       .eq('is_active', true)
       .or(`valid_from.is.null,valid_from.lte.${today}`)
       .or(`valid_until.is.null,valid_until.gte.${today}`)
@@ -392,6 +394,7 @@ export class FeesService {
         .select('*')
         .eq('operation_type', operationType)
         .eq('payment_rail', paymentRail)
+        .eq('currency', normalizedCurrency)
         .eq('is_active', true)
         .maybeSingle();
 
@@ -454,8 +457,10 @@ export class FeesService {
     userId: string,
     operationType: string,
     paymentRail: string,
+    currency: string,
   ): Promise<string> {
     const today = new Date().toISOString().split('T')[0];
+    const normalizedCurrency = currency.toLowerCase();
 
     const { data: override } = await this.supabase
       .from('customer_fee_overrides')
@@ -463,6 +468,7 @@ export class FeesService {
       .eq('user_id', userId)
       .eq('operation_type', operationType)
       .eq('payment_rail', paymentRail)
+      .eq('currency', normalizedCurrency)
       .eq('is_active', true)
       .or(`valid_from.is.null,valid_from.lte.${today}`)
       .or(`valid_until.is.null,valid_until.gte.${today}`)
@@ -477,6 +483,7 @@ export class FeesService {
       .select('fee_percent')
       .eq('operation_type', operationType)
       .eq('payment_rail', paymentRail)
+      .eq('currency', normalizedCurrency)
       .eq('is_active', true)
       .maybeSingle();
 
@@ -491,25 +498,26 @@ export class FeesService {
     userId: string,
     operationType: string,
     paymentRail: string,
+    currency: string,
     amount: number,
   ): Promise<{ fee_amount: number; net_amount: number }> {
     const today = new Date().toISOString().split('T')[0];
+    const normalizedCurrency = currency.toLowerCase();
 
-    // 1. Buscar override del cliente
-    // D2 Fix: Agregar filtro por payment_rail para evitar ambigüedad
-    // D4 Fix: Manejar valid_from NULL con OR clause
+    // 1. Buscar override del cliente para esta divisa específica
     const { data: override } = await this.supabase
       .from('customer_fee_overrides')
       .select('*')
       .eq('user_id', userId)
       .eq('operation_type', operationType)
       .eq('payment_rail', paymentRail)
+      .eq('currency', normalizedCurrency)
       .eq('is_active', true)
       .or(`valid_from.is.null,valid_from.lte.${today}`)
       .or(`valid_until.is.null,valid_until.gte.${today}`)
       .maybeSingle();
 
-    // 2. Si no hay override, usar tarifa global
+    // 2. Si no hay override, usar tarifa global para esta divisa
     let feeConfig = override;
     if (!feeConfig) {
       const { data: globalFee } = await this.supabase
@@ -517,6 +525,7 @@ export class FeesService {
         .select('*')
         .eq('operation_type', operationType)
         .eq('payment_rail', paymentRail)
+        .eq('currency', normalizedCurrency)
         .eq('is_active', true)
         .maybeSingle();
 
@@ -554,5 +563,43 @@ export class FeesService {
       fee_amount: feeCents / 100,
       net_amount: (amountCents - feeCents) / 100,
     };
+  }
+
+  /** Elimina permanentemente una tarifa global. Solo super_admin. */
+  async deleteFee(feeId: string, actorId: string, actorRole: string) {
+    const { data: current, error: findError } = await this.supabase
+      .from('fees_config')
+      .select('*')
+      .eq('id', feeId)
+      .single();
+
+    if (findError || !current)
+      throw new NotFoundException('Tarifa no encontrada');
+
+    const { error } = await this.supabase
+      .from('fees_config')
+      .delete()
+      .eq('id', feeId);
+
+    if (error) throw new BadRequestException('No se pudo eliminar la tarifa');
+
+    await this.supabase.from('audit_logs').insert({
+      performed_by: actorId,
+      role:         actorRole,
+      action:       'FEE_CONFIG_DELETED',
+      table_name:   'fees_config',
+      record_id:    feeId,
+      reason:       `Tarifa ${current.operation_type}/${current.payment_rail}/${current.currency} eliminada`,
+      previous_values: {
+        operation_type: current.operation_type,
+        payment_rail:   current.payment_rail,
+        currency:       current.currency,
+        fee_type:       current.fee_type,
+        fee_percent:    current.fee_percent,
+      },
+      source: 'admin_panel',
+    });
+
+    return { message: 'Tarifa eliminada permanentemente' };
   }
 }

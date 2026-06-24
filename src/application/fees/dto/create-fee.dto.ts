@@ -146,10 +146,13 @@ export class CreateFeeOverrideDto {
   @IsIn(['psav', 'bridge'])
   payment_rail: string;
 
-  @ApiPropertyOptional({ example: 'USD', enum: ['USD', 'BOB', 'USDC', 'USDT'] })
-  @IsOptional()
-  @IsIn(['USD', 'BOB', 'USDC', 'USDT'])
-  currency?: string;
+  @ApiProperty({
+    example: 'USDC',
+    description: 'Divisa del override. Para flujos BO usa la divisa DESTINO (USD, EUR, etc.). Para flujos stablecoin usa la stablecoin de origen/destino.',
+    enum: ['USD', 'BOB', 'USDC', 'USDT', 'EURC', 'USDB', 'PYUSD', 'EUR', 'BRL', 'MXN', 'GBP', 'COP'],
+  })
+  @IsIn(['USD', 'BOB', 'USDC', 'USDT', 'EURC', 'USDB', 'PYUSD', 'EUR', 'BRL', 'MXN', 'GBP', 'COP'])
+  currency: string;
 
   @ApiProperty({ enum: ['percent', 'fixed', 'mixed'] })
   @IsEnum(['percent', 'fixed', 'mixed'])

@@ -755,6 +755,7 @@ export class PaymentOrdersService {
       userId,
       'interbank_w2w',
       'bridge',
+      dto.source_currency ?? 'usdc',
     );
 
     // fee_amount / net_amount: se calculan solo si hay monto definido.
@@ -765,6 +766,7 @@ export class PaymentOrdersService {
             userId,
             'interbank_w2w',
             'bridge',
+            dto.source_currency ?? 'usdc',
             amount,
           )
         : { fee_amount: 0, net_amount: 0 };
@@ -1070,6 +1072,7 @@ export class PaymentOrdersService {
       userId,
       'interbank_bo_in',
       'psav',
+      sourceCurrency,
       dto.amount!,
     );
 
@@ -1171,6 +1174,7 @@ export class PaymentOrdersService {
       userId,
       'ramp_on_fiat_us',
       'bridge',
+      'usd',
       dto.amount!,
     );
 
@@ -1672,6 +1676,7 @@ export class PaymentOrdersService {
       userId,
       'ramp_on_bo',
       'psav',
+      resolvedFiatBoDest, // divisa destino — permite tasas distintas por stablecoin
       dto.amount,
     );
 
@@ -1832,14 +1837,16 @@ export class PaymentOrdersService {
   ) {
     const wallet = await this.getUserWallet(userId, dto.wallet_id);
 
+    const cryptoSourceCurrency = (dto.source_currency ?? 'usdc').toLowerCase();
     const [{ fee_amount, net_amount }, feePercent] = await Promise.all([
       this.feesService.calculateFee(
         userId,
         'ramp_on_crypto',
         'bridge',
+        cryptoSourceCurrency,
         dto.amount ?? 0,
       ),
-      this.feesService.getFeePercent(userId, 'ramp_on_crypto', 'bridge'),
+      this.feesService.getFeePercent(userId, 'ramp_on_crypto', 'bridge', cryptoSourceCurrency),
     ]);
 
     const { data: profile } = await this.supabase
@@ -2050,14 +2057,15 @@ export class PaymentOrdersService {
 
     const wallet = await this.getUserWallet(userId, dto.wallet_id);
 
+    const sourceCurrency = (dto.source_currency ?? 'usdc').toUpperCase();
+
     const { fee_amount, net_amount } = await this.feesService.calculateFee(
       userId,
       'ramp_off_bo',
       'psav',
+      sourceCurrency,
       dto.amount,
     );
-
-    const sourceCurrency = (dto.source_currency ?? 'usdc').toUpperCase();
 
     // Validar token y ruta PSAV antes de tocar el saldo — sin coste de rollback si falla
     if (
@@ -2340,15 +2348,16 @@ export class PaymentOrdersService {
   ) {
     const wallet = await this.getUserWallet(userId, dto.wallet_id);
 
+    // Verificar saldo del token específico
+    const sourceCurrency = (dto.source_currency ?? 'usdc').toUpperCase();
+
     const { fee_amount, net_amount } = await this.feesService.calculateFee(
       userId,
       'ramp_off_crypto',
       'bridge',
+      sourceCurrency,
       dto.amount,
     );
-
-    // Verificar saldo del token específico
-    const sourceCurrency = (dto.source_currency ?? 'usdc').toUpperCase();
     const { data: balance } = await this.supabase
       .from('balances')
       .select('available_amount')
@@ -2694,15 +2703,16 @@ export class PaymentOrdersService {
       );
     }
 
+    // Verificar saldo del token específico
+    const sourceCurrency = (dto.source_currency ?? 'usdc').toUpperCase();
+
     const { fee_amount, net_amount } = await this.feesService.calculateFee(
       userId,
       'ramp_off_fiat_us',
       'bridge',
+      sourceCurrency,
       dto.amount,
     );
-
-    // Verificar saldo del token específico
-    const sourceCurrency = (dto.source_currency ?? 'usdc').toUpperCase();
     const { data: balance } = await this.supabase
       .from('balances')
       .select('available_amount')
@@ -3003,6 +3013,7 @@ export class PaymentOrdersService {
       userId,
       'wallet_to_fiat_off', // tarifa dedicada para flujo on-chain → fiat (mayor developer fee que ramp_off_fiat_us)
       'bridge',
+      sourceCurrency,
       dto.amount,
     );
 

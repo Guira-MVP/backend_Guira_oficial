@@ -862,6 +862,7 @@ export class BridgeService {
       userId,
       'payout',
       dto.payment_rail,
+      dto.currency ?? 'usd',
       dto.amount,
     );
     const totalAmount = dto.amount + fee_amount;
@@ -1286,8 +1287,11 @@ export class BridgeService {
 
     // Resolver fee: si el caller ya lo provee lo usamos; si no, lo consultamos
     // desde fees_config respetando overrides del usuario.
-    // - destino crypto (wallet)        → operation_type: interbank_bo_wallet / rail: psav
-    // - destino fiat (external account) → operation_type: interbank_bo_out   / rail: destination_payment_rail (ach, wire, sepa, etc.)
+    // - destino crypto (wallet)         → operation_type: interbank_bo_wallet
+    // - destino fiat (external account) → operation_type: interbank_bo_out
+    // Rail siempre 'psav' (el cliente siempre deposita BOB vía PSAV).
+    // Currency = divisa DESTINO de la liquidation address: permite tasas distintas
+    // por moneda de liquidación (USD, EUR, MXN, USDC, USDT, etc.).
     let developerFeePercent: string | undefined =
       dto.custom_developer_fee_percent;
     if (!developerFeePercent) {
@@ -1295,7 +1299,8 @@ export class BridgeService {
       developerFeePercent = await this.feesService.getFeePercent(
         userId,
         isCryptoDestination ? 'interbank_bo_wallet' : 'interbank_bo_out',
-        isCryptoDestination ? 'psav' : dto.destination_payment_rail,
+        'psav',
+        dto.destination_currency.toLowerCase(),
       );
     }
 

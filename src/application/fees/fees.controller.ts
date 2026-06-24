@@ -10,6 +10,8 @@ import {
   ParseUUIDPipe,
   UseGuards,
   BadRequestException,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -57,18 +59,19 @@ export class FeesController {
     @CurrentUser() user: AuthenticatedUser,
     @Query('operation_type') operationType: string,
     @Query('payment_rail') paymentRail: string,
+    @Query('currency') currency: string,
     @Query('amount') amountRaw: string,
   ) {
-    if (!operationType || !paymentRail || !amountRaw) {
+    if (!operationType || !paymentRail || !currency || !amountRaw) {
       throw new BadRequestException(
-        'Se requieren los parámetros operation_type, payment_rail y amount.',
+        'Se requieren los parámetros operation_type, payment_rail, currency y amount.',
       );
     }
     const amount = parseFloat(amountRaw);
     if (!Number.isFinite(amount) || amount < 0) {
       throw new BadRequestException('El parámetro amount debe ser un número positivo.');
     }
-    return this.feesService.previewFee(user.id, operationType, paymentRail, amount);
+    return this.feesService.previewFee(user.id, operationType, paymentRail, currency, amount);
   }
 }
 
@@ -106,6 +109,18 @@ export class AdminFeesController {
     @Body() dto: UpdateFeeDto,
   ) {
     return this.feesService.updateFee(id, dto);
+  }
+
+  @Delete(':id')
+  @Roles('super_admin')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Eliminar tarifa global permanentemente' })
+  @ApiResponse({ status: 200, description: 'Tarifa eliminada' })
+  deleteFee(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ) {
+    return this.feesService.deleteFee(id, actor.id, actor.profile.role);
   }
 
   @Get('overrides/:userId')
