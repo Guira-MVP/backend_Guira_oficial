@@ -1,4 +1,5 @@
 import {
+  IsIn,
   IsOptional,
   IsNumber,
   IsBoolean,
@@ -10,6 +11,11 @@ import {
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
 export class UpdateFeeOverrideDto {
+  @ApiPropertyOptional({ example: 'percent', enum: ['percent', 'fixed', 'mixed'] })
+  @IsOptional()
+  @IsIn(['percent', 'fixed', 'mixed'])
+  fee_type?: string;
+
   @ApiPropertyOptional({ example: 0.3 })
   @IsOptional()
   @IsNumber()

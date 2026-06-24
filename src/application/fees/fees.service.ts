@@ -233,6 +233,7 @@ export class FeesService {
   async updateOverride(
     overrideId: string,
     dto: {
+      fee_type?: string;
       fee_percent?: number;
       fee_fixed?: number;
       min_fee?: number;
