@@ -340,9 +340,14 @@ export class WebhooksService {
       case 'customer.created':
         await this.handleCustomerCreated(payload);
         break;
-      case 'customer.updated':
       case 'customer.updated.status_transitioned':
         await this.handleCustomerUpdated(payload);
+        break;
+      case 'customer.updated':
+        // Bridge envía este evento por cambios en endorsements/capabilities sin
+        // transición de status. Solo sincronizamos bridge_customer_id; no
+        // ejecutamos el flujo de aprobación para evitar correos duplicados.
+        await this.handleCustomerUpdatedNonTransition(payload);
         break;
 
       // ── KYC link lifecycle ────────────────────────────────────────────────────
@@ -602,6 +607,16 @@ export class WebhooksService {
     // ═══ FLUJO PRINCIPAL: actuar según el status de Bridge ═══
 
     if (newStatus === 'active') {
+      // Idempotencia: si el perfil ya fue aprobado en un webhook anterior
+      // (puede ocurrir cuando Bridge envía status_transitioned + customer.updated
+      // casi simultáneamente), omitir para no duplicar correos ni acciones.
+      if (profile.onboarding_status === 'approved') {
+        this.logger.log(
+          `customer.updated: customer ${customerId} ya aprobado (onboarding_status=approved), skip`,
+        );
+        return;
+      }
+
       // ── APROBACIÓN FINAL ──
       // Bridge confirmó que el customer está verificado.
       // ESTE es el único punto que marca la cuenta como 'approved'.
@@ -733,6 +748,44 @@ export class WebhooksService {
         `customer.updated: status=${newStatus} para customer ${customerId} — sin acción final`,
       );
     }
+  }
+
+  // ═══════════════════════════════════════════════
+  //  HANDLER: customer.updated  (sin transición de estado)
+  //  Bridge envía este evento cuando cambian endorsements o capabilities
+  //  pero el status del customer no cambia. Solo sincronizamos bridge_customer_id.
+  //  NO ejecutar flujo de aprobación para evitar correos duplicados.
+  // ═══════════════════════════════════════════════
+
+  private async handleCustomerUpdatedNonTransition(
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    const eventObject = payload.event_object as
+      | Record<string, unknown>
+      | undefined;
+    const customerId = eventObject?.id as string | undefined;
+    const email = eventObject?.email as string | undefined;
+
+    if (!customerId || !email) return;
+
+    const { data: profile } = await this.supabase
+      .from('profiles')
+      .select('id, bridge_customer_id')
+      .eq('email', email)
+      .maybeSingle();
+
+    if (!profile) return;
+
+    if (!profile.bridge_customer_id) {
+      await this.supabase
+        .from('profiles')
+        .update({ bridge_customer_id: customerId })
+        .eq('id', profile.id);
+    }
+
+    this.logger.log(
+      `customer.updated (non-transition): customer ${customerId} — solo sync bridge_customer_id`,
+    );
   }
 
   /**
@@ -914,11 +967,11 @@ export class WebhooksService {
     }
 
     // Buscar perfil por bridge_customer_id o email
-    let profile: { id: string } | null = null;
+    let profile: { id: string; onboarding_status: string | null } | null = null;
 
     const { data: byCustomerId } = await this.supabase
       .from('profiles')
-      .select('id')
+      .select('id, onboarding_status')
       .eq('bridge_customer_id', customerId)
       .maybeSingle();
     profile = byCustomerId;
@@ -926,7 +979,7 @@ export class WebhooksService {
     if (!profile && email) {
       const { data: byEmail } = await this.supabase
         .from('profiles')
-        .select('id')
+        .select('id, onboarding_status')
         .eq('email', email)
         .maybeSingle();
       profile = byEmail;
@@ -943,6 +996,16 @@ export class WebhooksService {
     const typeLabel = customerType === 'business' ? 'KYB' : 'KYC';
 
     if (kycStatus === 'approved') {
+      // Idempotencia: el handler de customer.updated.status_transitioned puede
+      // haber llegado milisegundos antes y ya aprobado la cuenta. Si es así,
+      // evitar duplicar correo y acciones de aprobación.
+      if (profile.onboarding_status === 'approved') {
+        this.logger.log(
+          `kyc_link.updated.status_transitioned: customer ${customerId} ya aprobado (onboarding_status=approved), skip`,
+        );
+        return;
+      }
+
       // ── APROBACIÓN FINAL vía KYC Link ──
 
       // Actualizar la aplicación correcta según tipo de customer
