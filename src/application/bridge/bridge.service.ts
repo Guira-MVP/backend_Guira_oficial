@@ -20,7 +20,10 @@ import {
 } from './dto/create-virtual-account.dto';
 import { CreateLiquidationAddressDto } from './dto/create-liquidation-address.dto';
 import { UpdateVirtualAccountDto } from './dto/update-virtual-account.dto';
-import { VIRTUAL_ACCOUNT_FLOW } from '../../common/constants/flow-access.constants';
+import {
+  VIRTUAL_ACCOUNT_FLOW,
+  VIRTUAL_ACCOUNT_EXTERNAL_FLOW,
+} from '../../common/constants/flow-access.constants';
 
 @Injectable()
 export class BridgeService {
@@ -86,6 +89,42 @@ export class BridgeService {
     }
   }
 
+  /**
+   * Barrera de acceso: las cuentas virtuales con destino externo están deshabilitadas
+   * por defecto. El staff debe habilitarlas explícitamente por cliente mediante un
+   * override (customer_flow_overrides, flow_type='virtual_account_external', is_enabled=true).
+   */
+  private async assertExternalVirtualAccountEnabled(userId: string): Promise<void> {
+    const { data } = await this.supabase
+      .from('customer_flow_overrides')
+      .select('is_enabled')
+      .eq('user_id', userId)
+      .eq('flow_type', VIRTUAL_ACCOUNT_EXTERNAL_FLOW)
+      .eq('is_active', true)
+      .maybeSingle();
+
+    if (!data || data.is_enabled === false) {
+      throw new ForbiddenException(
+        'Las cuentas virtuales con destino externo están disponibles bajo solicitud. Contacta a soporte para habilitarlas en tu cuenta.',
+      );
+    }
+  }
+
+  /** Retorna las capacidades del cliente para crear cuentas virtuales. */
+  async getVirtualAccountCapabilities(
+    userId: string,
+  ): Promise<{ canCreateExternal: boolean }> {
+    const { data } = await this.supabase
+      .from('customer_flow_overrides')
+      .select('is_enabled')
+      .eq('user_id', userId)
+      .eq('flow_type', VIRTUAL_ACCOUNT_EXTERNAL_FLOW)
+      .eq('is_active', true)
+      .maybeSingle();
+
+    return { canCreateExternal: !!(data && data.is_enabled === true) };
+  }
+
   /** Crea Virtual Account en Bridge + guarda en DB. */
   async createVirtualAccount(userId: string, dto: CreateVirtualAccountDto) {
     await this.assertVirtualAccountEnabled(userId);
@@ -125,6 +164,8 @@ export class BridgeService {
       : 'wallet_bridge';
 
     if (dto.destination_address) {
+      await this.assertExternalVirtualAccountEnabled(userId);
+
       destinationAddress = dto.destination_address;
       isExternalSweep = true;
 

@@ -73,6 +73,18 @@ export class BridgeController {
     return this.bridgeService.listVirtualAccounts(user.id);
   }
 
+  @Get('virtual-accounts/capabilities')
+  @ApiOperation({
+    summary: 'Capacidades del cliente para crear cuentas virtuales',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Indica si el cliente puede crear VAs con destino externo',
+  })
+  getVirtualAccountCapabilities(@CurrentUser() user: AuthenticatedUser) {
+    return this.bridgeService.getVirtualAccountCapabilities(user.id);
+  }
+
   @Get('virtual-accounts/:id')
   @ApiOperation({
     summary: 'Detalle de Virtual Account con instrucciones bancarias',

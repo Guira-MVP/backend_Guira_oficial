@@ -42,13 +42,24 @@ export const COUNTRY_GOVERNED_FLOWS = [
  */
 export const ALWAYS_ON_FLOWS = ['virtual_account'] as const;
 
+/**
+ * Flujos gobernados "siempre-apagados": deshabilitados por defecto para TODOS los
+ * clientes. El staff debe habilitarlos explícitamente por cliente (opt-in).
+ * Hoy: Wallet Externa en Cuentas Virtuales (requiere habilitación por solicitud).
+ */
+export const ALWAYS_OFF_FLOWS = ['virtual_account_external'] as const;
+
 /** Identificador del flujo de Cuentas Virtuales (no es un flow_type de payment_orders). */
 export const VIRTUAL_ACCOUNT_FLOW = 'virtual_account';
+
+/** Identificador del flujo de Wallet Externa en Cuentas Virtuales. */
+export const VIRTUAL_ACCOUNT_EXTERNAL_FLOW = 'virtual_account_external';
 
 /** Todos los flujos gobernados (sujetos a override de staff + panel). */
 export const GOVERNED_FLOWS = [
   ...COUNTRY_GOVERNED_FLOWS,
   ...ALWAYS_ON_FLOWS,
+  ...ALWAYS_OFF_FLOWS,
 ] as const;
 
 export type GovernedFlow = (typeof GOVERNED_FLOWS)[number];
