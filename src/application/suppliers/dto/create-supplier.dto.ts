@@ -151,8 +151,7 @@ export class CreateSupplierDto {
   @ApiPropertyOptional({ example: '021000021' })
   @IsOptional()
   @IsString()
-  @MinLength(9)
-  @MaxLength(9)
+  @Matches(/^\d{9}$/, { message: 'routing_number debe ser exactamente 9 dígitos numéricos' })
   routing_number?: string;
 
   @ApiPropertyOptional({ enum: ['checking', 'savings', 'electronic_deposit'] })

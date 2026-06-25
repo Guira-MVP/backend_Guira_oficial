@@ -358,6 +358,19 @@ export class BridgeService {
       );
     }
 
+    // Bridge exige que street_line_1 en direcciones US incluya un número de calle.
+    // Validamos aquí antes de llamar a Bridge para evitar crear una EA huérfana.
+    if (
+      (dto.payment_rail === 'ach' || dto.payment_rail === 'wire') &&
+      dto.address &&
+      !/^\d+\s/.test(dto.address.street_line_1?.trim() ?? '')
+    ) {
+      throw new BadRequestException(
+        'La dirección debe incluir un número de calle al inicio de street_line_1 ' +
+          '(ej. "123 Main St"). Bridge rechaza direcciones US sin número de calle.',
+      );
+    }
+
     // ── Validación temprana para CO Bank Transfer ──
     if (dto.payment_rail === 'co_bank_transfer') {
       if (!dto.account_owner_type) {
@@ -815,6 +828,47 @@ export class BridgeService {
     );
 
     return bridgeResponse;
+  }
+
+  /**
+   * Elimina una External Account de Bridge y la marca como inactiva en DB.
+   * Se usa como rollback cuando la creación de la liquidation address falla
+   * justo después de que la EA fue creada exitosamente en Bridge, evitando
+   * que quede una EA huérfana que bloquee futuros reintentos del usuario.
+   */
+  async deleteExternalAccount(userId: string, bridgeEaDbId: string): Promise<void> {
+    const { data: eaRecord } = await this.supabase
+      .from('bridge_external_accounts')
+      .select('bridge_external_account_id, bridge_customer_id')
+      .eq('id', bridgeEaDbId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!eaRecord) {
+      this.logger.warn(
+        `deleteExternalAccount: EA ${bridgeEaDbId} no encontrada en DB para user ${userId} — se omite rollback`,
+      );
+      return;
+    }
+
+    try {
+      await this.bridgeApi.delete(
+        `/v0/customers/${eaRecord.bridge_customer_id}/external_accounts/${eaRecord.bridge_external_account_id}`,
+      );
+      this.logger.log(
+        `deleteExternalAccount: EA ${eaRecord.bridge_external_account_id} eliminada de Bridge`,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `deleteExternalAccount: Bridge DELETE falló para EA ${eaRecord.bridge_external_account_id}: ${err.message}`,
+      );
+    }
+
+    await this.supabase
+      .from('bridge_external_accounts')
+      .update({ is_active: false })
+      .eq('id', bridgeEaDbId)
+      .eq('user_id', userId);
   }
 
   /** Lista cuentas externas activas. */

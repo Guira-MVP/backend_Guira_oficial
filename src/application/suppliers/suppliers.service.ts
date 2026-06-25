@@ -228,9 +228,19 @@ export class SuppliersService {
         this.logger.error(
           `Proveedor ${dto.name}: external account creada (${ea.id}) pero falló la liquidation address: ${err.message}`,
         );
+        // Rollback: eliminar la EA de Bridge y DB para que el cliente pueda reintentar
+        // sin recibir "duplicate_external_account" de Bridge en el próximo intento.
+        try {
+          await this.bridgeService.deleteExternalAccount(userId, ea.id as string);
+          this.logger.log(`Rollback exitoso: EA ${ea.id} eliminada de Bridge y DB`);
+        } catch (rollbackErr) {
+          this.logger.error(
+            `Rollback fallido para EA ${ea.id}: ${rollbackErr.message}. Requiere limpieza manual en Bridge.`,
+          );
+        }
         throw new BadRequestException(
-          `External account creada en Bridge pero la liquidation address falló: ${err.message}. ` +
-            'Contacte soporte o reintente la creación del proveedor.',
+          'No se pudo registrar el proveedor porque los datos enviados son inválidos. ' +
+            'Por favor revise la información ingresada (dirección, datos bancarios) e intente de nuevo.',
         );
       }
     } else {
