@@ -233,4 +233,15 @@ export class CreateWalletRampOrderDto {
   @IsNumber()
   @Min(0)
   exchange_rate_applied?: number;
+
+  // ── Solicitud de revisión por exceso de límite ──
+  // Presente solo cuando el monto supera el límite máximo y el cliente envía justificación.
+  @ApiPropertyOptional({
+    description:
+      'Motivo que justifica superar el límite máximo. Activa el flujo de revisión manual.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  client_reason?: string;
 }
