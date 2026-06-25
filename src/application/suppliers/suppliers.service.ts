@@ -147,6 +147,7 @@ export class SuppliersService {
 
     let bridge_external_account_id: string | null = null;
     let bridge_liquidation_address_id: string | null = null;
+    let beneficiary_address_valid: boolean | null = null;
 
     if (isFiat) {
       const fiatCurrency =
@@ -189,6 +190,7 @@ export class SuppliersService {
       });
 
       bridge_external_account_id = ea.id;
+      beneficiary_address_valid = (ea as any).beneficiary_address_valid ?? null;
 
       // Crear liquidation address apuntando a la external account recién creada
       try {
@@ -344,7 +346,7 @@ export class SuppliersService {
       }
       throwDbError(error);
     }
-    return data;
+    return { ...data, beneficiary_address_valid };
   }
 
   /** Lista proveedores activos del usuario. */
