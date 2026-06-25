@@ -262,8 +262,8 @@ export class AdminService {
   ) {
     const offset = (page - 1) * limit;
 
-    // Columnas ligeras: omitimos previous_values, new_values, details,
-    // affected_fields y otros JSONB pesados que no se muestran en la tabla.
+    // Columnas del listado: incluye affected_fields (text[], liviano) e ip_address.
+    // previous_values / new_values se omiten aquí — se sirven en el endpoint de detalle.
     const selectColumns = [
       'id',
       'performed_by',
@@ -271,11 +271,17 @@ export class AdminService {
       'action',
       'table_name',
       'record_id',
+      'affected_fields',
+      'ip_address',
       'reason',
       'source',
       'created_at',
       'profiles!audit_logs_performed_by_fkey(email,full_name)',
     ].join(',');
+
+    // exclude_system=true (default) oculta eventos automáticos de sistema
+    // (source='system') que generan decenas de miles de filas de ruido.
+    const excludeSystem = filters.exclude_system !== 'false';
 
     let query = this.supabase
       .from('audit_logs')
@@ -283,23 +289,27 @@ export class AdminService {
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
+    if (excludeSystem) query = query.neq('source', 'system');
     if (filters.performed_by)
       query = query.eq('performed_by', filters.performed_by);
     if (filters.action) query = query.eq('action', filters.action);
     if (filters.table_name) query = query.eq('table_name', filters.table_name);
+    if (filters.source) query = query.eq('source', filters.source);
     if (filters.from) query = query.gte('created_at', filters.from);
     if (filters.to) query = query.lte('created_at', filters.to);
 
-    // Count en paralelo — consulta ligera sin JOIN ni JSONB.
+    // Count en paralelo — consulta ligera sin JOIN ni arrays.
     let countQuery = this.supabase
       .from('audit_logs')
       .select('id', { count: 'exact', head: true });
 
+    if (excludeSystem) countQuery = countQuery.neq('source', 'system');
     if (filters.performed_by)
       countQuery = countQuery.eq('performed_by', filters.performed_by);
     if (filters.action) countQuery = countQuery.eq('action', filters.action);
     if (filters.table_name)
       countQuery = countQuery.eq('table_name', filters.table_name);
+    if (filters.source) countQuery = countQuery.eq('source', filters.source);
     if (filters.from) countQuery = countQuery.gte('created_at', filters.from);
     if (filters.to) countQuery = countQuery.lte('created_at', filters.to);
 
@@ -312,18 +322,34 @@ export class AdminService {
     return { data, total: count ?? 0, page, limit };
   }
 
-  async getUserAuditLogs(userId: string) {
+  async getAuditLogDetail(id: string) {
     const { data, error } = await this.supabase
       .from('audit_logs')
       .select(
-        'id, performed_by, role, action, table_name, record_id, reason, source, created_at',
+        'id, performed_by, role, action, table_name, record_id, affected_fields, previous_values, new_values, reason, source, ip_address, created_at, profiles!audit_logs_performed_by_fkey(email,full_name)',
+      )
+      .eq('id', id)
+      .single();
+
+    if (error) throwDbError(error);
+    if (!data) throw new NotFoundException('Audit log no encontrado');
+    return data;
+  }
+
+  async getUserAuditLogs(userId: string, page = 1, limit = 50) {
+    const offset = (page - 1) * limit;
+    const { data, error, count } = await this.supabase
+      .from('audit_logs')
+      .select(
+        'id, performed_by, role, action, table_name, record_id, affected_fields, ip_address, reason, source, created_at',
+        { count: 'exact' },
       )
       .eq('performed_by', userId)
       .order('created_at', { ascending: false })
-      .limit(100);
+      .range(offset, offset + limit - 1);
 
     if (error) throwDbError(error);
-    return data;
+    return { data, total: count ?? 0, page, limit };
   }
 
   // ── ACTIVITY LOGS (Client Feed) ───────────────────────────────────

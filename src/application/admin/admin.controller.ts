@@ -157,10 +157,12 @@ export class AdminController {
 
   @Get('audit-logs')
   @Roles('staff', 'admin', 'super_admin')
-  @ApiOperation({ summary: 'Historial de auditoría completo' })
+  @ApiOperation({ summary: 'Historial de auditoría completo con paginación server-side' })
   @ApiQuery({ name: 'performed_by', required: false })
   @ApiQuery({ name: 'action', required: false })
   @ApiQuery({ name: 'table_name', required: false })
+  @ApiQuery({ name: 'source', required: false })
+  @ApiQuery({ name: 'exclude_system', required: false, description: 'Excluir eventos automáticos de sistema (default: true)' })
   @ApiQuery({ name: 'from', required: false, description: 'ISO date string' })
   @ApiQuery({ name: 'to', required: false, description: 'ISO date string' })
   @ApiQuery({ name: 'page', required: false })
@@ -169,6 +171,8 @@ export class AdminController {
     @Query('performed_by') performedBy?: string,
     @Query('action') action?: string,
     @Query('table_name') tableName?: string,
+    @Query('source') source?: string,
+    @Query('exclude_system') excludeSystem?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page?: number,
@@ -178,16 +182,32 @@ export class AdminController {
     if (performedBy) filters.performed_by = performedBy;
     if (action) filters.action = action;
     if (tableName) filters.table_name = tableName;
+    if (source) filters.source = source;
+    // exclude_system por defecto es true; se desactiva solo con '?exclude_system=false'
+    filters.exclude_system = excludeSystem === 'false' ? 'false' : 'true';
     if (from) filters.from = from;
     if (to) filters.to = to;
-    return this.adminService.getAuditLogs(filters, page ?? 1, Math.min(limit ?? 50, 200));
+    return this.adminService.getAuditLogs(filters, page ?? 1, Math.min(limit ?? 50, 500));
+  }
+
+  @Get('audit-logs/:id')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({ summary: 'Detalle completo de un audit log (incluye previous_values / new_values)' })
+  getAuditLogDetail(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.adminService.getAuditLogDetail(id);
   }
 
   @Get('audit-logs/user/:userId')
   @Roles('staff', 'admin', 'super_admin')
   @ApiOperation({ summary: 'Audit logs realizados por un usuario específico' })
-  getUserAudit(@Param('userId', new ParseUUIDPipe()) userId: string) {
-    return this.adminService.getUserAuditLogs(userId);
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'limit', required: false })
+  getUserAudit(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page?: number,
+    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit?: number,
+  ) {
+    return this.adminService.getUserAuditLogs(userId, page ?? 1, Math.min(limit ?? 50, 200));
   }
 
   // ── ACTIVITY LOGS (STAFF) ────────────────────

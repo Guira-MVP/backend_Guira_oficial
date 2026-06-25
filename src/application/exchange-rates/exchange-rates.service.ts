@@ -256,14 +256,20 @@ export class ExchangeRatesService {
         ),
       );
 
-      await this.supabase.from('audit_logs').insert({
-        performed_by: actorId === 'system_cron' ? null : actorId,
-        action: 'DB_SYNC_EXCHANGE_RATE',
-        table_name: 'exchange_rates_config',
-        previous_values: { rate: old.base_rate },
-        new_values: { rate: rate, pair },
-        source: actorId.includes('system') ? 'system' : 'admin_panel',
-      });
+      // Los syncs automáticos (system_cron) no se escriben en audit_logs —
+      // generaban ~37k filas de ruido. El historial de cada par vive en
+      // exchange_rates_config.updated_at + updated_by.
+      // Solo se audita cuando el cambio lo inicia un operador humano.
+      if (!actorId.includes('system')) {
+        await this.supabase.from('audit_logs').insert({
+          performed_by: actorId,
+          action: 'UPDATE_EXCHANGE_RATE',
+          table_name: 'exchange_rates_config',
+          previous_values: { rate: old.base_rate },
+          new_values: { rate, pair },
+          source: 'admin_panel',
+        });
+      }
     } catch (e) {
       this.logger.warn(
         `El par ${pair} no está inicializado en la base de datos o hubo un error: ${(e as Error).message}`,
