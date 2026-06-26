@@ -767,30 +767,45 @@ export class PdfService {
         [{ text: 'Teléfono', style: 'tLabel' }, { text: this.toDisplay(client?.phone), style: 'tValue' }],
       );
 
-      const partyTable = {
-        table: {
-          headerRows: 1,
-          widths: ['25%', '25%', '25%', '25%'],
-          body: [
-            sectionHeader('CLIENTE Y BENEFICIARIO', 4),
-            [
-              { text: 'CLIENTE', style: 'subHeader', colSpan: 2 }, {},
-              { text: 'BENEFICIARIO', style: 'subHeader', colSpan: 2 }, {},
-            ],
-            ...this.mergeColumns(clientRows, beneficiarySummaryRows),
-          ],
-        },
-        layout: {
-          ...borderedLayout,
-          vLineWidth: (i: number, node: any) => {
-            if (i === 0 || i === node.table.widths.length) return 0.6;
-            if (i === 2) return 0.4;
-            return 0;
-          },
-          vLineColor: (i: number) => i === 2 ? COLORS.borderLight : COLORS.border,
-        },
-        margin: [0, 0, 0, 14] as [number, number, number, number],
-      };
+      const isBeneficiaryOnlyFlow = ['fiat_bo_to_bridge_wallet', 'crypto_to_bridge_wallet'].includes(ft);
+
+      const partyTable = isBeneficiaryOnlyFlow
+        ? {
+            table: {
+              headerRows: 1,
+              widths: ['30%', '70%'],
+              body: [
+                sectionHeader('BENEFICIARIO', 2),
+                ...clientRows,
+              ],
+            },
+            layout: borderedLayout,
+            margin: [0, 0, 0, 14] as [number, number, number, number],
+          }
+        : {
+            table: {
+              headerRows: 1,
+              widths: ['25%', '25%', '25%', '25%'],
+              body: [
+                sectionHeader('CLIENTE Y BENEFICIARIO', 4),
+                [
+                  { text: 'CLIENTE', style: 'subHeader', colSpan: 2 }, {},
+                  { text: 'BENEFICIARIO', style: 'subHeader', colSpan: 2 }, {},
+                ],
+                ...this.mergeColumns(clientRows, beneficiarySummaryRows),
+              ],
+            },
+            layout: {
+              ...borderedLayout,
+              vLineWidth: (i: number, node: any) => {
+                if (i === 0 || i === node.table.widths.length) return 0.6;
+                if (i === 2) return 0.4;
+                return 0;
+              },
+              vLineColor: (i: number) => i === 2 ? COLORS.borderLight : COLORS.border,
+            },
+            margin: [0, 0, 0, 14] as [number, number, number, number],
+          };
 
       // ── Sección 2: DATOS BANCARIOS DEL BENEFICIARIO ──
       const bankingTable = {
