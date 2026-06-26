@@ -1478,83 +1478,130 @@ export class BridgeService {
     );
   }
 
-  async listLiquidationAddressesByUserAdmin(userId: string) {
-    const { data, error } = await this.supabase
+  async listLiquidationAddressesByUserAdmin(
+    userId: string,
+    filters?: {
+      page?: number;
+      limit?: number;
+      isActive?: boolean;
+      destinationType?: 'fiat' | 'crypto';
+    },
+  ) {
+    const pageSize = Math.min(filters?.limit ?? 20, 100);
+    const pageNum = Math.max(filters?.page ?? 1, 1);
+    const offset = (pageNum - 1) * pageSize;
+
+    let dataQuery = this.supabase
       .from('bridge_liquidation_addresses')
       .select('*')
       .eq('user_id', userId)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .range(offset, offset + pageSize - 1);
+
+    let countQuery = this.supabase
+      .from('bridge_liquidation_addresses')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', userId);
+
+    if (filters?.isActive !== undefined) {
+      dataQuery = dataQuery.eq('is_active', filters.isActive);
+      countQuery = countQuery.eq('is_active', filters.isActive);
+    }
+
+    if (filters?.destinationType === 'fiat') {
+      dataQuery = dataQuery.not('destination_payment_rail', 'is', null);
+      countQuery = countQuery.not('destination_payment_rail', 'is', null);
+    } else if (filters?.destinationType === 'crypto') {
+      dataQuery = dataQuery
+        .not('destination_address', 'is', null)
+        .is('destination_payment_rail', null);
+      countQuery = countQuery
+        .not('destination_address', 'is', null)
+        .is('destination_payment_rail', null);
+    }
+
+    const [{ data, error }, { count, error: countError }] = await Promise.all([
+      dataQuery,
+      countQuery,
+    ]);
 
     if (error) throw new Error(error.message);
+    if (countError) {
+      this.logger.warn(
+        `Count error en liquidation addresses usuario ${userId}: ${countError.message}`,
+      );
+    }
 
     const liquidationAddresses = data ?? [];
+
+    // ── Enrich: external accounts ──────────────────────────────────────
     const destinationExternalAccountIds = Array.from(
       new Set(
         liquidationAddresses
-          .map((address) => address.destination_external_account_id)
+          .map((a) => a.destination_external_account_id)
           .filter((id): id is string => typeof id === 'string' && id.length > 0),
       ),
     );
 
-    // Lookup suppliers (crypto→crypto) by bridge_liquidation_address_id
+    // ── Enrich: suppliers (crypto→crypto) ─────────────────────────────
     const bridgeLaIds = liquidationAddresses
       .map((a) => a.bridge_liquidation_address_id)
       .filter((id): id is string => typeof id === 'string' && id.length > 0);
 
-    const { data: suppliers } = await this.supabase
-      .from('suppliers')
-      .select('bridge_liquidation_address_id, name')
-      .eq('user_id', userId)
-      .in('bridge_liquidation_address_id', bridgeLaIds);
+    const [externalAccountsResult, suppliersResult] = await Promise.all([
+      destinationExternalAccountIds.length > 0
+        ? this.supabase
+            .from('bridge_external_accounts')
+            .select(
+              'bridge_external_account_id, bank_name, account_name, account_last_4, currency, payment_rail, account_type, routing_number, country, is_active',
+            )
+            .eq('user_id', userId)
+            .in('bridge_external_account_id', destinationExternalAccountIds)
+        : Promise.resolve({ data: [], error: null }),
+      bridgeLaIds.length > 0
+        ? this.supabase
+            .from('suppliers')
+            .select('bridge_liquidation_address_id, name')
+            .eq('user_id', userId)
+            .in('bridge_liquidation_address_id', bridgeLaIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
 
-    const supplierByLaId = new Map(
-      (suppliers ?? []).map((s) => [s.bridge_liquidation_address_id, s.name]),
-    );
-
-    if (destinationExternalAccountIds.length === 0) {
-      return liquidationAddresses.map((address) => ({
-        ...address,
-        destination_external_account: null,
-        supplier_name: supplierByLaId.get(address.bridge_liquidation_address_id) ?? null,
-      }));
-    }
-
-    const { data: externalAccounts, error: externalAccountsError } =
-      await this.supabase
-        .from('bridge_external_accounts')
-        .select(
-          'bridge_external_account_id, bank_name, account_name, account_last_4, currency, payment_rail, account_type, routing_number, country, is_active',
-        )
-        .eq('user_id', userId)
-        .in('bridge_external_account_id', destinationExternalAccountIds);
-
-    if (externalAccountsError) {
+    if (externalAccountsResult.error) {
       this.logger.warn(
-        `No se pudieron cargar cuentas externas destino para liquidation addresses del usuario ${userId}: ${externalAccountsError.message}`,
+        `No se pudieron cargar external accounts para LAs del usuario ${userId}: ${externalAccountsResult.error.message}`,
       );
-
-      return liquidationAddresses.map((address) => ({
-        ...address,
-        destination_external_account: null,
-        supplier_name: supplierByLaId.get(address.bridge_liquidation_address_id) ?? null,
-      }));
     }
 
     const externalAccountByBridgeId = new Map(
-      (externalAccounts ?? []).map((account) => [
-        account.bridge_external_account_id,
-        account,
+      (externalAccountsResult.data ?? []).map((a) => [
+        a.bridge_external_account_id,
+        a,
       ]),
     );
 
-    return liquidationAddresses.map((address) => ({
+    const supplierByLaId = new Map(
+      (suppliersResult.data ?? []).map((s) => [
+        s.bridge_liquidation_address_id,
+        s.name,
+      ]),
+    );
+
+    const enrichedData = liquidationAddresses.map((address) => ({
       ...address,
       destination_external_account: address.destination_external_account_id
-        ? (externalAccountByBridgeId.get(address.destination_external_account_id) ??
-          null)
+        ? (externalAccountByBridgeId.get(address.destination_external_account_id) ?? null)
         : null,
-      supplier_name: supplierByLaId.get(address.bridge_liquidation_address_id) ?? null,
+      supplier_name:
+        supplierByLaId.get(address.bridge_liquidation_address_id) ?? null,
     }));
+
+    return {
+      data: enrichedData,
+      total: count ?? enrichedData.length,
+      page: pageNum,
+      limit: pageSize,
+    };
   }
 
   /**

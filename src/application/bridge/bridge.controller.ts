@@ -331,9 +331,24 @@ export class AdminBridgeController {
 
   @Get('users/:userId/liquidation-addresses')
   @Roles('staff', 'admin', 'super_admin')
-  @ApiOperation({ summary: 'Listar liquidation addresses de un usuario (admin)' })
-  listUserLiquidationAddresses(@Param('userId', new ParseUUIDPipe()) userId: string) {
-    return this.bridgeService.listLiquidationAddressesByUserAdmin(userId);
+  @ApiOperation({ summary: 'Listar liquidation addresses de un usuario (admin) — paginado' })
+  listUserLiquidationAddresses(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('is_active') isActive?: string,
+    @Query('destination_type') destinationType?: string,
+  ) {
+    return this.bridgeService.listLiquidationAddressesByUserAdmin(userId, {
+      page: page ? parseInt(page, 10) : undefined,
+      limit: limit ? parseInt(limit, 10) : undefined,
+      isActive:
+        isActive === 'true' ? true : isActive === 'false' ? false : undefined,
+      destinationType:
+        destinationType === 'fiat' || destinationType === 'crypto'
+          ? destinationType
+          : undefined,
+    });
   }
 
   @Patch('users/:userId/liquidation-addresses/:laId')
