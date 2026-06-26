@@ -1496,10 +1496,26 @@ export class BridgeService {
       ),
     );
 
+    // Lookup suppliers (crypto→crypto) by bridge_liquidation_address_id
+    const bridgeLaIds = liquidationAddresses
+      .map((a) => a.bridge_liquidation_address_id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+
+    const { data: suppliers } = await this.supabase
+      .from('suppliers')
+      .select('bridge_liquidation_address_id, name')
+      .eq('user_id', userId)
+      .in('bridge_liquidation_address_id', bridgeLaIds);
+
+    const supplierByLaId = new Map(
+      (suppliers ?? []).map((s) => [s.bridge_liquidation_address_id, s.name]),
+    );
+
     if (destinationExternalAccountIds.length === 0) {
       return liquidationAddresses.map((address) => ({
         ...address,
         destination_external_account: null,
+        supplier_name: supplierByLaId.get(address.bridge_liquidation_address_id) ?? null,
       }));
     }
 
@@ -1520,6 +1536,7 @@ export class BridgeService {
       return liquidationAddresses.map((address) => ({
         ...address,
         destination_external_account: null,
+        supplier_name: supplierByLaId.get(address.bridge_liquidation_address_id) ?? null,
       }));
     }
 
@@ -1536,6 +1553,7 @@ export class BridgeService {
         ? (externalAccountByBridgeId.get(address.destination_external_account_id) ??
           null)
         : null,
+      supplier_name: supplierByLaId.get(address.bridge_liquidation_address_id) ?? null,
     }));
   }
 
