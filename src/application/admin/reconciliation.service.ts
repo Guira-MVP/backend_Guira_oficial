@@ -105,6 +105,21 @@ export class ReconciliationService {
       })
       .eq('id', run.id);
 
+    await this.supabase.from('audit_logs').insert({
+      performed_by: initiatedBy,
+      action: 'RUN_RECONCILIATION',
+      table_name: 'reconciliation_runs',
+      record_id: run.id,
+      reason: `Reconciliación manual ejecutada: ${usersChecked} usuarios verificados`,
+      new_values: {
+        users_checked: usersChecked,
+        discrepancies_found: discrepancies.length,
+        duration_ms: Date.now() - startTime,
+        requires_manual_review: discrepancies.length > 0,
+      },
+      source: 'admin_panel',
+    });
+
     return run.id;
   }
 

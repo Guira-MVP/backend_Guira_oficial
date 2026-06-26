@@ -78,6 +78,12 @@ export class CreateFeeDto {
   @IsString()
   @MaxLength(500)
   description?: string;
+
+  @ApiPropertyOptional({ example: 'Nueva tarifa requerida para operaciones SEPA Q3-2026' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
 }
 
 export class UpdateFeeDto {
@@ -118,6 +124,12 @@ export class UpdateFeeDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  @ApiPropertyOptional({ example: 'Ajuste de fee según revisión trimestral' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
 }
 
 export class CreateFeeOverrideDto {

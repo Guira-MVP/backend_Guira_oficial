@@ -53,27 +53,54 @@ export class FeesService {
   }
 
   /** Crea una nueva tarifa. */
-  async createFee(dto: {
-    operation_type: string;
-    payment_rail: string;
-    currency: string;
-    fee_type: string;
-    fee_percent?: number;
-    fee_fixed?: number;
-    min_fee?: number;
-    max_fee?: number;
-    description?: string;
-  }) {
+  async createFee(
+    dto: {
+      operation_type: string;
+      payment_rail: string;
+      currency: string;
+      fee_type: string;
+      fee_percent?: number;
+      fee_fixed?: number;
+      min_fee?: number;
+      max_fee?: number;
+      description?: string;
+      reason?: string;
+    },
+    actorId: string,
+    actorRole: string,
+  ) {
+    const { reason, ...feeFields } = dto;
+
     const { data, error } = await this.supabase
       .from('fees_config')
       .insert({
-        ...dto,
+        ...feeFields,
         is_active: true,
       })
       .select()
       .single();
 
     if (error) throwDbError(error);
+
+    await this.supabase.from('audit_logs').insert({
+      performed_by: actorId,
+      role: actorRole,
+      action: 'FEE_CONFIG_CREATED',
+      table_name: 'fees_config',
+      record_id: data.id,
+      reason: reason ?? `Tarifa ${dto.operation_type}/${dto.payment_rail}/${dto.currency} creada`,
+      new_values: {
+        operation_type: data.operation_type,
+        payment_rail: data.payment_rail,
+        currency: data.currency,
+        fee_type: data.fee_type,
+        fee_percent: data.fee_percent,
+        fee_fixed: data.fee_fixed,
+        min_fee: data.min_fee,
+        max_fee: data.max_fee,
+      },
+      source: 'admin_panel',
+    });
 
     // WS: notificar al staff que se creó una nueva tarifa
     this.adminGateway.emitFeeConfigUpdated({
@@ -105,16 +132,48 @@ export class FeesService {
       max_fee?: number;
       is_active?: boolean;
       description?: string;
+      reason?: string;
     },
+    actorId: string,
+    actorRole: string,
   ) {
+    const { reason, ...updateFields } = dto;
+
+    // Capturar valores previos antes de actualizar
+    const { data: previous } = await this.supabase
+      .from('fees_config')
+      .select('fee_type, fee_percent, fee_fixed, min_fee, max_fee, is_active')
+      .eq('id', feeId)
+      .single();
+
     const { data, error } = await this.supabase
       .from('fees_config')
-      .update({ ...dto, updated_at: new Date().toISOString() })
+      .update({ ...updateFields, updated_at: new Date().toISOString() })
       .eq('id', feeId)
       .select()
       .single();
 
     if (error || !data) throw new NotFoundException('Tarifa no encontrada');
+
+    await this.supabase.from('audit_logs').insert({
+      performed_by: actorId,
+      role: actorRole,
+      action: 'FEE_CONFIG_UPDATED',
+      table_name: 'fees_config',
+      record_id: feeId,
+      affected_fields: Object.keys(updateFields),
+      reason: reason ?? `Tarifa ${data.operation_type}/${data.payment_rail}/${data.currency} actualizada`,
+      previous_values: previous ?? undefined,
+      new_values: {
+        fee_type: data.fee_type,
+        fee_percent: data.fee_percent,
+        fee_fixed: data.fee_fixed,
+        min_fee: data.min_fee,
+        max_fee: data.max_fee,
+        is_active: data.is_active,
+      },
+      source: 'admin_panel',
+    });
 
     // WS: notificar al staff que se actualizó una tarifa
     this.adminGateway.emitFeeConfigUpdated({

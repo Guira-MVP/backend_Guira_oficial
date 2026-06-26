@@ -98,8 +98,11 @@ export class AdminFeesController {
   @Roles('admin', 'super_admin')
   @ApiOperation({ summary: 'Crear nueva tarifa' })
   @ApiResponse({ status: 201, description: 'Tarifa creada' })
-  createFee(@Body() dto: CreateFeeDto) {
-    return this.feesService.createFee(dto);
+  createFee(
+    @Body() dto: CreateFeeDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ) {
+    return this.feesService.createFee(dto, actor.id, actor.profile.role);
   }
 
   @Patch(':id')
@@ -108,8 +111,9 @@ export class AdminFeesController {
   updateFee(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateFeeDto,
+    @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.feesService.updateFee(id, dto);
+    return this.feesService.updateFee(id, dto, actor.id, actor.profile.role);
   }
 
   @Delete(':id')

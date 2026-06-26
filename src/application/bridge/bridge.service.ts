@@ -1688,8 +1688,37 @@ export class BridgeService {
       destination_reference?: string;
       return_address?: string;
     },
+    actorId: string,
+    actorRole: string,
+    reason: string,
   ) {
-    return this.updateLiquidationAddress(targetUserId, bridgeLaDbId, updatePayload);
+    // Capturar valores previos antes de enviar a Bridge
+    const { data: previous } = await this.supabase
+      .from('bridge_liquidation_addresses')
+      .select(
+        'destination_external_account_id, developer_fee_percent, destination_ach_reference, destination_wire_message, destination_sepa_reference, destination_spei_reference, destination_reference, destination_address',
+      )
+      .eq('id', bridgeLaDbId)
+      .single();
+
+    const result = await this.updateLiquidationAddress(targetUserId, bridgeLaDbId, updatePayload);
+
+    if (result !== null) {
+      await this.supabase.from('audit_logs').insert({
+        performed_by: actorId,
+        role: actorRole,
+        action: 'UPDATE_LIQUIDATION_ADDRESS',
+        table_name: 'bridge_liquidation_addresses',
+        record_id: bridgeLaDbId,
+        affected_fields: Object.keys(updatePayload),
+        previous_values: previous ?? undefined,
+        new_values: updatePayload,
+        reason,
+        source: 'admin_panel',
+      });
+    }
+
+    return result;
   }
 
   // ═══════════════════════════════════════════════════

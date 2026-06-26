@@ -351,7 +351,9 @@ export class AdminBridgeController {
         destination_spei_reference: { type: 'string' },
         destination_reference: { type: 'string' },
         return_address: { type: 'string' },
+        reason: { type: 'string', description: 'Motivo del cambio (requerido para auditoría)' },
       },
+      required: ['reason'],
     },
   })
   updateUserLiquidationAddress(
@@ -367,9 +369,19 @@ export class AdminBridgeController {
       destination_spei_reference?: string;
       destination_reference?: string;
       return_address?: string;
+      reason: string;
     },
+    @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.bridgeService.updateLiquidationAddressAdmin(userId, laId, body);
+    const { reason, ...payload } = body;
+    return this.bridgeService.updateLiquidationAddressAdmin(
+      userId,
+      laId,
+      payload,
+      actor.id,
+      actor.profile.role,
+      reason,
+    );
   }
 
   // ── VA Fee Overrides (por usuario) ─────────────────
