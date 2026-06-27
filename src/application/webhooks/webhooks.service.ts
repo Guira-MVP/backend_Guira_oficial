@@ -2862,13 +2862,57 @@ export class WebhooksService {
       | undefined;
     const destToAddress = destination?.to_address as string | undefined;
 
+    const liquidationAddressId = eventObject?.liquidation_address_id as
+      | string
+      | undefined;
+
     this.logger.log(
       `🔔 Drain created: ${drainId} — amount: ${amount}, ` +
         `external_account_id: ${destExternalAccountId ?? 'N/A'}, ` +
-        `to_address: ${destToAddress ?? 'N/A'}`,
+        `to_address: ${destToAddress ?? 'N/A'}, ` +
+        `liquidation_address_id: ${liquidationAddressId ?? 'N/A'}`,
     );
 
-    // ── Matching por external_account_id (flujo bolivia_to_world) ──
+    // ── Matching primario: por liquidation_address_id (agnóstico a divisa) ──
+    // Usar este campo evita el bug de comparar monto BOB/EUR contra USDC del drain.
+    if (liquidationAddressId) {
+      const { data: laOrder } = await this.supabase
+        .from('payment_orders')
+        .select('id, user_id, amount, amount_destination, currency, flow_type')
+        .eq('status', 'processing')
+        .eq('bridge_liquidation_address_id', liquidationAddressId)
+        .is('bridge_drain_id', null)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      if (laOrder) {
+        await this.supabase
+          .from('payment_orders')
+          .update({ bridge_drain_id: drainId, source_tx_hash: depositTxHash })
+          .eq('id', laOrder.id);
+
+        await this.supabase.from('audit_logs').insert({
+          performed_by: null,
+          action: 'DRAIN_MATCHED_TO_ORDER',
+          table_name: 'payment_orders',
+          record_id: laOrder.id,
+          new_values: {
+            bridge_drain_id: drainId,
+            drain_amount: amount,
+            matched_by: 'liquidation_address_id',
+          },
+          source: 'webhook',
+        });
+
+        this.logger.log(
+          `✅ Drain ${drainId} vinculado a orden ${laOrder.id} (match por liquidation_address_id: ${liquidationAddressId})`,
+        );
+        return;
+      }
+    }
+
+    // ── Matching fallback: por external_account_id (flujo bolivia_to_world) ──
     if (destExternalAccountId) {
       // Resolver el UUID interno de bridge_external_accounts a partir del bridge ID
       const { data: extAcct } = await this.supabase
@@ -2878,11 +2922,11 @@ export class WebhooksService {
         .maybeSingle();
 
       if (extAcct) {
-        // Buscar orden en processing que coincida por external_account_id y monto
+        // Buscar orden en processing que coincida por external_account_id y monto USDC
         const { data: matchedOrder } = await this.supabase
           .from('payment_orders')
           .select(
-            'id, user_id, amount, exchange_rate_applied, amount_destination',
+            'id, user_id, amount, exchange_rate_applied, amount_destination, bridge_source_deposit_instructions',
           )
           .eq('status', 'processing')
           .in('flow_type', ['bolivia_to_world'])
@@ -2891,13 +2935,22 @@ export class WebhooksService {
           .order('created_at', { ascending: true })
           .limit(10);
 
-        // Comparar contra el monto bruto (amount / rate) que es lo que el PSAV deposita.
-        // Bridge cobra el fee como developer_fee, así que el webhook trae el monto pre-fee.
-        const tolerance = 0.02;
+        // Comparar usando el monto USDC esperado (amount_to_deposit) para ser
+        // agnóstico a la divisa destino (USD, EUR, MXN...). Fallback: amount/rate.
+        const tolerance = 0.05;
         const matched = (matchedOrder ?? []).find((o) => {
-          const rate = parseFloat(o.exchange_rate_applied ?? '1');
-          const grossAmount = parseFloat(o.amount ?? '0') / rate;
-          return Math.abs(grossAmount - amount) <= tolerance;
+          const instructions = o.bridge_source_deposit_instructions as
+            | Record<string, unknown>
+            | null;
+          const expectedUsdc = parseFloat(
+            (instructions?.amount_to_deposit as string) ?? '0',
+          );
+          const referenceAmount =
+            expectedUsdc > 0
+              ? expectedUsdc
+              : parseFloat(o.amount ?? '0') /
+                parseFloat(o.exchange_rate_applied ?? '1');
+          return Math.abs(referenceAmount - amount) <= tolerance;
         });
 
         if (matched) {
@@ -3025,14 +3078,43 @@ export class WebhooksService {
             `Intentando match tardío...`,
         );
 
-        // Intentar vincular como en handleDrainCreated
         const destination = eventObject?.destination as
           | Record<string, unknown>
           | undefined;
+        const amount = parseFloat((eventObject?.amount as string) ?? '0');
+        const liqAddrId = eventObject?.liquidation_address_id as
+          | string
+          | undefined;
+
+        // ── Late match primario: por liquidation_address_id ──
+        if (liqAddrId) {
+          const { data: laLateOrder } = await this.supabase
+            .from('payment_orders')
+            .select(
+              'id, user_id, amount, amount_destination, currency, flow_type',
+            )
+            .eq('status', 'processing')
+            .eq('bridge_liquidation_address_id', liqAddrId)
+            .is('bridge_drain_id', null)
+            .order('created_at', { ascending: true })
+            .limit(1)
+            .maybeSingle();
+
+          if (laLateOrder) {
+            await this.completeDrainOrder(
+              laLateOrder,
+              drainId,
+              receipt,
+              depositTxHash,
+            );
+            return;
+          }
+        }
+
+        // ── Late match fallback: por external_account_id + monto USDC ──
         const destExternalAccountId = destination?.external_account_id as
           | string
           | undefined;
-        const amount = parseFloat((eventObject?.amount as string) ?? '0');
 
         if (destExternalAccountId && amount > 0) {
           const { data: extAcct } = await this.supabase
@@ -3045,7 +3127,7 @@ export class WebhooksService {
             const { data: lateMatch } = await this.supabase
               .from('payment_orders')
               .select(
-                'id, user_id, amount, amount_destination, exchange_rate_applied, currency, flow_type',
+                'id, user_id, amount, amount_destination, exchange_rate_applied, currency, flow_type, bridge_source_deposit_instructions',
               )
               .eq('status', 'processing')
               .in('flow_type', ['bolivia_to_world'])
@@ -3054,16 +3136,23 @@ export class WebhooksService {
               .order('created_at', { ascending: true })
               .limit(10);
 
-            // Comparar contra monto bruto (amount / rate) para evitar doble cobro de fee
-            const tolerance = 0.02;
+            const tolerance = 0.05;
             const matched = (lateMatch ?? []).find((o) => {
-              const rate = parseFloat(o.exchange_rate_applied ?? '1');
-              const grossAmount = parseFloat(o.amount ?? '0') / rate;
-              return Math.abs(grossAmount - amount) <= tolerance;
+              const instructions = o.bridge_source_deposit_instructions as
+                | Record<string, unknown>
+                | null;
+              const expectedUsdc = parseFloat(
+                (instructions?.amount_to_deposit as string) ?? '0',
+              );
+              const referenceAmount =
+                expectedUsdc > 0
+                  ? expectedUsdc
+                  : parseFloat(o.amount ?? '0') /
+                    parseFloat(o.exchange_rate_applied ?? '1');
+              return Math.abs(referenceAmount - amount) <= tolerance;
             });
 
             if (matched) {
-              // Vincular y completar en un solo paso
               await this.completeDrainOrder(
                 matched,
                 drainId,
@@ -3075,7 +3164,7 @@ export class WebhooksService {
           }
         }
 
-        // Match tardío por to_address (flujo bolivia_to_wallet)
+        // ── Late match por to_address (flujo bolivia_to_wallet) ──
         const destToAddress = destination?.to_address as string | undefined;
         if (destToAddress && amount > 0) {
           const { data: lateMatchByAddr } = await this.supabase
@@ -3090,7 +3179,6 @@ export class WebhooksService {
             .order('created_at', { ascending: true })
             .limit(10);
 
-          // Comparar contra monto bruto para evitar doble cobro de fee
           const addrTolerance = 0.02;
           const matchedByAddr = (lateMatchByAddr ?? []).find((o) => {
             const rate = parseFloat(o.exchange_rate_applied ?? '1');
@@ -3161,6 +3249,14 @@ export class WebhooksService {
     receipt?: Record<string, unknown>,
     depositTxHash?: string | null,
   ): Promise<void> {
+    // Normalizar monto final: Bridge usa outgoing_amount en drains SEPA/wire,
+    // final_amount en otros flujos. Tomar el primero disponible.
+    const finalAmount =
+      (receipt?.final_amount as string) ??
+      (receipt?.outgoing_amount as string) ??
+      null;
+    const receiptUrl = (receipt?.url as string) ?? null;
+
     // 1. Actualizar orden a completed
     await this.supabase
       .from('payment_orders')
@@ -3169,9 +3265,10 @@ export class WebhooksService {
         completed_at: new Date().toISOString(),
         bridge_drain_id: drainId,
         ...(depositTxHash ? { source_tx_hash: depositTxHash } : {}),
-        ...(receipt?.final_amount
-          ? { amount_destination: parseFloat(receipt.final_amount as string) }
+        ...(finalAmount
+          ? { amount_destination: parseFloat(finalAmount) }
           : {}),
+        ...(receiptUrl ? { bridge_receipt_url: receiptUrl } : {}),
       })
       .eq('id', order.id);
 
