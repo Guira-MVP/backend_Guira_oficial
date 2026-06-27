@@ -3297,13 +3297,13 @@ export class WebhooksService {
     });
 
     // 3. Notificación al usuario
-    const finalAmount =
+    const displayAmount =
       receipt?.final_amount ?? order.amount_destination ?? order.amount;
     await this.supabase.from('notifications').insert({
       user_id: order.user_id,
       type: 'financial',
       title: 'Transferencia Completada',
-      message: `Tu orden de pago por $${finalAmount} ha sido completada exitosamente. Los fondos fueron enviados al destino.`,
+      message: `Tu orden de pago por $${displayAmount} ha sido completada exitosamente. Los fondos fueron enviados al destino.`,
       reference_type: 'payment_order',
       reference_id: order.id,
     });
