@@ -80,6 +80,9 @@ async function bootstrap() {
     if (!allowedOrigins.includes('http://localhost:5173')) {
       allowedOrigins.push('http://localhost:5173');
     }
+    if (!allowedOrigins.includes('http://localhost:8081')) {
+      allowedOrigins.push('http://localhost:8081');
+    }
   }
 
   logger.log(`CORS allowed origins: ${allowedOrigins.join(', ')}`);
