@@ -44,37 +44,16 @@ export class ExchangeRatesService {
   ) {}
 
   /**
-   * Calcula el effective_rate con precisión adaptativa por par:
-   * - USD_EUR, USD_GBP: truncado a 3 decimales (sin redondeo, conservador)
-   * - BOB_COP, COP_BOB: redondeado a 6 decimales (4 decimales borraba por
-   *   completo el spread compra/venta, ya que ambos pares colapsaban al
-   *   mismo valor 0.0029)
-   * - BOB_MXN, MXN_BOB: redondeado a 4 decimales (tasa ~0.57-0.58, caía en
-   *   el bucket de 2 decimales de abajo por ser >= 0.1)
-   * - tasas < 0.1 (resto): redondeado a 4 decimales
-   * - resto: redondeado a 2 decimales
+   * Precisión única de cálculo para TODAS las tasas: 6 decimales, truncados
+   * (nunca redondeados hacia arriba) — igual para todos los pares, sin tablas
+   * especiales por divisa. Esta es la precisión que de verdad se usa para
+   * calcular dinero (effective_rate, ingestión de Bridge); la presentación
+   * al staff (6 decimales fijos) y al cliente (2/4/6 decimales truncados
+   * según divisa) es responsabilidad exclusiva del frontend y nunca debe
+   * retroalimentar este valor.
    */
-  private roundEffectiveRate(value: number, pair?: string): number {
-    const upperPair = (pair ?? '').toUpperCase();
-    const THREE_DEC_PAIRS = ['USD_EUR', 'USD_GBP'];
-    if (THREE_DEC_PAIRS.includes(upperPair)) {
-      return Math.floor(value * 1000) / 1000;
-    }
-    const SIX_DEC_PAIRS = ['BOB_COP', 'COP_BOB'];
-    if (SIX_DEC_PAIRS.includes(upperPair)) {
-      const factor = 1_000_000;
-      return Math.round(value * factor) / factor;
-    }
-    // MXN: su tasa (~0.57-0.58) queda fuera del bucket "< 0.1" de abajo pero
-    // igual pierde precisión útil con solo 2 decimales.
-    const FOUR_DEC_PAIRS = ['BOB_MXN', 'MXN_BOB'];
-    if (FOUR_DEC_PAIRS.includes(upperPair)) {
-      const factor = 10_000;
-      return Math.round(value * factor) / factor;
-    }
-    const decimals = value < 0.1 ? 4 : 2;
-    const factor = Math.pow(10, decimals);
-    return Math.round(value * factor) / factor;
+  private truncateToCalcPrecision(value: number): number {
+    return Math.trunc(value * 1_000_000) / 1_000_000;
   }
 
   /** Construye el payload para la notificación WS sin consultar DB nuevamente. */
@@ -89,7 +68,7 @@ export class ExchangeRatesService {
     const spreadMultiplier = isBobPair
       ? 1 + spreadPercent / 100
       : 1 - spreadPercent / 100;
-    const effectiveRate = this.roundEffectiveRate(baseRate * spreadMultiplier, pair);
+    const effectiveRate = this.truncateToCalcPrecision(baseRate * spreadMultiplier);
 
     return {
       pair,
@@ -214,20 +193,18 @@ export class ExchangeRatesService {
         }
 
         const upper = currency.toUpperCase();
-        // COP necesita más precisión: su rate es muy pequeño (~0.0029) y al
-        // redondear el base_rate a 4 decimales se perdía la diferencia entre
-        // BOB_COP y COP_BOB. Para el resto de divisas se mantiene en 4.
-        const roundingFactor = currency === 'cop' ? 1_000_000 : 10000;
-        // BOB_X: usuario da BOB, recibe X → Bridge vende X a Guira → sell_rate (igual que USD_X)
-        const bobXRate = Math.round((bobUsdBase / sellRate) * roundingFactor) / roundingFactor;
+        // Precisión de cálculo uniforme: 6 decimales para todas las divisas
+        // (Bridge entrega hasta 6, ej. USD_MXN; truncar a menos perdía dígitos
+        // reales para BRL/MXN). Sin casos especiales por divisa.
+        const bobXRate = this.truncateToCalcPrecision(bobUsdBase / sellRate);
         // X_BOB: usuario da X, recibe BOB → Bridge compra X de Guira → buy_rate
-        const xBobRate = Math.round((usdBobBase / buyRate) * roundingFactor) / roundingFactor;
+        const xBobRate = this.truncateToCalcPrecision(usdBobBase / buyRate);
 
         const bridgeRates = { buy_rate: buyRate, sell_rate: sellRate };
         await this.updateRateInternal(`BOB_${upper}`, bobXRate, actorId, bridgeRates);
         await this.updateRateInternal(`${upper}_BOB`, xBobRate, actorId, bridgeRates);
         // USD_X: cliente da USDC (≈USD), recibe X → Bridge vende X → sell_rate
-        await this.updateRateInternal(`USD_${upper}`, sellRate, actorId, bridgeRates);
+        await this.updateRateInternal(`USD_${upper}`, this.truncateToCalcPrecision(sellRate), actorId, bridgeRates);
       } catch (e) {
         this.logger.warn(
           `No se pudo sincronizar par BOB/${currency.toUpperCase()} desde Bridge: ${(e as Error).message}`,
@@ -334,7 +311,7 @@ export class ExchangeRatesService {
     const spreadMultiplier = isBobPair
       ? 1 + spreadPercent / 100 // subir tasa para penalizar al dividir
       : 1 - spreadPercent / 100; // bajar tasa para penalizar al multiplicar
-    const effectiveRate = this.roundEffectiveRate(baseRate * spreadMultiplier, data.pair);
+    const effectiveRate = this.truncateToCalcPrecision(baseRate * spreadMultiplier);
 
     return {
       pair: data.pair,
@@ -398,7 +375,7 @@ export class ExchangeRatesService {
         ? 1 + spreadPercent / 100
         : 1 - spreadPercent / 100;
 
-      const effectiveRate = this.roundEffectiveRate(baseRate * spreadMultiplier, row.pair);
+      const effectiveRate = this.truncateToCalcPrecision(baseRate * spreadMultiplier);
 
       return {
         ...row,
