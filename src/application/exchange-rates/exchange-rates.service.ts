@@ -49,6 +49,8 @@ export class ExchangeRatesService {
    * - BOB_COP, COP_BOB: redondeado a 6 decimales (4 decimales borraba por
    *   completo el spread compra/venta, ya que ambos pares colapsaban al
    *   mismo valor 0.0029)
+   * - BOB_MXN, MXN_BOB: redondeado a 4 decimales (tasa ~0.57-0.58, caía en
+   *   el bucket de 2 decimales de abajo por ser >= 0.1)
    * - tasas < 0.1 (resto): redondeado a 4 decimales
    * - resto: redondeado a 2 decimales
    */
@@ -61,6 +63,13 @@ export class ExchangeRatesService {
     const SIX_DEC_PAIRS = ['BOB_COP', 'COP_BOB'];
     if (SIX_DEC_PAIRS.includes(upperPair)) {
       const factor = 1_000_000;
+      return Math.round(value * factor) / factor;
+    }
+    // MXN: su tasa (~0.57-0.58) queda fuera del bucket "< 0.1" de abajo pero
+    // igual pierde precisión útil con solo 2 decimales.
+    const FOUR_DEC_PAIRS = ['BOB_MXN', 'MXN_BOB'];
+    if (FOUR_DEC_PAIRS.includes(upperPair)) {
+      const factor = 10_000;
       return Math.round(value * factor) / factor;
     }
     const decimals = value < 0.1 ? 4 : 2;
