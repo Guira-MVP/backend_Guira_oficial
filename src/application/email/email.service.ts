@@ -120,9 +120,13 @@ export class EmailService {
     return this.sendEmail({ to, subject, html, text });
   }
 
-  async sendComplianceRejectedEmail(to: EmailRecipient): Promise<boolean> {
+  async sendComplianceRejectedEmail(
+    to: EmailRecipient,
+    reason?: string | null,
+  ): Promise<boolean> {
     const { subject, html, text } = buildComplianceRejectedEmail({
       name: to.name,
+      reason,
     });
     return this.sendEmail({ to, subject, html, text });
   }

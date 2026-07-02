@@ -3893,9 +3893,25 @@ export class WebhooksService {
     }
 
     // Formato 2: rejection_reasons[]
+    // Bridge normalmente envía objetos { reason, developer_reason, created_at }
+    // (ver documentacion guira/Rejection reasons/Rejection reasons.md), no strings.
+    // Se prioriza developer_reason porque es la clave que buildBridgeIssueDetails()
+    // usa para resolver el texto explicativo (ComplianceActionsService.handleBridgeRejection).
     if (Array.isArray(eventObject.rejection_reasons)) {
       for (const reason of eventObject.rejection_reasons) {
-        if (typeof reason === 'string') issues.push(reason);
+        if (typeof reason === 'string') {
+          issues.push(reason);
+        } else if (typeof reason === 'object' && reason !== null) {
+          const reasonObj = reason as Record<string, unknown>;
+          const developerReason =
+            typeof reasonObj.developer_reason === 'string'
+              ? reasonObj.developer_reason
+              : undefined;
+          const plainReason =
+            typeof reasonObj.reason === 'string' ? reasonObj.reason : undefined;
+          const text = developerReason ?? plainReason;
+          if (text) issues.push(text);
+        }
       }
     }
 

@@ -49,11 +49,12 @@ export function buildComplianceApprovedEmail(
 }
 
 export function buildComplianceRejectedEmail(
-  params: ComplianceEmailParams,
+  params: ComplianceEmailParams & { reason?: string | null },
 ): ComplianceEmailContent {
   const subject = 'Actualización sobre tu verificación en Guira';
   const intro = greeting(params.name);
   const message =
+    params.reason ??
     'Se encontraron observaciones durante la verificación de tu identidad. Nuestro equipo de soporte se pondrá en contacto contigo para los próximos pasos.';
 
   const html = renderEmailLayout({

@@ -13,6 +13,7 @@ import { BridgeCustomerService } from '../onboarding/bridge-customer.service';
 import { EmailService } from '../email/email.service';
 import { PsavService } from '../psav/psav.service';
 import { SetLimitsDto } from './dto/admin-compliance.dto';
+import { buildBridgeIssueDetails } from '../webhooks/bridge-rejection-reasons';
 
 @Injectable()
 export class ComplianceActionsService {
@@ -510,8 +511,26 @@ export class ComplianceActionsService {
     bridgeCustomerId: string,
     issues: string[],
   ): Promise<void> {
+    // Resuelve cada issue contra el catálogo de Bridge (Rejection reasons.md)
+    // para obtener un texto explicativo en vez de códigos crudos.
+    const issueDetails = buildBridgeIssueDetails(issues);
+    const staffSummary = issueDetails
+      .map((d) =>
+        d.known ? `${d.reasonEs} (motivo técnico: ${d.developerReason})` : d.developerReason,
+      )
+      .join(' | ');
+    const knownClientReasons = issueDetails
+      .filter((d) => d.known && d.reasonEs)
+      .map((d) => d.reasonEs as string);
+    // Dedupe — varios developer_reason distintos pueden mapear al mismo reasonEs
+    const clientReasonsEs = [...new Set(knownClientReasons)];
+    const clientMessage =
+      clientReasonsEs.length > 0
+        ? `${clientReasonsEs.join(' ')} Nuestro equipo de soporte se pondrá en contacto contigo para los próximos pasos.`
+        : 'Se encontraron observaciones durante la verificación de tu identidad. Nuestro equipo de soporte se pondrá en contacto contigo para los próximos pasos.';
+
     this.logger.warn(
-      `Bridge rechazó cuenta para user ${userId} — issues: ${issues.join(', ')}`,
+      `Bridge rechazó cuenta para user ${userId} — issues: ${staffSummary}`,
     );
 
     // 1. Idempotency Check & Profile Data
@@ -569,6 +588,7 @@ export class ComplianceActionsService {
         onboarding_status: 'bridge_rejected',
         bridge_customer_id: bridgeCustomerId,
         issues,
+        bridge_issues_detail: issueDetails,
       },
       source: 'webhook',
     });
@@ -580,9 +600,11 @@ export class ComplianceActionsService {
         review_id: review.id,
         actor_id: userId,
         decision: 'BRIDGE_REJECTED',
-        reason: `Bridge rechazó verificación — Issues: ${issues.join(', ')}`,
+        reason: `Bridge rechazó la verificación — ${staffSummary}`,
         metadata: {
           bridge_issues: issues,
+          bridge_issues_detail: issueDetails,
+          bridge_customer_message: clientMessage,
           bridge_customer_id: bridgeCustomerId,
         },
       });
@@ -603,25 +625,28 @@ export class ComplianceActionsService {
         user_id: staff.id,
         type: 'alert',
         title: 'Bridge rechazó verificación',
-        message: `Bridge rechazó la verificación de ${clientName}. Issues: ${issues.join(', ')}`,
+        message: `Bridge rechazó la verificación de ${clientName}. ${staffSummary}`,
       });
     }
 
-    // 5. Notificar al cliente
+    // 5. Notificar al cliente — usa el motivo traducido cuando Bridge lo identificó
+    // (reason/reasonEs, seguro de compartir), o el mensaje genérico si no fue reconocido.
     await this.supabase.from('notifications').insert({
       user_id: userId,
       type: 'alert',
       title: 'Observaciones en tu verificación',
-      message:
-        'Se encontraron observaciones durante la verificación de tu identidad. Nuestro equipo de soporte se pondrá en contacto contigo para los próximos pasos.',
+      message: clientMessage,
     });
 
-    // 5.5 Notificar por email — mensaje genérico (igual a la notificación in-app)
+    // 5.5 Notificar por email
     if (profile.email) {
-      await this.emailService.sendComplianceRejectedEmail({
-        email: profile.email,
-        name: profile.full_name ?? undefined,
-      });
+      await this.emailService.sendComplianceRejectedEmail(
+        {
+          email: profile.email,
+          name: profile.full_name ?? undefined,
+        },
+        clientMessage,
+      );
     }
 
     // 6. Audit log
@@ -631,9 +656,10 @@ export class ComplianceActionsService {
       action: 'BRIDGE_REJECTED',
       table_name: 'profiles',
       record_id: userId,
-      reason: `Bridge webhook rechazó — Issues: ${issues.join(', ')}`,
+      reason: `Bridge webhook rechazó — ${staffSummary}`,
       new_values: {
         bridge_issues: issues,
+        bridge_issues_detail: issueDetails,
         bridge_customer_id: bridgeCustomerId,
       },
       source: 'webhook',
