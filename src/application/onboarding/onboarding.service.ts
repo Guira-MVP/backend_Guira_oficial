@@ -363,6 +363,27 @@ export class OnboardingService {
         .in('status', ['open', 'in_progress']);
     }
 
+    // WS: notificar al staff que hay un nuevo caso de compliance (creado por el trigger arriba)
+    const { data: kycReview } = await this.supabase
+      .from('compliance_reviews')
+      .select('id, subject_type, subject_id, status, priority, opened_at')
+      .eq('subject_type', 'kyc_applications')
+      .eq('subject_id', app.id)
+      .order('opened_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (kycReview) {
+      this.adminGateway.emitComplianceReviewCreated({
+        id: kycReview.id,
+        subject_type: 'kyc_applications',
+        subject_id: kycReview.subject_id,
+        status: kycReview.status,
+        priority: kycReview.priority,
+        opened_at: kycReview.opened_at,
+      });
+    }
+
     // Notificar al staff
     await this.notifyStaff(userId, 'Nueva solicitud KYC pendiente de revisión');
 
@@ -639,6 +660,27 @@ export class OnboardingService {
     }
 
     // La creación del compliance_review es manejada por el trigger de base de datos 'on_kyb_submitted'.
+
+    // WS: notificar al staff que hay un nuevo caso de compliance (creado por el trigger arriba)
+    const { data: kybReview } = await this.supabase
+      .from('compliance_reviews')
+      .select('id, subject_type, subject_id, status, priority, opened_at')
+      .eq('subject_type', 'kyb_applications')
+      .eq('subject_id', app.id)
+      .order('opened_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (kybReview) {
+      this.adminGateway.emitComplianceReviewCreated({
+        id: kybReview.id,
+        subject_type: 'kyb_applications',
+        subject_id: kybReview.subject_id,
+        status: kybReview.status,
+        priority: kybReview.priority,
+        opened_at: kybReview.opened_at,
+      });
+    }
 
     await this.notifyStaff(userId, 'Nueva solicitud KYB pendiente de revisión');
 

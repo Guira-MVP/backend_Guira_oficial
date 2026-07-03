@@ -13,6 +13,7 @@ import { BridgeApiClient } from './bridge-api.client';
 import { PAYMENT_RAIL_TO_BRIDGE_ACCOUNT_TYPE } from './bridge.constants';
 import { FeesService } from '../fees/fees.service';
 import { LedgerService } from '../ledger/ledger.service';
+import { AdminGateway } from '../admin/admin.gateway';
 import { CreatePayoutRequestDto } from './dto/create-payout.dto';
 import {
   CreateVirtualAccountDto,
@@ -34,6 +35,7 @@ export class BridgeService {
     private readonly bridgeApi: BridgeApiClient,
     private readonly feesService: FeesService,
     private readonly ledgerService: LedgerService,
+    private readonly adminGateway: AdminGateway,
   ) {}
 
   // ═══════════════════════════════════════════════════
@@ -1990,13 +1992,34 @@ export class BridgeService {
   private async createComplianceReview(
     entityType: string,
     entityId: string,
-    userId: string,
+    _userId: string,
   ) {
-    await this.supabase.from('compliance_reviews').insert({
-      entity_type: entityType,
-      entity_id: entityId,
-      status: 'pending',
-      requested_by: userId,
+    const { data, error } = await this.supabase
+      .from('compliance_reviews')
+      .insert({
+        subject_type: entityType,
+        subject_id: entityId,
+        status: 'open',
+        priority: 'normal',
+      })
+      .select('id, subject_type, subject_id, status, priority, opened_at')
+      .single();
+
+    if (error) {
+      this.logger.error(
+        `No se pudo crear compliance_review para ${entityType}:${entityId} — ${error.message}`,
+      );
+      return;
+    }
+
+    // WS: notificar al staff que hay un nuevo caso de compliance
+    this.adminGateway.emitComplianceReviewCreated({
+      id: data.id,
+      subject_type: data.subject_type,
+      subject_id: data.subject_id,
+      status: data.status,
+      priority: data.priority,
+      opened_at: data.opened_at,
     });
   }
 

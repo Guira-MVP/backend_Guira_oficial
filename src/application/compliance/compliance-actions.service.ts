@@ -14,6 +14,7 @@ import { EmailService } from '../email/email.service';
 import { PsavService } from '../psav/psav.service';
 import { SetLimitsDto } from './dto/admin-compliance.dto';
 import { buildBridgeIssueDetails } from '../webhooks/bridge-rejection-reasons';
+import { AdminGateway } from '../admin/admin.gateway';
 
 @Injectable()
 export class ComplianceActionsService {
@@ -25,6 +26,7 @@ export class ComplianceActionsService {
     private readonly bridgeCustomerService: BridgeCustomerService,
     private readonly emailService: EmailService,
     private readonly psavService: PsavService,
+    private readonly adminGateway: AdminGateway,
   ) {}
 
   // ── REVIEWS (Lectura) ─────────────────────────────────────────────
@@ -244,6 +246,13 @@ export class ComplianceActionsService {
       source: 'admin_panel',
     });
 
+    this.adminGateway.emitComplianceReviewUpdated({
+      id: reviewId,
+      assigned_to: staffUserId,
+      updated_at: new Date().toISOString(),
+      action: 'updated',
+    });
+
     return { message: 'Review asignado' };
   }
 
@@ -263,6 +272,13 @@ export class ComplianceActionsService {
       source: 'admin_panel',
     });
 
+    this.adminGateway.emitComplianceReviewUpdated({
+      id: reviewId,
+      assigned_to: null,
+      updated_at: new Date().toISOString(),
+      action: 'updated',
+    });
+
     return { message: 'Review desasignado' };
   }
 
@@ -280,6 +296,13 @@ export class ComplianceActionsService {
       record_id: reviewId,
       new_values: { priority: 'urgent' },
       source: 'admin_panel',
+    });
+
+    this.adminGateway.emitComplianceReviewUpdated({
+      id: reviewId,
+      priority: 'urgent',
+      updated_at: new Date().toISOString(),
+      action: 'updated',
     });
 
     return { message: 'Review escalado a urgente' };
@@ -463,10 +486,18 @@ export class ComplianceActionsService {
       });
 
       // Cerrar review
+      const closedAt = new Date().toISOString();
       await this.supabase
         .from('compliance_reviews')
-        .update({ status: 'closed', closed_at: new Date().toISOString() })
+        .update({ status: 'closed', closed_at: closedAt })
         .eq('id', review.id);
+
+      this.adminGateway.emitComplianceReviewUpdated({
+        id: review.id,
+        status: 'closed',
+        updated_at: closedAt,
+        action: 'updated',
+      });
     }
 
     // 2. Audit log
@@ -862,10 +893,18 @@ export class ComplianceActionsService {
     });
 
     // 2. Cerrar Review
+    const rejectedClosedAt = new Date().toISOString();
     await this.supabase
       .from('compliance_reviews')
-      .update({ status: 'closed', closed_at: new Date().toISOString() })
+      .update({ status: 'closed', closed_at: rejectedClosedAt })
       .eq('id', reviewId);
+
+    this.adminGateway.emitComplianceReviewUpdated({
+      id: reviewId,
+      status: 'closed',
+      updated_at: rejectedClosedAt,
+      action: 'updated',
+    });
 
     // 3. Aplicar rechazo
     await this.applyRejectionToSubject(
@@ -920,10 +959,18 @@ export class ComplianceActionsService {
     });
 
     // 2. El review queda ABIERTO (no cerrado) — el cliente debe corregir
+    const requestChangesUpdatedAt = new Date().toISOString();
     await this.supabase
       .from('compliance_reviews')
       .update({ priority: 'normal' })
       .eq('id', reviewId);
+
+    this.adminGateway.emitComplianceReviewUpdated({
+      id: reviewId,
+      priority: 'normal',
+      updated_at: requestChangesUpdatedAt,
+      action: 'updated',
+    });
 
     // 3. Snapshot datos actuales en previous_data para Diff View
     //    y actualizar estado a 'needs_review' con observaciones

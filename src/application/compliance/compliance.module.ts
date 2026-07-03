@@ -11,9 +11,10 @@ import { RejectionTemplatesService } from './rejection-templates.service';
 import { BridgeModule } from '../bridge/bridge.module';
 import { OnboardingModule } from '../onboarding/onboarding.module';
 import { PsavModule } from '../psav/psav.module';
+import { AdminModule } from '../admin/admin.module';
 
 @Module({
-  imports: [forwardRef(() => BridgeModule), forwardRef(() => OnboardingModule), PsavModule],
+  imports: [forwardRef(() => BridgeModule), forwardRef(() => OnboardingModule), PsavModule, AdminModule],
   controllers: [
     ComplianceController,
     AdminComplianceController,

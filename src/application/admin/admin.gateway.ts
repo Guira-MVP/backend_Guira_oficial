@@ -57,6 +57,24 @@ export interface PsavConfigUpdatedPayload {
   action: 'created' | 'updated' | 'deleted';
 }
 
+export interface ComplianceReviewCreatedPayload {
+  id: string;
+  subject_type: string;
+  subject_id: string;
+  status: string;
+  priority: string;
+  opened_at: string;
+}
+
+export interface ComplianceReviewUpdatedPayload {
+  id: string;
+  status?: string;
+  assigned_to?: string | null;
+  priority?: string;
+  updated_at: string;
+  action: 'updated';
+}
+
 // ── Gateway ───────────────────────────────────────────────────────
 
 @WebSocketGateway({
@@ -172,6 +190,22 @@ export class AdminGateway
     this.server.to('staff').emit('psav_config_updated', payload);
     this.logger.log(
       `WS emitido: psav_config_updated (id: ${payload.id}, action: ${payload.action})`,
+    );
+  }
+
+  /** Nuevo caso de compliance (KYC/KYB enviado o creado vía Bridge). */
+  emitComplianceReviewCreated(payload: ComplianceReviewCreatedPayload) {
+    this.server.to('staff').emit('compliance_review_created', payload);
+    this.logger.log(
+      `WS emitido: compliance_review_created (id: ${payload.id}, subject_type: ${payload.subject_type})`,
+    );
+  }
+
+  /** Caso de compliance actualizado (asignación, escalado, cierre, etc.). */
+  emitComplianceReviewUpdated(payload: ComplianceReviewUpdatedPayload) {
+    this.server.to('staff').emit('compliance_review_updated', payload);
+    this.logger.log(
+      `WS emitido: compliance_review_updated (id: ${payload.id})`,
     );
   }
 }
