@@ -64,13 +64,15 @@ export class ActivityController {
   constructor(private readonly adminService: AdminService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Feed de actividad del usuario logueado' })
+  @ApiOperation({ summary: 'Feed de actividad del usuario logueado (paginado)' })
+  @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'limit', required: false })
   getMyActivity(
     @CurrentUser() user: AuthenticatedUser,
-    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
   ) {
-    return this.adminService.getUserActivityLogs(user.id, limit);
+    return this.adminService.getUserActivityLogs(user.id, page, limit);
   }
 }
 
@@ -216,7 +218,7 @@ export class AdminController {
   @Roles('staff', 'admin', 'super_admin')
   @ApiOperation({ summary: 'Ver actividad del cliente (Vista Staff)' })
   getActivityForAdmin(@Param('userId', new ParseUUIDPipe()) userId: string) {
-    return this.adminService.getUserActivityLogs(userId, 100);
+    return this.adminService.getUserActivityLogs(userId, 1, 100);
   }
 
   // ── RECONCILIATION ───────────────────────────

@@ -208,7 +208,8 @@ export class AuthController {
     @Req() req: Request,
   ) {
     const currentSessionId = this.authService.extractSessionId(req);
-    return this.authService.revokeOtherSessions(user.id, currentSessionId);
+    const context = this.authService.extractRequestContext(req);
+    return this.authService.revokeOtherSessions(user.id, currentSessionId, context);
   }
 
   @Delete('sessions/:id')
@@ -222,8 +223,10 @@ export class AuthController {
   async revokeSession(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') sessionId: string,
+    @Req() req: Request,
   ) {
-    return this.authService.revokeSession(user.id, sessionId);
+    const context = this.authService.extractRequestContext(req);
+    return this.authService.revokeSession(user.id, sessionId, context);
   }
 
   // ─────────────────────────────────────────────────────────────

@@ -10,6 +10,94 @@ import { throwDbError } from '../../core/utils/db-error.util';
 import { UpdateSettingDto, CreateSettingDto, UpdateCurrencySettingDto, UpdateVaSourceCurrencySettingDto } from './dto/admin.dto';
 import { AdminGateway } from './admin.gateway';
 
+/**
+ * Eventos de auth_audit_log que se exponen en el feed de actividad del cliente,
+ * traducidos a la misma forma que activity_logs (action + description).
+ * token_refresh/token_refresh_failed quedan fuera: ocurren en segundo plano
+ * automáticamente y no son "actividad" perceptible por el usuario.
+ */
+const AUTH_ACTIVITY_LABELS: Record<
+  string,
+  { action: string; describe: (row: { ip_address: string | null; metadata: Record<string, unknown> | null }) => string }
+> = {
+  login_success: {
+    action: 'LOGIN_EXITOSO',
+    describe: (row) => `Inicio de sesión exitoso${row.ip_address ? ` desde ${row.ip_address}` : ''}`,
+  },
+  oauth_login: {
+    action: 'LOGIN_OAUTH',
+    describe: (row) => `Inicio de sesión con ${(row.metadata?.provider as string) ?? 'proveedor externo'}`,
+  },
+  logout: {
+    action: 'CIERRE_SESION',
+    describe: () => 'Cierre de sesión',
+  },
+  password_reset_request: {
+    action: 'SOLICITUD_RESET_PASSWORD',
+    describe: () => 'Solicitaste restablecer tu contraseña',
+  },
+  password_reset_success: {
+    action: 'PASSWORD_ACTUALIZADA',
+    describe: () => 'Contraseña actualizada',
+  },
+  password_reset_failed: {
+    action: 'PASSWORD_RESET_FALLIDO',
+    describe: () => 'Intento fallido de restablecer contraseña',
+  },
+  mfa_disabled_by_admin: {
+    action: 'MFA_DESACTIVADO',
+    describe: () => 'Verificación en dos pasos desactivada por soporte',
+  },
+  session_revoked: {
+    action: 'SESION_CERRADA',
+    describe: () => 'Cerraste una sesión activa desde otro dispositivo',
+  },
+  session_revoked_bulk: {
+    action: 'SESIONES_CERRADAS',
+    describe: (row) => `Cerraste todas tus otras sesiones activas${row.metadata?.revoked_count ? ` (${row.metadata.revoked_count})` : ''}`,
+  },
+};
+
+/**
+ * Acciones de audit_logs (auditoría de sistema, normalmente solo staff)
+ * que además son iniciadas por el propio cliente y por eso se exponen
+ * también en su feed de actividad. Filtradas siempre por performed_by = userId.
+ */
+const CLIENT_AUDIT_LABELS: Record<
+  string,
+  {
+    action: string;
+    describe: (row: { new_values: Record<string, unknown> | null; old_values: Record<string, unknown> | null }) => string;
+  }
+> = {
+  CREATE_BANK_ACCOUNT: {
+    action: 'CUENTA_BANCARIA_AGREGADA',
+    describe: (row) => `Agregaste la cuenta bancaria ${(row.new_values?.bank_name as string) ?? ''}`.trim(),
+  },
+  REQUEST_BANK_ACCOUNT_UPDATE: {
+    action: 'SOLICITUD_ACTUALIZAR_CUENTA',
+    describe: () => 'Solicitaste actualizar los datos de una cuenta bancaria',
+  },
+  CREATE_PAYMENT_ORDER: {
+    action: 'ORDEN_CREADA',
+    describe: (row) =>
+      `Creaste una orden (${(row.new_values?.flow_type as string) ?? ''}) por ${(row.new_values?.amount as string) ?? ''} ${(row.new_values?.currency as string) ?? ''}`.trim(),
+  },
+  CREATE_WALLET_RAMP_ORDER: {
+    action: 'ORDEN_CREADA',
+    describe: (row) =>
+      `Creaste una orden (${(row.new_values?.flow_type as string) ?? ''}) por ${(row.new_values?.amount as string) ?? ''} ${(row.new_values?.currency as string) ?? ''}`.trim(),
+  },
+  CREATE_REVIEW_REQUEST: {
+    action: 'SOLICITUD_REVISION_CREADA',
+    describe: (row) => `Solicitaste revisión por exceder el límite (${(row.new_values?.flow_type as string) ?? ''})`,
+  },
+  CANCEL_REVIEW_REQUEST: {
+    action: 'SOLICITUD_REVISION_CANCELADA',
+    describe: () => 'Cancelaste tu solicitud de revisión de límite',
+  },
+};
+
 @Injectable()
 export class AdminService {
   constructor(
@@ -354,15 +442,67 @@ export class AdminService {
 
   // ── ACTIVITY LOGS (Client Feed) ───────────────────────────────────
 
-  async getUserActivityLogs(userId: string, limit = 50) {
-    const { data, error } = await this.supabase
-      .from('activity_logs')
-      .select('*')
+  /**
+   * Feed de actividad del cliente, paginado a nivel de DB sobre la vista
+   * `client_activity_feed` (UNION ALL de activity_logs + auth_audit_log +
+   * audit_logs, ya filtrada por la whitelist de acciones/eventos relevantes
+   * — ver AUTH_ACTIVITY_LABELS / CLIENT_AUDIT_LABELS arriba, que deben
+   * mantenerse sincronizadas con la whitelist de la vista).
+   * Solo se traducen a español las filas de la página pedida, nunca todo
+   * el histórico.
+   */
+  async getUserActivityLogs(userId: string, page = 1, limit = 20) {
+    const offset = (page - 1) * limit;
+
+    const { data, error, count } = await this.supabase
+      .from('client_activity_feed')
+      .select('id, user_id, source_kind, raw_action, raw_description, raw_ip_address, metadata, created_at', {
+        count: 'exact',
+      })
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
-      .limit(limit);
+      .range(offset, offset + limit - 1);
 
     if (error) throwDbError(error);
-    return data;
+
+    const normalized = (data ?? []).map((row) => {
+      if (row.source_kind === 'auth') {
+        const label = AUTH_ACTIVITY_LABELS[row.raw_action];
+        return {
+          id: row.id,
+          user_id: row.user_id,
+          action: label?.action ?? row.raw_action,
+          description: label
+            ? label.describe({ ip_address: row.raw_ip_address, metadata: row.metadata })
+            : row.raw_action,
+          metadata: row.metadata,
+          created_at: row.created_at,
+        };
+      }
+
+      if (row.source_kind === 'audit') {
+        const label = CLIENT_AUDIT_LABELS[row.raw_action];
+        return {
+          id: row.id,
+          user_id: row.user_id,
+          action: label?.action ?? row.raw_action,
+          description: label ? label.describe({ new_values: row.metadata, old_values: null }) : row.raw_action,
+          metadata: row.metadata,
+          created_at: row.created_at,
+        };
+      }
+
+      // source_kind === 'operation' — ya viene con action/description listos
+      return {
+        id: row.id,
+        user_id: row.user_id,
+        action: row.raw_action,
+        description: row.raw_description,
+        metadata: row.metadata,
+        created_at: row.created_at,
+      };
+    });
+
+    return { data: normalized, total: count ?? 0, page, limit };
   }
 }

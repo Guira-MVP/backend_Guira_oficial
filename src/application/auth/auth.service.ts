@@ -29,7 +29,9 @@ type AuthEventType =
   | 'password_reset_request'
   | 'password_reset_success'
   | 'password_reset_failed'
-  | 'mfa_disabled_by_admin';
+  | 'mfa_disabled_by_admin'
+  | 'session_revoked'
+  | 'session_revoked_bulk';
 
 @Injectable()
 export class AuthService {
@@ -513,7 +515,11 @@ export class AuthService {
     };
   }
 
-  async revokeSession(userId: string, sessionId: string): Promise<{ message: string }> {
+  async revokeSession(
+    userId: string,
+    sessionId: string,
+    context?: { ip_address: string; user_agent: string },
+  ): Promise<{ message: string }> {
     const { error } = await this.supabase.rpc('revoke_user_session', {
       p_user_id: userId,
       p_session_id: sessionId,
@@ -524,12 +530,21 @@ export class AuthService {
       throw new InternalServerErrorException('No se pudo cerrar la sesión.');
     }
 
+    await this.logAuthEvent({
+      event_type: 'session_revoked',
+      user_id: userId,
+      ip_address: context?.ip_address,
+      user_agent: context?.user_agent,
+      metadata: { session_id: sessionId },
+    });
+
     return { message: 'Sesión cerrada exitosamente' };
   }
 
   async revokeOtherSessions(
     userId: string,
     currentSessionId?: string,
+    context?: { ip_address: string; user_agent: string },
   ): Promise<{ message: string; revoked: number }> {
     if (!currentSessionId) {
       throw new InternalServerErrorException('No se pudo identificar la sesión actual.');
@@ -545,9 +560,19 @@ export class AuthService {
       throw new InternalServerErrorException('No se pudieron cerrar las otras sesiones.');
     }
 
+    const revokedCount = (data as number) ?? 0;
+
+    await this.logAuthEvent({
+      event_type: 'session_revoked_bulk',
+      user_id: userId,
+      ip_address: context?.ip_address,
+      user_agent: context?.user_agent,
+      metadata: { revoked_count: revokedCount },
+    });
+
     return {
       message: 'Otras sesiones cerradas exitosamente',
-      revoked: (data as number) ?? 0,
+      revoked: revokedCount,
     };
   }
 
