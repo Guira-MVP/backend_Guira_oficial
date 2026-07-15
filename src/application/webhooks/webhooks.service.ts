@@ -1,6 +1,7 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { SupabaseClient } from '@supabase/supabase-js';
+import * as Sentry from '@sentry/nestjs';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
@@ -186,6 +187,14 @@ export class WebhooksService {
   //  CRON WORKER — Cada 30s, FIFO, max 50
   // ═══════════════════════════════════════════════
 
+  // Sentry Cron Monitoring: el intervalo real es de 30s, pero el schedule de
+  // Sentry no admite segundos — se declara como "cada 1 minuto" con margen,
+  // así detectamos si el job deja de correr del todo, no cada tick exacto.
+  @Sentry.SentryCron('webhooks-processor', {
+    schedule: { type: 'interval', value: 1, unit: 'minute' },
+    checkinMargin: 2,
+    maxRuntime: 5,
+  })
   @Cron('*/30 * * * * *', { name: 'process-webhooks' })
   async processWebhooks(): Promise<void> {
     // ── 1. Rescatar eventos atascados en 'processing' por más de 2 minutos ──────
@@ -223,6 +232,9 @@ export class WebhooksService {
 
     if (error) {
       this.logger.error(`CRON error al reclamar webhooks: ${error.message}`);
+      Sentry.captureException(error, {
+        extra: { operation: 'webhooks.processWebhooks.claimPendingWebhooks' },
+      });
       return;
     }
     if (!events || events.length === 0) return;
@@ -302,6 +314,15 @@ export class WebhooksService {
       this.logger.error(`❌ Error procesando webhook ${id}: ${message}`);
 
       const retryCount = ((event.retry_count as number) ?? 0) + 1;
+
+      Sentry.captureException(err, {
+        extra: {
+          operation: 'webhooks.processOne',
+          webhookEventId: id,
+          eventType: event.event_type,
+          retryCount,
+        },
+      });
       const newStatus = retryCount >= 5 ? 'failed' : 'pending';
 
       await this.supabase

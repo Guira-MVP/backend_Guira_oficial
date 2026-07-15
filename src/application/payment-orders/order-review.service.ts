@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { SupabaseClient } from '@supabase/supabase-js';
+import * as Sentry from '@sentry/nestjs';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
 import { throwDbError } from '../../core/utils/db-error.util';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -84,6 +85,9 @@ export class OrderReviewService {
 
     if (error) {
       this.logger.error(`Error expirando solicitudes: ${error.message}`);
+      Sentry.captureException(error, {
+        extra: { operation: 'orderReview.expireStaleRequests' },
+      });
       return;
     }
 
@@ -106,6 +110,9 @@ export class OrderReviewService {
         this.logger.error(
           `Error registrando expiración en audit_logs: ${auditError.message}`,
         );
+        Sentry.captureException(auditError, {
+          extra: { operation: 'orderReview.expireStaleRequests.auditLog' },
+        });
       }
     }
   }

@@ -7,6 +7,7 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import * as Sentry from '@sentry/nestjs';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
 import { LoginDto } from './dto/login.dto';
@@ -401,6 +402,10 @@ export class AuthService {
         `Error reseteando contraseña para ${userId}: ${error.message}`,
       );
 
+      Sentry.captureException(error, {
+        extra: { operation: 'auth.resetPassword', userId },
+      });
+
       await this.logAuthEvent({
         event_type: 'password_reset_failed',
         user_id: userId,
@@ -506,6 +511,9 @@ export class AuthService {
 
     if (error) {
       this.logger.error(`Error listando sesiones para ${userId}: ${error.message}`);
+      Sentry.captureException(error, {
+        extra: { operation: 'auth.listSessions', userId },
+      });
       throw new InternalServerErrorException('No se pudieron obtener las sesiones activas.');
     }
 
@@ -527,6 +535,9 @@ export class AuthService {
 
     if (error) {
       this.logger.error(`Error revocando sesión ${sessionId}: ${error.message}`);
+      Sentry.captureException(error, {
+        extra: { operation: 'auth.revokeSession', userId, sessionId },
+      });
       throw new InternalServerErrorException('No se pudo cerrar la sesión.');
     }
 
@@ -547,6 +558,10 @@ export class AuthService {
     context?: { ip_address: string; user_agent: string },
   ): Promise<{ message: string; revoked: number }> {
     if (!currentSessionId) {
+      Sentry.captureException(
+        new Error('revokeOtherSessions: no se pudo identificar currentSessionId'),
+        { extra: { operation: 'auth.revokeOtherSessions', userId } },
+      );
       throw new InternalServerErrorException('No se pudo identificar la sesión actual.');
     }
 
@@ -557,6 +572,9 @@ export class AuthService {
 
     if (error) {
       this.logger.error(`Error revocando otras sesiones para ${userId}: ${error.message}`);
+      Sentry.captureException(error, {
+        extra: { operation: 'auth.revokeOtherSessions', userId },
+      });
       throw new InternalServerErrorException('No se pudieron cerrar las otras sesiones.');
     }
 
@@ -590,6 +608,9 @@ export class AuthService {
 
     if (error) {
       this.logger.error(`Error listando factores MFA para ${targetUserId}: ${error.message}`);
+      Sentry.captureException(error, {
+        extra: { operation: 'auth.disableUserMfa', actorId, targetUserId },
+      });
       throw new InternalServerErrorException('No se pudo consultar el MFA del usuario.');
     }
 

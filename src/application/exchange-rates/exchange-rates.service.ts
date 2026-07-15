@@ -6,6 +6,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
+import * as Sentry from '@sentry/nestjs';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
 import { throwDbError } from '../../core/utils/db-error.util';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -153,6 +154,9 @@ export class ExchangeRatesService {
       this.logger.error(
         `Falló la sincronización de tasas de cambio: ${(error as Error).message}`,
       );
+      Sentry.captureException(error, {
+        extra: { operation: 'exchangeRates.syncExternalRates', actorId },
+      });
       throw new BadRequestException(
         'No se pudo establecer conexión con el proveedor de tipos de cambio.',
       );

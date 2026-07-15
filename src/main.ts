@@ -16,6 +16,7 @@ import type { ServerOptions } from 'socket.io';
 
 import helmet from 'helmet';
 import { Server } from 'socket.io';
+import { SentryAwareLogger } from './core/logging/sentry-aware.logger';
 
 class CorsIoAdapter extends IoAdapter {
   private readonly app: INestApplication;
@@ -56,6 +57,10 @@ async function bootstrap() {
   // IMPORTANTE: Habilitamos rawBody para poder verificar firmas RSA/SHA256
   // de Bridge Webhooks sin interferir con FileInterceptor (Multer) o uploads.
   const app = await NestFactory.create(AppModule, { rawBody: true });
+
+  // Reemplaza el logger por defecto para que warn()/error() de cualquier
+  // servicio también se reporten a Sentry (ver sentry-aware.logger.ts).
+  app.useLogger(new SentryAwareLogger());
 
   // ALTO-01: Confiar en 1 hop de proxy (el load balancer de Render).
   // Con esto, Express deriva request.ip de forma segura a partir del
