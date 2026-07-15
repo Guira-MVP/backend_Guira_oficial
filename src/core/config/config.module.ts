@@ -37,6 +37,13 @@ if (fs.existsSync(RENDER_SECRETS_PATH)) {
         PATH_SUBDOMAIN: Joi.string().default('api'),
         URL_FRONTEND: Joi.string().allow('').default(''),
 
+        // Sentry (monitoreo de errores y logs)
+        SENTRY_DSN: Joi.when('NODE_ENV', {
+          is: 'production',
+          then: Joi.string().uri().required(),
+          otherwise: Joi.string().allow('').default(''),
+        }),
+
         // Supabase
         SUPABASE_URL: Joi.string().uri().required(),
         SUPABASE_ANON_KEY: Joi.string().required(),

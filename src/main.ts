@@ -1,4 +1,6 @@
 // src/main.ts
+import './instrument'; // Sentry: debe ser el primer import del archivo
+
 import { NestFactory, Reflector } from '@nestjs/core';
 import { AppModule } from './app.module';
 import {

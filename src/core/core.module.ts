@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
+import { SentryGlobalFilter, SentryModule } from '@sentry/nestjs/setup';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { CoreConfigModule } from './config/config.module';
@@ -10,6 +11,7 @@ import { PdfModule } from './pdf/pdf.module';
 
 @Module({
   imports: [
+    SentryModule.forRoot(), // Nombra las transacciones de tracing con la ruta HTTP
     CoreConfigModule, // Variables de entorno + validación Joi
     SupabaseModule, // Cliente Supabase (service_role) — global
     PdfModule, // Generación de documentos PDF — global
@@ -22,6 +24,12 @@ import { PdfModule } from './pdf/pdf.module';
     ]),
   ],
   providers: [
+    // Filtro global de Sentry: DEBE registrarse antes que cualquier otro
+    // APP_FILTER para que las excepciones no manejadas se reporten a Sentry.
+    {
+      provide: APP_FILTER,
+      useClass: SentryGlobalFilter,
+    },
     // Guard global: protección contra DdoS/Abuso rate limit
     {
       provide: APP_GUARD,
