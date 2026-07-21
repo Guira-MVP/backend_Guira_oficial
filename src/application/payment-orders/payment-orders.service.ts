@@ -174,12 +174,22 @@ export class PaymentOrdersService {
     return percent;
   }
 
+  /**
+   * Comisión para bolivia_to_world / bolivia_to_wallet: se define como % del monto DESTINO
+   * que el proveedor debe recibir, no del bruto que el cliente deposita. `amount` ya es el
+   * bruto (neto_destino + comisión), y comisión = neto_destino × pct/100 — despejando:
+   * comisión = amount × pct / (100 + pct). Así el proveedor recibe exactamente el monto que
+   * el cliente pidió en el panel, sin importar el % de comisión configurado. El frontend
+   * replica esta misma fórmula al construir el "Monto a depositar" (create-payment-order-form.tsx).
+   */
   private calculateFeeFromLiquidationAddress(
     amount: number,
     developerFeePercent: number,
   ): { fee_amount: number; net_amount: number } {
     const amountCents = Math.round(amount * 100);
-    const feeCents = Math.round((amountCents * developerFeePercent) / 100);
+    const feeCents = Math.round(
+      (amountCents * developerFeePercent) / (100 + developerFeePercent),
+    );
     return {
       fee_amount: feeCents / 100,
       net_amount: (amountCents - feeCents) / 100,

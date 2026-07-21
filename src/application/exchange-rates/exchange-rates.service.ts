@@ -45,16 +45,17 @@ export class ExchangeRatesService {
   ) {}
 
   /**
-   * Precisión única de cálculo para TODAS las tasas: 6 decimales, truncados
-   * (nunca redondeados hacia arriba) — igual para todos los pares, sin tablas
-   * especiales por divisa. Esta es la precisión que de verdad se usa para
-   * calcular dinero (effective_rate, ingestión de Bridge); la presentación
-   * al staff (6 decimales fijos) y al cliente (2/4/6 decimales truncados
-   * según divisa) es responsabilidad exclusiva del frontend y nunca debe
-   * retroalimentar este valor.
+   * Precisión de cálculo: 6 decimales, truncados (nunca redondeados hacia
+   * arriba) para todos los pares — EXCEPTO el par ancla BOB_USD/USD_BOB, que
+   * usa 2 decimales (precisión de centavos de USD, coincide exactamente con
+   * lo que ya se le mostraba al cliente vía formatClientRateDisplay). El
+   * match es exacto ('BOB_USD'/'USD_BOB'), no por substring — no afecta a
+   * USD_EUR/USD_MXN/USD_BRL/USD_COP/USD_GBP ni a ningún par BOB_X restante.
    */
-  private truncateToCalcPrecision(value: number): number {
-    return Math.trunc(value * 1_000_000) / 1_000_000;
+  private truncateToCalcPrecision(value: number, pair?: string): number {
+    const isAnchorPair = pair === 'BOB_USD' || pair === 'USD_BOB';
+    const factor = isAnchorPair ? 100 : 1_000_000;
+    return Math.trunc(value * factor) / factor;
   }
 
   /** Construye el payload para la notificación WS sin consultar DB nuevamente. */
@@ -69,7 +70,7 @@ export class ExchangeRatesService {
     const spreadMultiplier = isBobPair
       ? 1 + spreadPercent / 100
       : 1 - spreadPercent / 100;
-    const effectiveRate = this.truncateToCalcPrecision(baseRate * spreadMultiplier);
+    const effectiveRate = this.truncateToCalcPrecision(baseRate * spreadMultiplier, pair);
 
     return {
       pair,
@@ -315,7 +316,7 @@ export class ExchangeRatesService {
     const spreadMultiplier = isBobPair
       ? 1 + spreadPercent / 100 // subir tasa para penalizar al dividir
       : 1 - spreadPercent / 100; // bajar tasa para penalizar al multiplicar
-    const effectiveRate = this.truncateToCalcPrecision(baseRate * spreadMultiplier);
+    const effectiveRate = this.truncateToCalcPrecision(baseRate * spreadMultiplier, resolvedPair);
 
     return {
       pair: data.pair,
@@ -379,7 +380,7 @@ export class ExchangeRatesService {
         ? 1 + spreadPercent / 100
         : 1 - spreadPercent / 100;
 
-      const effectiveRate = this.truncateToCalcPrecision(baseRate * spreadMultiplier);
+      const effectiveRate = this.truncateToCalcPrecision(baseRate * spreadMultiplier, row.pair);
 
       return {
         ...row,
