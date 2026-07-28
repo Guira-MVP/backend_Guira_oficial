@@ -234,35 +234,19 @@ export class CreateUboDto {
   @Matches(/^\+[1-9]\d{6,14}$/, { message: 'El teléfono debe estar en formato E.164 (ej: +525512345678)' })
   phone?: string;
 
+  // Bridge (Address2025WinterRefresh) solo requiere street_line_1/city/country — address2/state/postal_code
+  // eliminados: sin input en el form, nunca poblados (auditoria 2026-07-28).
   @ApiProperty()
   @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   address1: string;
 
-  @ApiPropertyOptional()
-  @Transform(trimString)
-  @IsOptional()
-  @IsString()
-  address2?: string;
-
   @ApiProperty()
   @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   city: string;
-
-  @ApiPropertyOptional()
-  @Transform(trimString)
-  @IsOptional()
-  @IsString()
-  state?: string;
-
-  @ApiPropertyOptional()
-  @Transform(trimString)
-  @IsOptional()
-  @IsString()
-  postal_code?: string;
 
   /**
    * H05 — Updated to accept alpha-3. BridgeCustomerService converts.

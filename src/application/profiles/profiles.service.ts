@@ -221,7 +221,7 @@ export class ProfilesService {
 
     const { data: business } = await this.supabase
       .from('businesses')
-      .select('tax_id, country_of_incorporation, country')
+      .select('tax_id, country')
       .eq('user_id', userId)
       .maybeSingle();
 
@@ -229,7 +229,7 @@ export class ProfilesService {
       return {
         identity_label: 'NIT',
         identity_value: business.tax_id ?? null,
-        country: business.country_of_incorporation ?? business.country ?? null,
+        country: business.country ?? null,
         is_company: true,
       };
     }

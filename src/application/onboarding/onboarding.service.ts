@@ -411,7 +411,7 @@ export class OnboardingService {
         .select()
         .single();
       if (error) throwDbError(error);
-      await this.syncProfileCountry(userId, dto.country_of_incorporation ?? dto.country);
+      await this.syncProfileCountry(userId, dto.country);
       return data;
     }
 
@@ -421,7 +421,7 @@ export class OnboardingService {
       .select()
       .single();
     if (error) throwDbError(error);
-    await this.syncProfileCountry(userId, dto.country_of_incorporation ?? dto.country);
+    await this.syncProfileCountry(userId, dto.country);
     return data;
   }
 

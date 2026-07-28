@@ -810,9 +810,10 @@ export class BridgeCustomerService {
       payload.other_websites = business.other_websites;
     }
 
-    if (business.phone) {
-      payload.phone = business.phone;
-    }
+    // NOTA (auditoria 2026-07-28): `phone` NO es una propiedad documentada de
+    // UpdateBusinessCustomerPayload en Bridge (solo existe para individual y
+    // para AssociatedPerson). Se mantiene el input en el form para uso interno
+    // de Guira, pero deliberadamente no se envía a Bridge.
 
     if (business.business_description) {
       payload.business_description = business.business_description;

@@ -2,7 +2,6 @@ import {
   IsString,
   IsNotEmpty,
   IsOptional,
-  IsDateString,
   IsBoolean,
   IsArray,
   IsEmail,
@@ -84,12 +83,6 @@ export class CreateBusinessDto {
   @IsString()
   trade_name?: string;
 
-  @ApiPropertyOptional({ example: 'REG-123456' })
-  @Transform(trimString)
-  @IsOptional()
-  @IsString()
-  registration_number?: string;
-
   @ApiProperty({ example: 'GPY1234567A0' })
   @Transform(trimString)
   @IsString()
@@ -103,35 +96,6 @@ export class CreateBusinessDto {
   @ApiProperty({ enum: BusinessTypeEnum })
   @IsEnum(BusinessTypeEnum)
   entity_type: BusinessTypeEnum;
-
-  @ApiPropertyOptional({ example: '2020-01-15' })
-  @IsOptional()
-  @IsDateString()
-  incorporation_date?: string;
-
-  /**
-   * H05/H09 — Updated to allow 2-3 char codes. BridgeCustomerService converts to alpha-3.
-   */
-  @ApiProperty({
-    example: 'MEX',
-    description: 'ISO 3166-1 alpha-3 country code (3 characters preferred)',
-  })
-  @Transform(trimString)
-  @IsString()
-  @Length(2, 3)
-  country_of_incorporation: string;
-
-  @ApiPropertyOptional({ example: 'Jalisco' })
-  @Transform(trimString)
-  @IsOptional()
-  @IsString()
-  state_of_incorporation?: string;
-
-  @ApiPropertyOptional({ example: ['MEX', 'USA', 'CHN'] })
-  @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
-  operating_countries?: string[];
 
   @ApiPropertyOptional({ example: 'https://guirapay.com' })
   @Transform(trimString)
