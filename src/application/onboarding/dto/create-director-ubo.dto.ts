@@ -3,11 +3,12 @@ import {
   IsNotEmpty,
   IsOptional,
   IsDateString,
+  IsISO8601,
   IsBoolean,
   IsEmail,
   Length,
   IsEnum,
-  IsNumber,
+  IsInt,
   Matches,
   Min,
   Max,
@@ -144,6 +145,21 @@ export class CreateDirectorDto {
   })
   @IsBoolean()
   is_pep: boolean;
+
+  /**
+   * Bridge AssociatedPerson.attested_ownership_structure_at — required to satisfy
+   * Bridge's control_person_ownership_attestation without a separate ownership
+   * document. Set when the legal representative (control person) certifies that
+   * the declared UBO list represents 100% of the ownership structure.
+   */
+  @ApiPropertyOptional({
+    example: '2026-07-29T18:32:00.000Z',
+    description:
+      'Timestamp ISO 8601 en el que este director (persona de control) certificó la estructura de propiedad (UBOs) de la empresa.',
+  })
+  @IsOptional()
+  @IsISO8601()
+  attested_ownership_structure_at?: string;
 }
 
 export class CreateUboDto {
@@ -160,9 +176,13 @@ export class CreateUboDto {
   @Length(2, 1024)
   last_name: string;
 
-  /** ownership_percentage on Bridge side; stored as ownership_percent in DB. */
-  @ApiProperty({ example: 51.5 })
-  @IsNumber()
+  /**
+   * ownership_percentage on Bridge side; stored as ownership_percent in DB.
+   * Bridge spec types this field as `integer` — decimals cause a 400 on
+   * POST /v0/customers, so this is validated as a whole number.
+   */
+  @ApiProperty({ example: 51 })
+  @IsInt({ message: 'ownership_percent debe ser un número entero (Bridge no acepta decimales)' })
   @Min(0)
   @Max(100)
   ownership_percent: number;

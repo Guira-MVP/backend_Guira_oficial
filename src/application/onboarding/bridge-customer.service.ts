@@ -819,6 +819,12 @@ export class BridgeCustomerService {
       payload.business_description = business.business_description;
     }
 
+    // Reduces RFI risk by letting Bridge cross-check against the stamped date
+    // on the formation document (incorporation_certificate).
+    if (business.incorporation_date) {
+      payload.incorporation_date = business.incorporation_date;
+    }
+
     // P1-B: business_industry as array of NAICS codes
     if (business.business_industry) {
       payload.business_industry = Array.isArray(business.business_industry)
@@ -1340,6 +1346,13 @@ export class BridgeCustomerService {
         if (dir.date_of_birth) person.birth_date = dir.date_of_birth;
         if (dir.position) person.title = dir.position; // position → title
 
+        // Satisfies Bridge's control_person_ownership_attestation requirement
+        // without a separate ownership document (see Business ownership documents guide).
+        if (dir.attested_ownership_structure_at) {
+          person.attested_ownership_structure_at =
+            dir.attested_ownership_structure_at;
+        }
+
         if (dir.nationality) {
           person.nationalities = [this.toAlpha3(dir.nationality as string)];
         }
@@ -1379,7 +1392,11 @@ export class BridgeCustomerService {
         };
 
         if (ubo.ownership_percent !== undefined) {
-          person.ownership_percentage = ubo.ownership_percent; // ownership_percent → ownership_percentage
+          // Bridge types ownership_percentage as `integer` — round defensively
+          // even though the DTO/schema already reject decimals upstream.
+          person.ownership_percentage = Math.round(
+            Number(ubo.ownership_percent),
+          );
         }
 
         if (ubo.email) person.email = ubo.email;

@@ -595,6 +595,45 @@ export class OnboardingService {
       );
     }
 
+    // Verificar atestación de estructura de propiedad — Bridge requiere que al
+    // menos una persona de control (director) haya certificado que los UBOs
+    // declarados representan el 100% de la propiedad (control_person_ownership_attestation).
+    const { count: attestedCount } = await this.supabase
+      .from('business_directors')
+      .select('id', { count: 'exact', head: true })
+      .eq('business_id', biz.id)
+      .not('attested_ownership_structure_at', 'is', null);
+
+    if (!attestedCount || attestedCount === 0) {
+      throw new BadRequestException(
+        'Debes certificar la estructura de propiedad (Beneficiarios Finales) antes de enviar',
+      );
+    }
+
+    // Verificar evidencia de naturaleza del negocio cuando no hay sitio web —
+    // Bridge exige un documento proof_of_nature_of_business si primary_website
+    // no fue provisto.
+    const { data: bizWebsite } = await this.supabase
+      .from('businesses')
+      .select('website')
+      .eq('id', biz.id)
+      .single();
+
+    if (!bizWebsite?.website) {
+      const { count: natureDocCount } = await this.supabase
+        .from('documents')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', userId)
+        .eq('subject_type', 'business')
+        .eq('document_type', 'proof_of_nature_of_business');
+
+      if (!natureDocCount || natureDocCount === 0) {
+        throw new BadRequestException(
+          'Sin sitio web declarado, debes adjuntar evidencia de la naturaleza del negocio (folletos, contratos, catálogo)',
+        );
+      }
+    }
+
     // Verificar documentos de empresa
     const { count: docCount } = await this.supabase
       .from('documents')

@@ -8,6 +8,7 @@ import {
   Length,
   IsEnum,
   IsNumber,
+  IsDateString,
   Matches,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
@@ -96,6 +97,16 @@ export class CreateBusinessDto {
   @ApiProperty({ enum: BusinessTypeEnum })
   @IsEnum(BusinessTypeEnum)
   entity_type: BusinessTypeEnum;
+
+  /**
+   * Bridge field: incorporation_date (ISO 8601 YYYY-MM-DD).
+   * Reduces RFI risk by letting Bridge cross-check against the stamped date
+   * on the formation document (incorporation_certificate).
+   */
+  @ApiProperty({ example: '2018-05-14' })
+  @IsDateString()
+  @IsNotEmpty()
+  incorporation_date: string;
 
   @ApiPropertyOptional({ example: 'https://guirapay.com' })
   @Transform(trimString)
