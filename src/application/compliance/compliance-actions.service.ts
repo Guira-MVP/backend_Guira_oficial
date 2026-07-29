@@ -657,10 +657,13 @@ export class ComplianceActionsService {
         .eq('id', kycApp.id);
     } else {
       // Try KYB
+      // kyb_applications no tiene columna user_id — es requester_user_id (bug detectado
+      // 2026-07-29 vía webhook real: este filtro nunca matcheaba, el status de la cuenta
+      // KYB nunca se actualizaba a bridge_rejected).
       await this.supabase
         .from('kyb_applications')
         .update({ status: 'bridge_rejected' })
-        .eq('user_id', userId)
+        .eq('requester_user_id', userId)
         .in('status', ['sent_to_bridge']);
     }
 
@@ -805,10 +808,16 @@ export class ComplianceActionsService {
         })
         .eq('id', kycApp.id);
     } else {
+      // kyb_applications no tiene columna user_id — es requester_user_id (bug detectado
+      // 2026-07-29 vía webhook real: este filtro nunca matcheaba, el status se quedaba
+      // pegado en sent_to_bridge y el staff nunca se enteraba de los issues de Bridge).
       await this.supabase
         .from('kyb_applications')
-        .update({ status: 'needs_review' })
-        .eq('user_id', userId)
+        .update({
+          status: 'needs_review',
+          observations: JSON.stringify({ bridge_issues: issues, additional_requirements: additionalRequirements }),
+        })
+        .eq('requester_user_id', userId)
         .in('status', ['sent_to_bridge', 'submitted', 'under_review']);
     }
 
@@ -913,10 +922,13 @@ export class ComplianceActionsService {
     }
 
     // Buscar por kyb_application
+    // kyb_applications no tiene columna user_id — es requester_user_id (bug detectado
+    // 2026-07-29 vía webhook real: este filtro nunca matcheaba, así que ningún evento
+    // BRIDGE_APPROVED/BRIDGE_REJECTED/BRIDGE_INCOMPLETE se registraba para cuentas KYB).
     const { data: kybApp } = await this.supabase
       .from('kyb_applications')
       .select('id')
-      .eq('user_id', userId)
+      .eq('requester_user_id', userId)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
