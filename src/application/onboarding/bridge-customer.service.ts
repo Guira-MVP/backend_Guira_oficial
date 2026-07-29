@@ -798,7 +798,7 @@ export class BridgeCustomerService {
     }
 
     if (business.website) {
-      payload.primary_website = business.website;
+      payload.primary_website = this.normalizeWebsiteUrl(business.website as string);
     } else {
       // FIX-W1: Bridge rejects KYB without primary_website unless a proof_of_nature_of_business document is provided.
       this.logger.warn(
@@ -825,11 +825,16 @@ export class BridgeCustomerService {
       payload.incorporation_date = business.incorporation_date;
     }
 
-    // P1-B: business_industry as array of NAICS codes
-    if (business.business_industry) {
-      payload.business_industry = Array.isArray(business.business_industry)
-        ? business.business_industry
-        : [business.business_industry];
+    // P1-B: business_industry as array of NAICS codes.
+    // La columna `businesses.business_industry` es `text` (no array), así que Supabase
+    // devuelve el valor como el string JSON-stringified que insertó el cliente (ej.
+    // '["541611"]'), no como array real — `Array.isArray` sobre ese string da `false`
+    // y lo envolvía en un array de un solo elemento con el JSON crudo adentro
+    // (auditoría 2026-07-29, detectado antes de enviar la cuenta administracion@guiracorp.com
+    // a Bridge). `normalizeBusinessIndustryCodes` cubre ambos formatos.
+    const businessIndustryCodes = this.normalizeBusinessIndustryCodes(business.business_industry);
+    if (businessIndustryCodes.length > 0) {
+      payload.business_industry = businessIndustryCodes;
     }
 
     if (business.account_purpose) {
@@ -1036,6 +1041,40 @@ export class BridgeCustomerService {
    * H05: country convertido a ISO alpha-3.
    * H14: state → subdivision.
    */
+  /**
+   * Corrige URLs mal formadas (ej. "https:example.com" sin "//") antes de mandarlas
+   * a Bridge como primary_website. El parser WHATWG URL normaliza esquemas especiales
+   * (http/https) aunque falte "//"; si el valor no es parseable, se envía tal cual
+   * para no bloquear el submit por un problema puramente cosmético.
+   */
+  private normalizeWebsiteUrl(raw: string): string {
+    try {
+      return new URL(raw).href;
+    } catch {
+      return raw;
+    }
+  }
+
+  /**
+   * `businesses.business_industry` es una columna `text`, no un array — Supabase
+   * devuelve el valor tal como lo insertó el cliente, que puede ser un array real
+   * o un string JSON-stringified (ej. '["541611"]'). Cubre ambos casos para no
+   * enviarle a Bridge un código NAICS envuelto en el JSON crudo como string.
+   */
+  private normalizeBusinessIndustryCodes(value: unknown): string[] {
+    if (Array.isArray(value)) return value as string[];
+    if (typeof value === 'string' && value.trim()) {
+      try {
+        const parsed = JSON.parse(value);
+        if (Array.isArray(parsed)) return parsed;
+      } catch {
+        // No era JSON — tratar el string completo como un único código.
+      }
+      return [value];
+    }
+    return [];
+  }
+
   private buildAddress(fields: {
     address1: string;
     address2?: string;
