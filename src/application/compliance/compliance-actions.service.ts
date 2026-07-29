@@ -132,7 +132,7 @@ export class ComplianceActionsService {
         .maybeSingle();
       if (kyb) {
         userId = kyb.requester_user_id;
-        applicationData = kyb.businesses ?? kyb;
+        applicationData = this.mapKybToFormData(kyb);
         previousData = kyb.previous_data ?? null;
         onboardingType = 'company';
       }
@@ -224,6 +224,66 @@ export class ComplianceActionsService {
       estimated_monthly_volume: p.expected_monthly_payments_usd,
       is_pep: p.is_pep,
       employment_status: p.employment_status,
+    };
+  }
+
+  /**
+   * Mapea los datos crudos de kyb_applications + businesses (+ business_directors/business_ubos)
+   * a un formato plano esperado por el componente de detalle del frontend.
+   * Espejo de mapKycToFormData — antes de este fix, applicationData exponía la fila cruda de
+   * `businesses` y el frontend leía claves (company_legal_name, business_street, legal_rep_*, ubos)
+   * que nunca existieron ahí, dejando el expediente KYB casi vacío en el panel de staff.
+   */
+  private mapKybToFormData(kyb: any): Record<string, any> {
+    const b = kyb.businesses;
+    if (!b) return kyb;
+    const director = Array.isArray(b.business_directors) ? b.business_directors[0] : null;
+    const ubos = Array.isArray(b.business_ubos) ? b.business_ubos : [];
+
+    return {
+      company_legal_name: b.legal_name,
+      trade_name: b.trade_name,
+      tax_id: b.tax_id,
+      entity_type: b.entity_type,
+      business_description: b.business_description,
+      business_website: b.website,
+
+      business_street: b.address1,
+      business_city: b.city,
+      business_country: b.country,
+
+      email: b.email,
+      business_phone: b.phone,
+
+      purpose: b.account_purpose,
+      purpose_other: b.account_purpose_other,
+      source_of_funds: b.source_of_funds,
+      estimated_monthly_volume: b.expected_monthly_payments_usd,
+      conducts_money_services: b.conducts_money_services,
+      estimated_annual_revenue_usd: b.estimated_annual_revenue_usd,
+      high_risk_activities: b.high_risk_activities,
+
+      legal_rep_first_names: director?.first_name,
+      legal_rep_last_names: director?.last_name,
+      legal_rep_position: director?.position,
+      legal_rep_id_type: director?.id_type,
+      legal_rep_id_number: director?.id_number,
+      legal_rep_email: director?.email,
+      legal_rep_nationality: director?.nationality,
+      legal_rep_is_pep: director?.is_pep,
+
+      ubos: ubos.map((u: any) => ({
+        first_names: u.first_name,
+        last_names: u.last_name,
+        percentage: u.ownership_percent,
+        nationality: u.nationality,
+        id_type: u.id_type,
+        id_number: u.id_number,
+        email: u.email,
+        is_pep: u.is_pep,
+        has_control: u.has_control,
+        position: u.position,
+      })),
     };
   }
 
@@ -1001,7 +1061,7 @@ export class ComplianceActionsService {
         .eq('id', review.subject_id)
         .maybeSingle();
 
-      const snapshotData = currentApp?.businesses ?? currentApp ?? {};
+      const snapshotData = currentApp ? this.mapKybToFormData(currentApp) : {};
 
       await this.supabase
         .from('kyb_applications')
