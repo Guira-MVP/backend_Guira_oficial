@@ -124,6 +124,18 @@ export class CreateDirectorDto {
   city: string;
 
   /**
+   * Bridge exige `residential_address.subdivision` para ciertos países (ej. Bolivia) —
+   * confirmado contra Bridge real el 2026-07-29 ("must be set for provided country").
+   * Opcional aquí porque solo aplica quando el país tiene subdivisiones definidas
+   * (mismo criterio que ya usa el domicilio de la empresa).
+   */
+  @ApiPropertyOptional({ example: 'La Paz' })
+  @Transform(trimString)
+  @IsOptional()
+  @IsString()
+  state?: string;
+
+  /**
    * H05 — Updated to accept alpha-3. BridgeCustomerService converts.
    */
   @ApiProperty({
@@ -254,7 +266,7 @@ export class CreateUboDto {
   @Matches(/^\+[1-9]\d{6,14}$/, { message: 'El teléfono debe estar en formato E.164 (ej: +525512345678)' })
   phone?: string;
 
-  // Bridge (Address2025WinterRefresh) solo requiere street_line_1/city/country — address2/state/postal_code
+  // Bridge (Address2025WinterRefresh) solo requiere street_line_1/city/country — address2/postal_code
   // eliminados: sin input en el form, nunca poblados (auditoria 2026-07-28).
   @ApiProperty()
   @Transform(trimString)
@@ -267,6 +279,17 @@ export class CreateUboDto {
   @IsString()
   @IsNotEmpty()
   city: string;
+
+  /**
+   * Bridge exige `residential_address.subdivision` para ciertos países (ej. Bolivia) —
+   * confirmado contra Bridge real el 2026-07-29. La columna `business_ubos.state` ya
+   * existía en BD (huérfana desde la limpieza del 2026-07-28); se reactiva aquí.
+   */
+  @ApiPropertyOptional({ example: 'La Paz' })
+  @Transform(trimString)
+  @IsOptional()
+  @IsString()
+  state?: string;
 
   /**
    * H05 — Updated to accept alpha-3. BridgeCustomerService converts.

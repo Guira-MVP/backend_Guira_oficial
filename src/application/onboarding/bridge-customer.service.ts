@@ -1335,6 +1335,10 @@ export class BridgeCustomerService {
     const persons: Record<string, unknown>[] = [];
 
     // Helper: build residential_address with fallback to business address
+    // Bridge exige `subdivision` para ciertos países (ej. Bolivia) — confirmado contra
+    // Bridge real el 2026-07-29 ("associated_persons[0].residential_address.subdivision
+    // must be set for provided country"). Antes este helper no pasaba `state` en ningún
+    // caso, así que subdivision nunca se enviaba para directores/UBOs.
     const buildPersonAddress = (
       entity: Record<string, unknown>,
     ): Record<string, unknown> => {
@@ -1343,6 +1347,7 @@ export class BridgeCustomerService {
         return this.buildAddress({
           address1: entity.address1 as string,
           city: entity.city as string,
+          state: entity.state as string | undefined,
           country: entity.country as string,
         });
       }
@@ -1351,6 +1356,7 @@ export class BridgeCustomerService {
         return this.buildAddress({
           address1: business.address1 as string,
           city: business.city as string,
+          state: business.state as string | undefined,
           country: business.country as string,
         });
       }

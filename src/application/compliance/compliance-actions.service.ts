@@ -271,6 +271,7 @@ export class ComplianceActionsService {
       legal_rep_email: director?.email,
       legal_rep_nationality: director?.nationality,
       legal_rep_is_pep: director?.is_pep,
+      legal_rep_state: director?.state,
 
       ubos: ubos.map((u: any) => ({
         first_names: u.first_name,
@@ -283,6 +284,7 @@ export class ComplianceActionsService {
         is_pep: u.is_pep,
         has_control: u.has_control,
         position: u.position,
+        state: u.state,
       })),
     };
   }
