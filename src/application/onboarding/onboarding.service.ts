@@ -450,6 +450,52 @@ export class OnboardingService {
     return data;
   }
 
+  /**
+   * Crea o actualiza el único representante legal administrado por el
+   * formulario KYB. Este flujo no usa addDirector porque una corrección debe
+   * conservar el mismo director (y su bridge_associated_person_id), no crear
+   * un associated person nuevo en cada reenvío.
+   */
+  async upsertLegalRepresentative(userId: string, dto: CreateDirectorDto) {
+    const biz = await this.getUserBusiness(userId);
+    const { data: signers, error: findError } = await this.supabase
+      .from('business_directors')
+      .select('id')
+      .eq('business_id', biz.id)
+      .eq('is_signer', true)
+      .order('created_at', { ascending: true });
+
+    if (findError) throwDbError(findError);
+
+    if ((signers?.length ?? 0) > 1) {
+      throw new ConflictException(
+        'La empresa tiene más de un representante legal. Elimina o corrige los duplicados antes de continuar.',
+      );
+    }
+
+    if (signers?.[0]) {
+      const { data, error } = await this.supabase
+        .from('business_directors')
+        .update({ ...dto, updated_at: new Date().toISOString() })
+        .eq('id', signers[0].id)
+        .eq('business_id', biz.id)
+        .select()
+        .single();
+
+      if (error) throwDbError(error);
+      return data;
+    }
+
+    const { data, error } = await this.supabase
+      .from('business_directors')
+      .insert({ ...dto, business_id: biz.id })
+      .select()
+      .single();
+
+    if (error) throwDbError(error);
+    return data;
+  }
+
   /** Elimina un director de la empresa del usuario. */
   async removeDirector(userId: string, directorId: string) {
     const biz = await this.getUserBusiness(userId);
@@ -610,9 +656,9 @@ export class OnboardingService {
       );
     }
 
-    // Verificar evidencia de naturaleza del negocio cuando no hay sitio web —
-    // Bridge exige un documento proof_of_nature_of_business si primary_website
-    // no fue provisto.
+    // Bridge requiere proof_of_nature_of_business si no se declara
+    // primary_website. Con sitio web sigue siendo recomendable, y puede llegar
+    // como RFI, pero no es un requisito universal de creación.
     const { data: bizWebsite } = await this.supabase
       .from('businesses')
       .select('website')
@@ -629,7 +675,7 @@ export class OnboardingService {
 
       if (!natureDocCount || natureDocCount === 0) {
         throw new BadRequestException(
-          'Sin sitio web declarado, debes adjuntar evidencia de la naturaleza del negocio (folletos, contratos, catálogo)',
+          'Sin sitio web declarado, debes adjuntar evidencia de la naturaleza del negocio (folleto, catálogo, contrato o factura)',
         );
       }
     }

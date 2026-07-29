@@ -132,6 +132,17 @@ export class OnboardingController {
     return this.onboardingService.addDirector(user.id, dto);
   }
 
+  @Patch('kyb/business/legal-representative')
+  @ApiOperation({
+    summary: 'Crear o actualizar el representante legal del formulario KYB',
+  })
+  upsertLegalRepresentative(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreateDirectorDto,
+  ) {
+    return this.onboardingService.upsertLegalRepresentative(user.id, dto);
+  }
+
   @Delete('kyb/business/directors/:id')
   @ApiOperation({ summary: 'Eliminar director' })
   removeDirector(

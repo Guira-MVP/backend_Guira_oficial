@@ -365,10 +365,10 @@ export class WebhooksService {
         await this.handleCustomerUpdated(payload);
         break;
       case 'customer.updated':
-        // Bridge envía este evento por cambios en endorsements/capabilities sin
-        // transición de status. Solo sincronizamos bridge_customer_id; no
-        // ejecutamos el flujo de aprobación para evitar correos duplicados.
-        await this.handleCustomerUpdatedNonTransition(payload);
+        // Los cambios de endorsements pueden añadir RFIs sin una transición de
+        // estado. Reutilizamos el handler idempotente para registrar esos
+        // requisitos; el caso active ya evita duplicar la aprobación.
+        await this.handleCustomerUpdated(payload);
         break;
 
       // ── KYC link lifecycle ────────────────────────────────────────────────────
@@ -772,10 +772,10 @@ export class WebhooksService {
   }
 
   // ═══════════════════════════════════════════════
-  //  HANDLER: customer.updated  (sin transición de estado)
-  //  Bridge envía este evento cuando cambian endorsements o capabilities
-  //  pero el status del customer no cambia. Solo sincronizamos bridge_customer_id.
-  //  NO ejecutar flujo de aprobación para evitar correos duplicados.
+  //  HANDLER LEGACY: customer.updated  (sin transición de estado)
+  //  Conservado por compatibilidad interna. El dispatcher usa
+  //  handleCustomerUpdated para que los RFIs que llegan en este evento no se
+  //  pierdan.
   // ═══════════════════════════════════════════════
 
   private async handleCustomerUpdatedNonTransition(
@@ -821,7 +821,9 @@ export class WebhooksService {
         | Array<Record<string, unknown>>
         | undefined) ?? [];
 
-    // Extraer issues de cada endorsement (deduplicados)
+    // Extraer issues y requisitos faltantes de cada endorsement (deduplicados).
+    // Bridge separa ambos datos: los RFIs documentales llegan bajo
+    // requirements.missing.all_of, no necesariamente dentro de issues.
     const issueSet = new Set<string>();
     for (const endorsement of endorsements) {
       const requirements = endorsement.requirements as
@@ -842,6 +844,17 @@ export class WebhooksService {
                 issueSet.add(`${key}: ${String(val)}`);
               }
             }
+          }
+        }
+      }
+
+      const missing = requirements?.missing as
+        | { all_of?: unknown }
+        | undefined;
+      if (Array.isArray(missing?.all_of)) {
+        for (const requirement of missing.all_of) {
+          if (typeof requirement === 'string') {
+            issueSet.add(requirement);
           }
         }
       }

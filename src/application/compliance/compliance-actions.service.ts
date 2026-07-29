@@ -788,6 +788,11 @@ export class ComplianceActionsService {
     if (!profile) return;
 
     const clientName = profile.full_name ?? profile.email ?? userId;
+    const fieldObservations: Record<string, string> = {};
+    if (issues.includes('proof_of_nature_of_business_document')) {
+      fieldObservations.proof_of_nature_of_business =
+        'Bridge solicita evidencia que demuestre la actividad comercial de la empresa (por ejemplo, factura, contrato, catálogo, folleto o material de marketing).';
+    }
 
     // 1. Actualizar estado de la aplicación a needs_review para que el staff pueda actuar
     const { data: kycApp } = await this.supabase
@@ -805,6 +810,7 @@ export class ComplianceActionsService {
         .update({
           status: 'needs_review',
           observations: JSON.stringify({ bridge_issues: issues, additional_requirements: additionalRequirements }),
+          field_observations: fieldObservations,
         })
         .eq('id', kycApp.id);
     } else {
@@ -816,6 +822,7 @@ export class ComplianceActionsService {
         .update({
           status: 'needs_review',
           observations: JSON.stringify({ bridge_issues: issues, additional_requirements: additionalRequirements }),
+          field_observations: fieldObservations,
         })
         .eq('requester_user_id', userId)
         .in('status', ['sent_to_bridge', 'submitted', 'under_review']);
