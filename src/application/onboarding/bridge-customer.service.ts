@@ -10,6 +10,19 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
 import { BridgeApiClient } from '../bridge/bridge-api.client';
 
+type AssociatedPersonSource = 'director' | 'ubo';
+
+interface BuiltAssociatedPerson {
+  sourceId: string;
+  source: AssociatedPersonSource;
+  bridgeAssociatedPersonId: string | null;
+  payload: Record<string, unknown>;
+}
+
+interface BridgeAssociatedPersonsResponse {
+  data?: Record<string, unknown>[];
+}
+
 /**
  * Servicio interno para registrar clientes en Bridge API tras la aprobación de KYC/KYB.
  * Este servicio NO se expone directamente a clientes — es llamado por ComplianceActionsService
@@ -421,6 +434,7 @@ export class BridgeCustomerService {
       .maybeSingle();
 
     let customerPayload: Record<string, unknown>;
+    let businessForAssociatedPersons: Record<string, unknown> | null = null;
 
     if (person) {
       // Obtener signed_agreement_id desde la kyc_application más reciente (H01)
@@ -454,6 +468,7 @@ export class BridgeCustomerService {
         userId,
         kybApp?.tos_contract_id ?? null,
       );
+      businessForAssociatedPersons = business as Record<string, unknown>;
     } else {
       throw new NotFoundException(
         'No se encontraron datos personales ni de empresa para este usuario',
@@ -482,6 +497,15 @@ export class BridgeCustomerService {
     const customerId = bridgeCustomer.id as string;
     if (!customerId) {
       throw new BadGatewayException('Bridge no retornó un customer_id válido');
+    }
+
+    if (businessForAssociatedPersons) {
+      await this.syncBusinessAssociatedPersons(
+        userId,
+        customerId,
+        businessForAssociatedPersons,
+        profile as Record<string, unknown>,
+      );
     }
 
     // 4. Guardar bridge_customer_id en profiles
@@ -553,6 +577,7 @@ export class BridgeCustomerService {
       .maybeSingle();
 
     let customerPayload: Record<string, unknown>;
+    let businessForAssociatedPersons: Record<string, unknown> | null = null;
 
     if (person) {
       const { data: kycApp } = await this.supabase
@@ -584,6 +609,10 @@ export class BridgeCustomerService {
         userId,
         kybApp?.tos_contract_id ?? null,
       );
+      businessForAssociatedPersons = business as Record<string, unknown>;
+      // Bridge does not allow business associated persons (including UBOs) in
+      // PUT /v0/customers/{id}; they have dedicated endpoints.
+      delete customerPayload.associated_persons;
     } else {
       throw new NotFoundException(
         'No se encontraron datos personales ni de empresa para este usuario',
@@ -595,6 +624,15 @@ export class BridgeCustomerService {
         `/v0/customers/${bridgeCustomerId}`,
         customerPayload,
       );
+
+      if (businessForAssociatedPersons) {
+        await this.syncBusinessAssociatedPersons(
+          userId,
+          bridgeCustomerId,
+          businessForAssociatedPersons,
+          profile as Record<string, unknown>,
+        );
+      }
     } catch (err) {
       await this.logActivity(
         userId,
@@ -974,7 +1012,7 @@ export class BridgeCustomerService {
       userId,
     );
     if (associatedPersons.length > 0) {
-      payload.associated_persons = associatedPersons;
+      payload.associated_persons = associatedPersons.map((person) => person.payload);
     }
 
     // Documents — H04
@@ -1326,13 +1364,110 @@ export class BridgeCustomerService {
    * H12: has_control y has_ownership son inferidos de las tablas.
    * P0-E: residential_address always included (fallback to business registered address).
    */
+  /**
+   * Bridge forbids associated_persons in a business PUT /customers/{id}.
+   * Synchronize them through their own endpoint and persist their remote IDs.
+   */
+  private async syncBusinessAssociatedPersons(
+    userId: string,
+    bridgeCustomerId: string,
+    business: Record<string, unknown>,
+    profile: Record<string, unknown>,
+  ): Promise<void> {
+    const fallbackEmail =
+      (business.email as string) ?? (profile.email as string);
+    const persons = await this.buildAssociatedPersons(
+      business.id as string,
+      fallbackEmail,
+      business,
+      userId,
+    );
+
+    const remoteResponse = await this.bridgeApiClient.get<BridgeAssociatedPersonsResponse>(
+      `/v0/customers/${bridgeCustomerId}/associated_persons`,
+    );
+    const remotePersons = Array.isArray(remoteResponse.data)
+      ? remoteResponse.data
+      : [];
+    const matchedRemoteIds = new Set<string>();
+
+    for (const person of persons) {
+      let bridgeAssociatedPersonId = person.bridgeAssociatedPersonId;
+
+      // Legacy rows predate the Bridge-ID column. Reconcile them only on a
+      // unique email + full-name match, otherwise fail instead of duplicating a
+      // compliance subject or attaching it to the wrong person.
+      if (!bridgeAssociatedPersonId) {
+        const expectedEmail = String(person.payload.email ?? '')
+          .trim()
+          .toLowerCase();
+        const expectedFirstName = String(person.payload.first_name ?? '')
+          .trim()
+          .toLowerCase();
+        const expectedLastName = String(person.payload.last_name ?? '')
+          .trim()
+          .toLowerCase();
+        const candidates = expectedEmail
+          ? remotePersons.filter((remote) => {
+              const remoteId = remote.id;
+              return (
+                typeof remoteId === 'string' &&
+                !matchedRemoteIds.has(remoteId) &&
+                String(remote.email ?? '').trim().toLowerCase() === expectedEmail &&
+                String(remote.first_name ?? '').trim().toLowerCase() === expectedFirstName &&
+                String(remote.last_name ?? '').trim().toLowerCase() === expectedLastName
+              );
+            })
+          : [];
+
+        if (candidates.length > 1) {
+          throw new BadRequestException(
+            `No se pudo vincular de forma segura la persona asociada ${expectedFirstName} ${expectedLastName} en Bridge. Requiere revisión manual.`,
+          );
+        }
+        if (candidates.length === 1) {
+          bridgeAssociatedPersonId = candidates[0].id as string;
+        }
+      }
+
+      if (bridgeAssociatedPersonId) {
+        await this.bridgeApiClient.put(
+          `/v0/customers/${bridgeCustomerId}/associated_persons/${bridgeAssociatedPersonId}`,
+          person.payload,
+        );
+        matchedRemoteIds.add(bridgeAssociatedPersonId);
+      } else {
+        const created = await this.bridgeApiClient.post<Record<string, unknown>>(
+          `/v0/customers/${bridgeCustomerId}/associated_persons`,
+          person.payload,
+          `associated-person-${person.source}-${person.sourceId}`,
+        );
+        if (typeof created.id !== 'string' || !created.id) {
+          throw new BadGatewayException(
+            'Bridge no retornó un identificador válido para la persona asociada.',
+          );
+        }
+        bridgeAssociatedPersonId = created.id;
+        matchedRemoteIds.add(bridgeAssociatedPersonId);
+      }
+
+      const table =
+        person.source === 'director' ? 'business_directors' : 'business_ubos';
+      const { error } = await this.supabase
+        .from(table)
+        .update({ bridge_associated_person_id: bridgeAssociatedPersonId })
+        .eq('id', person.sourceId);
+      if (error) throw error;
+    }
+  }
+
   private async buildAssociatedPersons(
     businessId: string,
     fallbackEmail: string,
     business: Record<string, unknown>,
     userId: string,
-  ): Promise<Record<string, unknown>[]> {
-    const persons: Record<string, unknown>[] = [];
+  ): Promise<BuiltAssociatedPerson[]> {
+    const persons: BuiltAssociatedPerson[] = [];
 
     // Helper: build residential_address with fallback to business address
     // Bridge exige `subdivision` para ciertos países (ej. Bolivia) — confirmado contra
@@ -1416,7 +1551,15 @@ export class BridgeCustomerService {
         const dirDocs = await this.buildDocumentsArray(userId, 'director', dir.id as string);
         if (dirDocs.length > 0) person.documents = dirDocs;
 
-        persons.push(person);
+        persons.push({
+          sourceId: dir.id as string,
+          source: 'director',
+          bridgeAssociatedPersonId:
+            typeof dir.bridge_associated_person_id === 'string'
+              ? dir.bridge_associated_person_id
+              : null,
+          payload: person,
+        });
       }
     }
 
@@ -1479,7 +1622,15 @@ export class BridgeCustomerService {
         const uboDocs = await this.buildDocumentsArray(userId, 'ubo', ubo.id as string);
         if (uboDocs.length > 0) person.documents = uboDocs;
 
-        persons.push(person);
+        persons.push({
+          sourceId: ubo.id as string,
+          source: 'ubo',
+          bridgeAssociatedPersonId:
+            typeof ubo.bridge_associated_person_id === 'string'
+              ? ubo.bridge_associated_person_id
+              : null,
+          payload: person,
+        });
       }
     }
 
