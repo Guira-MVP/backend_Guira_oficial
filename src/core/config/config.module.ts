@@ -67,6 +67,12 @@ if (fs.existsSync(RENDER_SECRETS_PATH)) {
           otherwise: Joi.string().allow('').default(''),
         }),
 
+        // Binance P2P (fuente del tipo de cambio paralelo BOB/USD)
+        BINANCE_P2P_API_URL: Joi.string()
+          .uri()
+          .allow('')
+          .default('https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search'),
+
         // ZeptoMail (Email Transaccional)
         // En producción ZEPTOMAIL_TOKEN y EMAIL_FROM_ADDRESS son OBLIGATORIAS.
         ZEPTOMAIL_TOKEN: Joi.when('NODE_ENV', {

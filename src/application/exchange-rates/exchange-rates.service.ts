@@ -13,6 +13,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { ExchangeRatesGateway } from './exchange-rates.gateway';
 import type { RateUpdatedPayload } from './exchange-rates.gateway';
 import { BridgeApiClient } from '../bridge/bridge-api.client';
+import { BinanceP2pClient } from './binance-p2p.client';
 
 interface BridgeExchangeRateResponse {
   midmarket_rate: string;
@@ -23,8 +24,9 @@ interface BridgeExchangeRateResponse {
 @Injectable()
 export class ExchangeRatesService {
   private readonly logger = new Logger(ExchangeRatesService.name);
-  private readonly EXTERNAL_API_URL =
-    'https://api-mdp-2.onrender.com/api/forex/exchange-rate/all?asset=USDT';
+
+  /** Cantidad de anuncios P2P a promediar por lado (buy/sell). */
+  private readonly BINANCE_P2P_SAMPLE_SIZE = 10;
 
   /**
    * Alias de pares legacy → canónicos.
@@ -42,6 +44,7 @@ export class ExchangeRatesService {
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly gateway: ExchangeRatesGateway,
     private readonly bridgeApi: BridgeApiClient,
+    private readonly binanceP2p: BinanceP2pClient,
   ) {}
 
   /**
@@ -95,34 +98,33 @@ export class ExchangeRatesService {
   }
 
   /**
-   * Sincroniza desde el API externo (Binance P2P history).
+   * Sincroniza desde Binance P2P (anuncios públicos USDT/BOB).
    * Solo 2 pares canónicos:
-   *   BUY  → BOB_USD = X (cuántos BOB por 1 USD)
-   *   SELL → USD_BOB = Y (cuántos BOB por 1 USD)
+   *   BUY  → BOB_USD = promedio de los N mejores anuncios "BUY" (cliente
+   *          compra USD con BOB → Binance devuelve anuncios de gente que
+   *          VENDE USDT, ordenados ascendente por precio: los más baratos)
+   *   SELL → USD_BOB = promedio de los N mejores anuncios "SELL" (cliente
+   *          vende USD y recibe BOB → Binance devuelve anuncios de gente
+   *          que COMPRA USDT, ordenados descendente por precio: los más caros)
+   *
+   * Nota: la semántica de Binance es "desde la perspectiva del taker", por
+   * lo que pedir tradeType=BUY trae anuncios cuyo adv.tradeType es "SELL"
+   * (y viceversa). Verificado en vivo contra el endpoint real.
    */
   async syncExternalRates(actorId = 'system_admin') {
     try {
-      const response = await fetch(this.EXTERNAL_API_URL);
-      if (!response.ok) {
-        throw new Error(
-          `Error en la API externa: ${response.status} ${response.statusText}`,
-        );
-      }
+      // buy = Precio al que compran USD con BOB (promedio de los N mejores anuncios)
+      const buyRateBobPerUsd = await this.binanceP2p.getAveragePrice(
+        'BUY',
+        this.BINANCE_P2P_SAMPLE_SIZE,
+      );
+      // sell = Precio al que venden USD por BOB (promedio de los N mejores anuncios)
+      const sellRateBobPerUsd = await this.binanceP2p.getAveragePrice(
+        'SELL',
+        this.BINANCE_P2P_SAMPLE_SIZE,
+      );
 
-      const payload = await response.json();
-
-      // buy = Precio al que compran USD con BOB (ej: 9.32 BOB por USD)
-      const buyRateBobPerUsd = payload?.buy?.data?.result?.exchangeRate;
-      // sell = Precio al que venden USD por BOB (ej: 9.28 BOB por USD)
-      const sellRateBobPerUsd = payload?.sell?.data?.result?.exchangeRate;
-
-      if (!buyRateBobPerUsd || !sellRateBobPerUsd) {
-        throw new Error(
-          'Payload inválido desde el API externo (exchange rates faltantes).',
-        );
-      }
-
-      // 1. Tasa de compra: cuántos BOB por 1 USD (directo del API)
+      // 1. Tasa de compra: cuántos BOB por 1 USD (promedio de Binance P2P)
       const bobToUsdRate = buyRateBobPerUsd;
 
       // 2. De USD a BOB (User da USD, recibe BOB)
