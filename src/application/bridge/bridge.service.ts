@@ -1462,8 +1462,14 @@ export class BridgeService {
       .single();
 
     if (error) {
+      // Bridge no expone un endpoint DELETE para liquidation addresses, así que
+      // no hay rollback posible del lado de Bridge — queda huérfana ahí sin
+      // ningún registro local que la referencie. Se deja el ID de Bridge bien
+      // visible en el log para que se pueda ubicar/gestionar manualmente.
       this.logger.error(
-        `Error guardando liquidation address en DB para usuario ${userId}: ${error.message}`,
+        `ORPHANED LIQUIDATION ADDRESS — bridge_liquidation_address_id=${bridgeLA.id} ` +
+          `(usuario ${userId}) se creó en Bridge pero no pudo guardarse en DB local: ${error.message}. ` +
+          'Bridge no permite eliminarla via API — requiere limpieza/seguimiento manual con este ID.',
       );
       throw new BadRequestException(
         `Liquidation address creada en Bridge pero no pudo guardarse localmente: ${error.message}`,

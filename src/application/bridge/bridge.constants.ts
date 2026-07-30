@@ -91,3 +91,18 @@ export const VA_THROTTLE_CONFIG = {
   /** Ventana de tiempo en milisegundos (10 minutos) */
   ttl: 600_000,
 } as const;
+
+// ── Rate Limiting: Supplier Creation ────────────────────────────────
+//
+// Cada creación de proveedor dispara 1-2 llamadas reales a Bridge
+// (External Account + Liquidation Address), no es una simple lectura/
+// escritura local. El límite genérico de la API (100 req/min) es
+// insuficiente para una operación con este costo — mismo criterio que
+// VA_THROTTLE_CONFIG.
+
+export const SUPPLIER_THROTTLE_CONFIG = {
+  /** Máximo de creaciones de proveedor por ventana de tiempo */
+  limit: 6,
+  /** Ventana de tiempo en milisegundos (10 minutos) */
+  ttl: 600_000,
+} as const;

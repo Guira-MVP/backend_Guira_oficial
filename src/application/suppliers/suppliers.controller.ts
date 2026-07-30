@@ -15,7 +15,9 @@ import {
   ApiOperation,
   ApiResponse,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { SuppliersService } from './suppliers.service';
+import { SUPPLIER_THROTTLE_CONFIG } from '../bridge/bridge.constants';
 import {
   CreateSupplierDto,
   UpdateSupplierDto,
@@ -30,6 +32,12 @@ export class SuppliersController {
   constructor(private readonly suppliersService: SuppliersService) {}
 
   @Post()
+  @Throttle({
+    default: {
+      limit: SUPPLIER_THROTTLE_CONFIG.limit,
+      ttl: SUPPLIER_THROTTLE_CONFIG.ttl,
+    },
+  })
   @ApiOperation({ summary: 'Crear proveedor' })
   @ApiResponse({ status: 201, description: 'Proveedor creado' })
   create(

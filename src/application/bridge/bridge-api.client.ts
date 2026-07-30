@@ -31,6 +31,42 @@ export class BridgeApiClient {
     };
   }
 
+  /**
+   * Redacta datos bancarios/PII antes de loguear un error de Bridge.
+   * Bridge a veces ecoa el payload enviado en sus mensajes de validación
+   * (ej. "invalid routing_number: 123456789"), lo que dejaría cuentas
+   * bancarias, IBAN, CLABE, etc. en texto plano en los logs del servidor.
+   */
+  private redactSensitiveError(rawBody: string): string {
+    const sensitiveKeys = [
+      'account_number',
+      'routing_number',
+      'iban',
+      'clabe',
+      'pix_key',
+      'br_code',
+      'bre_b_key',
+      'swift_bic',
+      'wallet_address',
+      'document_number',
+      'phone_number',
+      'sort_code',
+      'bank_code',
+    ];
+
+    let redacted = rawBody;
+    for (const key of sensitiveKeys) {
+      // Cubre tanto JSON ("key":"value") como texto libre (key: value / key=value)
+      const jsonPattern = new RegExp(`("${key}"\\s*:\\s*)"[^"]*"`, 'gi');
+      const freeformPattern = new RegExp(`(\\b${key}\\b\\s*[:=]\\s*)[^\\s,"}]+`, 'gi');
+      redacted = redacted
+        .replace(jsonPattern, '$1"[REDACTED]"')
+        .replace(freeformPattern, '$1[REDACTED]');
+    }
+
+    return redacted.length > 2000 ? `${redacted.slice(0, 2000)}...[truncated]` : redacted;
+  }
+
   async post<T = Record<string, unknown>>(
     path: string,
     body: unknown,
@@ -49,7 +85,7 @@ export class BridgeApiClient {
 
     if (!res.ok) {
       const err = await res.text();
-      this.logger.error(`Bridge POST ${path} failed [${res.status}]: ${err}`);
+      this.logger.error(`Bridge POST ${path} failed [${res.status}]: ${this.redactSensitiveError(err)}`);
       // ALTO-02: No propagar el cuerpo crudo del error de Bridge al cliente
       // (puede contener IDs internos, datos KYC o detalles de arquitectura).
       // El detalle completo queda en logger.error de arriba para debugging.
@@ -70,7 +106,7 @@ export class BridgeApiClient {
 
     if (!res.ok) {
       const err = await res.text();
-      this.logger.error(`Bridge GET ${path} failed [${res.status}]: ${err}`);
+      this.logger.error(`Bridge GET ${path} failed [${res.status}]: ${this.redactSensitiveError(err)}`);
       // ALTO-02: No propagar el cuerpo crudo del error de Bridge al cliente
       // (puede contener IDs internos, datos KYC o detalles de arquitectura).
       // El detalle completo queda en logger.error de arriba para debugging.
@@ -100,7 +136,7 @@ export class BridgeApiClient {
 
     if (!res.ok) {
       const err = await res.text();
-      this.logger.error(`Bridge PUT ${path} failed [${res.status}]: ${err}`);
+      this.logger.error(`Bridge PUT ${path} failed [${res.status}]: ${this.redactSensitiveError(err)}`);
       // ALTO-02: No propagar el cuerpo crudo del error de Bridge al cliente
       // (puede contener IDs internos, datos KYC o detalles de arquitectura).
       // El detalle completo queda en logger.error de arriba para debugging.
@@ -122,7 +158,7 @@ export class BridgeApiClient {
 
     if (!res.ok) {
       const err = await res.text();
-      this.logger.error(`Bridge DELETE ${path} failed [${res.status}]: ${err}`);
+      this.logger.error(`Bridge DELETE ${path} failed [${res.status}]: ${this.redactSensitiveError(err)}`);
       // ALTO-02: No propagar el cuerpo crudo del error de Bridge al cliente
       // (puede contener IDs internos, datos KYC o detalles de arquitectura).
       // El detalle completo queda en logger.error de arriba para debugging.

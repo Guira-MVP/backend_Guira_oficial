@@ -35,6 +35,17 @@ export class SuppliersService {
     private readonly bridgeService: BridgeService,
   ) {}
 
+  /**
+   * Normaliza un email para comparación/almacenamiento (trim + lowercase).
+   * Sin esto, "Juan@Test.com" y "juan@test.com" se tratan como contactos
+   * distintos y evaden tanto el chequeo de duplicados como el índice único de DB.
+   */
+  private normalizeEmail(email: string | null | undefined): string | null {
+    if (!email) return null;
+    const normalized = email.trim().toLowerCase();
+    return normalized.length > 0 ? normalized : null;
+  }
+
   private async assertCurrencyActiveForSupplier(currency: string): Promise<void> {
     const { data } = await this.supabase
       .from('currency_settings')
@@ -72,11 +83,16 @@ export class SuppliersService {
     usedRails: string[];
     usedNetworks: string[];
   }> {
+    const normalizedEmail = this.normalizeEmail(email);
+    if (!normalizedEmail) {
+      return { exists: false, usedRails: [], usedNetworks: [] };
+    }
+
     const { data } = await this.supabase
       .from('suppliers')
       .select('name, payment_rail, bank_details')
       .eq('user_id', userId)
-      .eq('contact_email', email)
+      .eq('contact_email', normalizedEmail)
       .eq('is_active', true);
 
     if (!data || data.length === 0) {
@@ -103,24 +119,27 @@ export class SuppliersService {
   /** Crea un proveedor para el usuario. */
   async create(userId: string, dto: CreateSupplierDto) {
     const isFiat = dto.payment_rail !== 'crypto';
+    const normalizedEmail = this.normalizeEmail(dto.contact_email);
 
     // ── Verificar unicidad antes de llamar a Bridge ──────────────────
     // Para fiat: un proveedor activo por (user_id, email, payment_rail)
     // Para crypto: un proveedor activo por (user_id, email, wallet_network)
-    if (dto.contact_email) {
+    // El email se normaliza (trim + lowercase) para que dos variantes de
+    // mayúsculas/espacios del mismo correo no evadan esta verificación.
+    if (normalizedEmail) {
       if (isFiat) {
         const { data: existing } = await this.supabase
           .from('suppliers')
           .select('id, name')
           .eq('user_id', userId)
-          .eq('contact_email', dto.contact_email)
+          .eq('contact_email', normalizedEmail)
           .eq('payment_rail', dto.payment_rail)
           .eq('is_active', true)
           .maybeSingle();
 
         if (existing) {
           throw new ConflictException(
-            `El contacto "${dto.contact_email}" ya tiene una cuenta ${dto.payment_rail.toUpperCase()} registrada ` +
+            `El contacto "${normalizedEmail}" ya tiene una cuenta ${dto.payment_rail.toUpperCase()} registrada ` +
               `(proveedor: "${(existing as any).name}"). Usa "Añadir método" en la agenda para agregar otro rail.`,
           );
         }
@@ -130,7 +149,7 @@ export class SuppliersService {
           .from('suppliers')
           .select('id, name')
           .eq('user_id', userId)
-          .eq('contact_email', dto.contact_email)
+          .eq('contact_email', normalizedEmail)
           .eq('payment_rail', 'crypto')
           .eq('is_active', true)
           .filter('bank_details->>wallet_network', 'eq', walletNetwork)
@@ -138,7 +157,7 @@ export class SuppliersService {
 
         if (existing) {
           throw new ConflictException(
-            `El contacto "${dto.contact_email}" ya tiene una dirección en la red ${walletNetwork} ` +
+            `El contacto "${normalizedEmail}" ya tiene una dirección en la red ${walletNetwork} ` +
               `(proveedor: "${(existing as any).name}"). Usa "Añadir método" para registrar otra red.`,
           );
         }
@@ -328,7 +347,7 @@ export class SuppliersService {
         currency: supplierCurrency,
         payment_rail: dto.payment_rail,
         bank_details,
-        contact_email: dto.contact_email ?? null,
+        contact_email: normalizedEmail,
         notes: dto.notes ?? null,
         bridge_external_account_id,
         bridge_liquidation_address_id,
@@ -344,8 +363,69 @@ export class SuppliersService {
           'Proveedor duplicado: ya existe un proveedor activo con este email y método de pago.',
         );
       }
+
+      // ── Rollback: ya se crearon recursos reales en Bridge (EA y/o LA) ──
+      // pero el registro local no se pudo guardar. Sin esto quedarían huérfanos:
+      // invisibles para el cliente y bloqueando un futuro reintento con los
+      // mismos datos (Bridge rechazaría por "duplicate_external_account").
+      this.logger.error(
+        `Fallo al guardar proveedor "${dto.name}" en DB tras crear recursos en Bridge ` +
+          `(EA local id=${bridge_external_account_id ?? 'n/a'}, LA bridge id=${bridge_liquidation_address_id ?? 'n/a'}): ${error.message}`,
+      );
+
+      if (bridge_external_account_id) {
+        try {
+          await this.bridgeService.deleteExternalAccount(
+            userId,
+            bridge_external_account_id,
+          );
+          this.logger.log(
+            `Rollback: EA ${bridge_external_account_id} eliminada de Bridge tras fallo de insert del proveedor.`,
+          );
+        } catch (rollbackErr) {
+          this.logger.error(
+            `Rollback de EA ${bridge_external_account_id} falló: ${rollbackErr.message}. Requiere limpieza manual en Bridge.`,
+          );
+        }
+      }
+
+      if (bridge_liquidation_address_id) {
+        // Bridge no expone DELETE para liquidation addresses — el máximo rollback
+        // posible es desactivarla localmente y dejar rastro claro para limpieza manual.
+        const { error: laDeactivateError } = await this.supabase
+          .from('bridge_liquidation_addresses')
+          .update({ is_active: false })
+          .eq('bridge_liquidation_address_id', bridge_liquidation_address_id)
+          .eq('user_id', userId);
+
+        if (laDeactivateError) {
+          this.logger.error(
+            `No se pudo desactivar la Liquidation Address huérfana ${bridge_liquidation_address_id}: ${laDeactivateError.message}. Requiere limpieza manual.`,
+          );
+        } else {
+          this.logger.warn(
+            `Liquidation Address ${bridge_liquidation_address_id} desactivada localmente (huérfana en Bridge, sin dueño local) tras fallo de insert del proveedor.`,
+          );
+        }
+      }
+
       throwDbError(error);
     }
+
+    await this.supabase.from('audit_logs').insert({
+      performed_by: userId,
+      role: 'client',
+      action: 'CREATE_SUPPLIER',
+      table_name: 'suppliers',
+      record_id: data.id,
+      new_values: {
+        name: dto.name,
+        contact_email: normalizedEmail,
+        payment_rail: dto.payment_rail,
+        currency: supplierCurrency,
+      },
+    });
+
     return { ...data, beneficiary_address_valid };
   }
 
@@ -492,7 +572,7 @@ export class SuppliersService {
     if (dto.payment_rail !== undefined)
       updateData.payment_rail = dto.payment_rail;
     if (dto.contact_email !== undefined)
-      updateData.contact_email = dto.contact_email;
+      updateData.contact_email = this.normalizeEmail(dto.contact_email);
     if (dto.notes !== undefined) updateData.notes = dto.notes;
 
     // Si es crypto y se actualiza wallet_currency, actualizar currency también
@@ -610,18 +690,50 @@ export class SuppliersService {
       .single();
 
     if (error) throwDbError(error);
+
+    await this.supabase.from('audit_logs').insert({
+      performed_by: userId,
+      role: 'client',
+      action: 'UPDATE_SUPPLIER',
+      table_name: 'suppliers',
+      record_id: supplierId,
+      old_values: {
+        name: existing.name,
+        contact_email: existing.contact_email,
+        notes: existing.notes,
+      },
+      new_values: {
+        name: data.name,
+        contact_email: data.contact_email,
+        notes: data.notes,
+      },
+    });
+
     return data;
   }
 
   /** Desactiva (soft delete) un proveedor. */
   async remove(supplierId: string, userId: string) {
-    await this.findOne(supplierId, userId);
+    const existing = await this.findOne(supplierId, userId);
 
     await this.supabase
       .from('suppliers')
       .update({ is_active: false, updated_at: new Date().toISOString() })
       .eq('id', supplierId)
       .eq('user_id', userId);
+
+    await this.supabase.from('audit_logs').insert({
+      performed_by: userId,
+      role: 'client',
+      action: 'DEACTIVATE_SUPPLIER',
+      table_name: 'suppliers',
+      record_id: supplierId,
+      old_values: {
+        name: existing.name,
+        contact_email: existing.contact_email,
+        payment_rail: existing.payment_rail,
+      },
+    });
 
     return { message: 'Proveedor desactivado' };
   }
