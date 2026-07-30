@@ -3760,9 +3760,14 @@ export class PaymentOrdersService {
   async getGlobalFlowStats(month?: string) {
     let query = this.supabase
       .from('payment_orders')
-      .select('flow_type, destination_currency, currency, amount, created_at')
-      .eq('flow_category', 'interbank')
-      .in('flow_type', ['bolivia_to_world', 'world_to_bolivia'])
+      .select(
+        'flow_type, destination_currency, currency, amount, created_at, profiles!payment_orders_user_id_fkey(country_code)',
+      )
+      .in('flow_type', [
+        'bolivia_to_world',
+        'world_to_bolivia',
+        'bridge_wallet_to_fiat_us',
+      ])
       .eq('status', 'completed');
 
     if (month) {
@@ -3777,15 +3782,23 @@ export class PaymentOrdersService {
     const { data, error } = await query;
     if (error) throwDbError(error);
 
-    const rows = data ?? [];
+    const rows = (data ?? []) as unknown as Array<{
+      flow_type: string;
+      destination_currency: string | null;
+      currency: string | null;
+      amount: number | string | null;
+      created_at: string;
+      profiles: { country_code: string | null } | null;
+    }>;
 
-    // Agregar por (flow_type, destination_currency, currency)
+    // Agregar por (flow_type, destination_currency, currency, country_code)
     const buckets = new Map<
       string,
       {
         flow_type: string;
         destination_currency: string;
         currency: string;
+        country_code: string | null;
         transaction_count: number;
         total_amount: number;
       }
@@ -3794,18 +3807,20 @@ export class PaymentOrdersService {
     for (const row of rows) {
       const destCurrency = (row.destination_currency ?? '').toUpperCase();
       const srcCurrency = (row.currency ?? '').toUpperCase();
-      const key = `${row.flow_type}|${destCurrency}|${srcCurrency}`;
+      const countryCode = row.profiles?.country_code ?? null;
+      const key = `${row.flow_type}|${destCurrency}|${srcCurrency}|${countryCode ?? ''}`;
       const existing = buckets.get(key);
       if (existing) {
         existing.transaction_count++;
-        existing.total_amount += parseFloat(row.amount ?? 0);
+        existing.total_amount += parseFloat(String(row.amount ?? 0));
       } else {
         buckets.set(key, {
           flow_type: row.flow_type,
           destination_currency: destCurrency,
           currency: srcCurrency,
+          country_code: countryCode,
           transaction_count: 1,
-          total_amount: parseFloat(row.amount ?? 0),
+          total_amount: parseFloat(String(row.amount ?? 0)),
         });
       }
     }
@@ -3817,8 +3832,11 @@ export class PaymentOrdersService {
     const { data, error } = await this.supabase
       .from('payment_orders')
       .select('created_at')
-      .eq('flow_category', 'interbank')
-      .in('flow_type', ['bolivia_to_world', 'world_to_bolivia'])
+      .in('flow_type', [
+        'bolivia_to_world',
+        'world_to_bolivia',
+        'bridge_wallet_to_fiat_us',
+      ])
       .eq('status', 'completed')
       .order('created_at', { ascending: false });
 
