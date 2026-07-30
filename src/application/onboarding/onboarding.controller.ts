@@ -63,7 +63,7 @@ export class OnboardingController {
   @Get('kyc/application')
   @ApiOperation({ summary: 'Estado de la aplicación KYC' })
   getKycApplication(@CurrentUser() user: AuthenticatedUser) {
-    return this.onboardingService.getKycApplication(user.id);
+    return this.onboardingService.getKycApplicationForClient(user.id);
   }
 
   @Get('kyc/tos-link')
@@ -176,7 +176,7 @@ export class OnboardingController {
   @Get('kyb/application')
   @ApiOperation({ summary: 'Estado de la aplicación KYB' })
   getKybApplication(@CurrentUser() user: AuthenticatedUser) {
-    return this.onboardingService.getKybApplication(user.id);
+    return this.onboardingService.getKybApplicationForClient(user.id);
   }
 
   @Get('kyb/tos-link')

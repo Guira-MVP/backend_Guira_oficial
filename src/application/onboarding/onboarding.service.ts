@@ -222,6 +222,55 @@ export class OnboardingService {
     return data;
   }
 
+  /**
+   * Versión de `getKycApplication` segura para exponer al cliente vía API:
+   * `observations` guarda JSON técnico interno (bridge_issues, additional_requirements)
+   * pensado para staff/auditoría, nunca para el cliente final. Ver `sanitizeApplicationForClient`.
+   */
+  async getKycApplicationForClient(userId: string) {
+    const app = await this.getKycApplication(userId);
+    return this.sanitizeApplicationForClient(app);
+  }
+
+  /**
+   * Reemplaza el `observations` técnico (JSON crudo de Bridge) por un mensaje
+   * humano, y quita campos de uso interno antes de devolver la aplicación al
+   * cliente. Si hay `field_observations`, el wizard ya construye el mensaje
+   * por campo; si no, se usa un mensaje genérico (mismo texto que la
+   * notificación in-app de ComplianceActionsService.handleBridgeIncomplete).
+   */
+  private sanitizeApplicationForClient<
+    T extends {
+      observations?: unknown;
+      field_observations?: unknown;
+      previous_data?: unknown;
+    } | null,
+  >(app: T): T {
+    if (!app) return app;
+
+    const rest = { ...(app as Record<string, unknown>) };
+    delete rest.previous_data;
+
+    // Solo se sanea cuando hay algo que sanear: `observations` vacío (estados
+    // sin observaciones, p.ej. submitted/approved) se conserva tal cual.
+    if (!app.observations) {
+      return rest as unknown as T;
+    }
+
+    const fieldObservations = app.field_observations as
+      | Record<string, unknown>
+      | undefined;
+    const hasFieldObservations =
+      !!fieldObservations && Object.keys(fieldObservations).length > 0;
+
+    return {
+      ...rest,
+      observations: hasFieldObservations
+        ? 'Revisa los campos señalados y vuelve a enviar tu solicitud.'
+        : 'Tu verificación está siendo revisada. Nuestro equipo de soporte se pondrá en contacto contigo pronto.',
+    } as unknown as T;
+  }
+
   /** Registra la aceptación de Terms of Service. */
   async acceptTos(userId: string, tosContractId?: string) {
     const app = await this.getKycApplication(userId);
@@ -616,6 +665,15 @@ export class OnboardingService {
 
     if (error) throwDbError(error);
     return data;
+  }
+
+  /**
+   * Versión de `getKybApplication` segura para exponer al cliente vía API —
+   * ver `sanitizeApplicationForClient` (mismo motivo que `getKycApplicationForClient`).
+   */
+  async getKybApplicationForClient(userId: string) {
+    const app = await this.getKybApplication(userId);
+    return this.sanitizeApplicationForClient(app);
   }
 
   /** Envía el expediente KYB para revisión. */

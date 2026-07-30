@@ -741,10 +741,13 @@ export class WebhooksService {
         const { issueSet, additionalRequirements } =
           this.extractEndorsementIssues(eventObject);
 
-        const hasBlockingIssues =
-          issueSet.size > 0 ||
-          additionalRequirements.includes('kyc_approval') ||
-          additionalRequirements.includes('pending_rfi');
+        // `additional_requirements` está deprecado por Bridge (ver Endorsement
+        // schema en su OpenAPI: "This field is deprecated. See endorsement.missing
+        // instead") — ya no decide si hay issues bloqueantes, solo se conserva
+        // para trazabilidad. `issueSet` ya filtra los marcadores de proceso
+        // interno de Bridge (kyb_review, post_processing, *_review, *_screen, etc.)
+        // que aparecen en `requirements.complete` una vez resueltos.
+        const hasBlockingIssues = issueSet.size > 0;
 
         if (hasBlockingIssues) {
           await this.applyBridgeBlockingIssues(
@@ -810,6 +813,37 @@ export class WebhooksService {
   }
 
   /**
+   * Códigos que representan pasos internos del pipeline de Bridge (revisión
+   * manual, screenings, aprobaciones) — NO son datos que el cliente deba
+   * aportar. Evidencia: en el OpenAPI de Bridge (Create a customer.md), estos
+   * mismos códigos aparecen dentro de `requirements.complete` una vez que
+   * Bridge los resuelve (p.ej. `kyb_review`, `post_processing`,
+   * `manual_business_registry_verification_review`, `adverse_media_screen`),
+   * y `additional_requirements` (kyc_approval, kyc_with_proof_of_address, ...)
+   * está explícitamente deprecado ahí en favor de `requirements.missing`.
+   */
+  private static readonly BRIDGE_INTERNAL_PROCESS_MARKERS = new Set([
+    'kyb_review',
+    'post_processing',
+    'kyc_approval',
+    'tos_acceptance',
+    'tos_v2_acceptance',
+    'kyc_with_proof_of_address',
+  ]);
+
+  private isBridgeInternalProcessMarker(code: string): boolean {
+    if (WebhooksService.BRIDGE_INTERNAL_PROCESS_MARKERS.has(code)) {
+      return true;
+    }
+    return (
+      code.endsWith('_review') ||
+      code.endsWith('_screen') ||
+      code.startsWith('duplicate_check_') ||
+      code.startsWith('keyword_screening_')
+    );
+  }
+
+  /**
    * Extrae los issues bloqueantes y los additional_requirements de los
    * endorsements de un customer.updated (usado para status 'incomplete' y 'under_review').
    */
@@ -821,14 +855,24 @@ export class WebhooksService {
         | Array<Record<string, unknown>>
         | undefined) ?? [];
 
-    // Extraer issues y requisitos faltantes de cada endorsement (deduplicados).
-    // Bridge separa ambos datos: los RFIs documentales llegan bajo
-    // requirements.missing.all_of, no necesariamente dentro de issues.
     const issueSet = new Set<string>();
+
+    // Añade un ítem de `missing`/`pending` solo si no es un marcador de
+    // proceso interno de Bridge — esos se resuelven solos, sin acción del cliente.
+    const addIfActionable = (code: string) => {
+      if (!this.isBridgeInternalProcessMarker(code)) {
+        issueSet.add(code);
+      }
+    };
+
     for (const endorsement of endorsements) {
       const requirements = endorsement.requirements as
         | Record<string, unknown>
         | undefined;
+
+      // `requirements.issues` es la única señal que Bridge documenta
+      // explícitamente como bloqueante ("An array of issues preventing this
+      // endorsement from being approved") — siempre se considera accionable.
       if (requirements && Array.isArray(requirements.issues)) {
         for (const issue of requirements.issues) {
           if (typeof issue === 'string') {
@@ -848,18 +892,34 @@ export class WebhooksService {
         }
       }
 
-      const missing = requirements?.missing as
-        | { all_of?: unknown }
-        | undefined;
-      if (Array.isArray(missing?.all_of)) {
-        for (const requirement of missing.all_of) {
+      // `missing.all_of` y `pending` son un checklist de progreso, no un
+      // semáforo de bloqueo (ver ejemplos oficiales de `customer.updated` con
+      // status `under_review`, donde vienen vacíos). Pueden traer strings
+      // sueltos o entradas itemizadas por persona asociada, p.ej.
+      // { items: ["government_id_verification"], associated_person: "..." }.
+      const missingAllOf = (requirements?.missing as { all_of?: unknown })
+        ?.all_of;
+      const pending = requirements?.pending;
+
+      for (const bucket of [missingAllOf, pending]) {
+        if (!Array.isArray(bucket)) continue;
+        for (const requirement of bucket) {
           if (typeof requirement === 'string') {
-            issueSet.add(requirement);
+            addIfActionable(requirement);
+          } else if (requirement && typeof requirement === 'object') {
+            const items = (requirement as Record<string, unknown>).items;
+            if (Array.isArray(items)) {
+              for (const item of items) {
+                if (typeof item === 'string') addIfActionable(item);
+              }
+            }
           }
         }
       }
     }
 
+    // Deprecado por Bridge en favor de `requirements.missing` — ya no decide
+    // si hay issues bloqueantes, se conserva solo para trazabilidad/logging.
     const additionalRequirements: string[] = [];
     for (const endorsement of endorsements) {
       const addReqs = endorsement.additional_requirements as
