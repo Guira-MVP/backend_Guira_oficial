@@ -714,6 +714,55 @@ export class OnboardingService {
       );
     }
 
+    // H13-FIX: la atestación de arriba solo evita tener que subir un
+    // documento de propiedad — NO reemplaza registrar explícitamente a
+    // quién(es) son los dueños con ≥25% (o el umbral configurado). Antes no
+    // existía ningún chequeo de `business_ubos`, así que un negocio podía
+    // enviarse a Bridge sin ningún UBO cargado y recién enterarse del
+    // rechazo (ej. `sole_proprietorship_ubo_missing_ownership_or_control`
+    // para sole_prop) después de que Bridge lo procesara.
+    const { data: bizEntity } = await this.supabase
+      .from('businesses')
+      .select('entity_type, ownership_threshold, declares_no_qualifying_ubos')
+      .eq('id', biz.id)
+      .single();
+
+    const { data: ubos } = await this.supabase
+      .from('business_ubos')
+      .select('id, ownership_percent, has_control')
+      .eq('business_id', biz.id);
+
+    const uboRows = ubos ?? [];
+
+    if (bizEntity?.entity_type === 'sole_prop') {
+      // Regla dura de Bridge, sin excepción: `sole_proprietorship_ubo_count`
+      // exige exactamente un UBO y
+      // `sole_proprietorship_ubo_missing_ownership_or_control` exige que esa
+      // persona tenga ownership Y control.
+      const isValidSoleProp =
+        uboRows.length === 1 &&
+        Number(uboRows[0].ownership_percent) === 100 &&
+        uboRows[0].has_control === true;
+
+      if (!isValidSoleProp) {
+        throw new BadRequestException(
+          'Una empresa unipersonal (sole_prop) debe tener exactamente un Beneficiario Final (UBO) registrado, con 100% de participación y control marcado. Bridge rechaza la cuenta si falta este registro (sole_proprietorship_ubo_missing_ownership_or_control).',
+        );
+      }
+    } else if (uboRows.length === 0 && !bizEntity?.declares_no_qualifying_ubos) {
+      // AUDIT 2026-07-31: para el resto de tipos de entidad Bridge NO tiene una
+      // regla dura — la atestación del control person basta y de hecho una SRL
+      // con 0 UBOs llegó a `under_review` sin issues de ownership. Por eso esto
+      // NO es un bloqueo incondicional: se exige registrar los dueños, salvo
+      // que el cliente declare explícitamente que ninguna persona física
+      // alcanza el umbral (`declares_no_qualifying_ubos`), que es justamente lo
+      // que la atestación afirma.
+      const threshold = Number(bizEntity?.ownership_threshold ?? 25);
+      throw new BadRequestException(
+        `Debes registrar como Beneficiario Final a toda persona con ${threshold}% o más de participación, o declarar explícitamente que ninguna persona alcanza ese umbral. La certificación de estructura de propiedad por sí sola no identifica a los dueños ante Bridge.`,
+      );
+    }
+
     // Bridge requiere proof_of_nature_of_business si no se declara
     // primary_website. Con sitio web sigue siendo recomendable, y puede llegar
     // como RFI, pero no es un requisito universal de creación.
@@ -761,9 +810,14 @@ export class OnboardingService {
       .update({
         status: 'submitted',
         submitted_at: new Date().toISOString(),
-        directors_complete: true,
-        ubos_complete: true,
-        documents_complete: true,
+        // H13-FIX: antes estaban hardcodeados en `true` sin importar el
+        // estado real (llegamos a ver `ubos_complete: true` con
+        // business_ubos en 0 filas). Ahora reflejan las validaciones que
+        // acaban de pasar arriba.
+        directors_complete: Boolean(dirCount && dirCount > 0),
+        ubos_complete:
+          uboRows.length > 0 || Boolean(bizEntity?.declares_no_qualifying_ubos),
+        documents_complete: Boolean(docCount && docCount > 0),
         updated_at: new Date().toISOString(),
         observations: null,
         field_observations: {},

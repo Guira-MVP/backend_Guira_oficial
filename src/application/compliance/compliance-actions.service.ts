@@ -626,6 +626,23 @@ export class ComplianceActionsService {
       `Bridge rechazó cuenta para user ${userId} — issues: ${staffSummary}`,
     );
 
+    // H13-FIX: antes handleBridgeRejection nunca escribía `observations` ni
+    // `field_observations` en kyb_applications (a diferencia de
+    // handleBridgeIncomplete, más abajo, que sí lo hace) — el motivo del
+    // rechazo solo quedaba en audit_logs/compliance_review_events, invisible
+    // para quien revisara kyb_applications directamente.
+    const fieldObservations: Record<string, string> = {};
+    if (
+      issues.includes('sole_proprietorship_ubo_missing_ownership_or_control')
+    ) {
+      fieldObservations.ubos =
+        'Falta registrar al Beneficiario Final (UBO) con 100% de participación y control marcado — obligatorio para empresas unipersonales (sole_prop).';
+    }
+    if (issues.includes('sole_proprietorship_too_many_ubos')) {
+      fieldObservations.ubos =
+        'Una empresa unipersonal (sole_prop) debe tener registrado exactamente un Beneficiario Final (UBO).';
+    }
+
     // 1. Idempotency Check & Profile Data
     const { data: profile } = await this.supabase
       .from('profiles')
@@ -662,7 +679,14 @@ export class ComplianceActionsService {
       // KYB nunca se actualizaba a bridge_rejected).
       await this.supabase
         .from('kyb_applications')
-        .update({ status: 'bridge_rejected' })
+        .update({
+          status: 'bridge_rejected',
+          observations: JSON.stringify({
+            bridge_issues: issues,
+            bridge_issues_detail: issueDetails,
+          }),
+          field_observations: fieldObservations,
+        })
         .eq('requester_user_id', userId)
         .in('status', ['sent_to_bridge']);
     }

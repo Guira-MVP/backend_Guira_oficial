@@ -818,16 +818,31 @@ export class BridgeCustomerService {
 
     // P3-B: Transliteration — Bridge requires transliterated_business_legal_name
     // when the name contains characters outside Latin-1 range.
-    const legalName = business.legal_name as string;
-    if (legalName && /[^\x20-\x7E\u00C0-\u00FF]/.test(legalName)) {
-      payload.transliterated_business_legal_name = legalName
-        .normalize('NFD')
-        .replace(/[^\x20-\x7E\u00C0-\u00FF]/g, '');
+    if (this.needsTransliteration(business.legal_name)) {
+      payload.transliterated_business_legal_name = this.transliterate(
+        business.legal_name,
+      );
     }
 
-    // Trade name — H08: business_trade_name
+    // Trade name - H08: business_trade_name
     if (business.trade_name) {
       payload.business_trade_name = business.trade_name;
+      // AUDIT 2026-07-31: la contraparte transliterada del nombre comercial
+      // nunca se enviaba (solo la del nombre legal).
+      if (this.needsTransliteration(business.trade_name)) {
+        payload.transliterated_business_trade_name = this.transliterate(
+          business.trade_name,
+        );
+      }
+    }
+
+    // AUDIT 2026-07-31: transliterated_registered_address tampoco se enviaba.
+    // Bridge la exige cuando la direccion trae caracteres fuera de Latin-1.
+    const transliteratedRegistered = this.buildTransliteratedAddress(
+      payload.registered_address as Record<string, unknown>,
+    );
+    if (transliteratedRegistered) {
+      payload.transliterated_registered_address = transliteratedRegistered;
     }
 
     // Entity type: BusinessTypeEnum values already match Bridge enum directly
@@ -848,10 +863,14 @@ export class BridgeCustomerService {
       payload.other_websites = business.other_websites;
     }
 
-    // NOTA (auditoria 2026-07-28): `phone` NO es una propiedad documentada de
-    // UpdateBusinessCustomerPayload en Bridge (solo existe para individual y
-    // para AssociatedPerson). Se mantiene el input en el form para uso interno
-    // de Guira, pero deliberadamente no se envía a Bridge.
+    // AUDIT 2026-07-31: la nota anterior afirmaba que `phone` no era una
+    // propiedad documentada de UpdateBusinessCustomerPayload y por eso no se
+    // enviaba. Es incorrecto: el schema de Bridge sí lo define para business
+    // ("The business's primary phone number in format +12223334444"), así que
+    // se estaba descartando un dato válido que el cliente ya carga.
+    if (business.phone) {
+      payload.phone = business.phone;
+    }
 
     if (business.business_description) {
       payload.business_description = business.business_description;
@@ -979,6 +998,31 @@ export class BridgeCustomerService {
         postal_code: business.physical_postal_code as string | undefined,
         country: business.physical_country as string,
       });
+
+      const transliteratedPhysical = this.buildTransliteratedAddress(
+        payload.physical_address as Record<string, unknown>,
+      );
+      if (transliteratedPhysical) {
+        payload.transliterated_physical_address = transliteratedPhysical;
+      }
+    }
+
+    // AUDIT 2026-07-31: campos de Bridge que existían en el schema pero nunca
+    // se recolectaban ni se enviaban. Sin ellos Bridge asume defaults y el
+    // perfil de riesgo del negocio queda incompleto (posibles RFI).
+    if (business.customer_types_served) {
+      payload.customer_types_served = business.customer_types_served;
+    }
+    if (business.has_foreign_tax_registration !== undefined && business.has_foreign_tax_registration !== null) {
+      payload.has_foreign_tax_registration = business.has_foreign_tax_registration;
+    }
+    if (business.has_material_intermediary_ownership !== undefined && business.has_material_intermediary_ownership !== null) {
+      payload.has_material_intermediary_ownership = business.has_material_intermediary_ownership;
+    }
+    // Bridge acepta 5-25 (default 25). Se envía explícito para que el umbral
+    // con el que se recolectaron los UBOs quede registrado del lado de Bridge.
+    if (business.ownership_threshold !== undefined && business.ownership_threshold !== null) {
+      payload.ownership_threshold = Number(business.ownership_threshold);
     }
 
     // Signed Agreement (ToS) — H01
@@ -1065,6 +1109,78 @@ export class BridgeCustomerService {
     'santa cruz': 'S',
     tarija: 'T',
   };
+
+  /**
+   * Bridge acepta el rango Latin-1 (À-ÖØ-ßà-öø-ÿ) tal cual en los campos de
+   * nombre y dirección — "José Muñoz" NO necesita transliteración. Solo la
+   * exige cuando hay caracteres fuera de ese rango (cirílico, CJK, árabe,
+   * griego). Este helper detecta ese caso.
+   */
+  private static readonly NON_LATIN1_RE = /[^\x20-\x7EÀ-ÿ]/;
+
+  private needsTransliteration(value: unknown): value is string {
+    return (
+      typeof value === 'string' &&
+      value.length > 0 &&
+      BridgeCustomerService.NON_LATIN1_RE.test(value)
+    );
+  }
+
+  private transliterate(value: string): string {
+    return value
+      .normalize('NFD')
+      .replace(/[^\x20-\x7EÀ-ÿ]/g, '')
+      .trim();
+  }
+
+  /**
+   * Devuelve la versión transliterada de un Address ya construido, o null si
+   * ninguno de sus campos de texto lo requiere. Bridge pide
+   * `transliterated_registered_address` / `transliterated_physical_address` /
+   * `transliterated_residential_address` con la misma forma que el original.
+   */
+  private buildTransliteratedAddress(
+    address: Record<string, unknown>,
+  ): Record<string, unknown> | null {
+    const textKeys = ['street_line_1', 'street_line_2', 'city'];
+    if (!textKeys.some((k) => this.needsTransliteration(address[k]))) {
+      return null;
+    }
+    const result: Record<string, unknown> = { ...address };
+    for (const key of textKeys) {
+      if (this.needsTransliteration(result[key])) {
+        result[key] = this.transliterate(result[key] as string);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Aplica los campos `transliterated_*` de una AssociatedPerson (o del
+   * customer individual) sobre el payload ya construido. Bridge rechaza el
+   * request cuando el nombre trae caracteres fuera de Latin-1 y falta su
+   * contraparte transliterada.
+   */
+  private applyPersonTransliterations(person: Record<string, unknown>): void {
+    const nameFields: [string, string][] = [
+      ['first_name', 'transliterated_first_name'],
+      ['middle_name', 'transliterated_middle_name'],
+      ['last_name', 'transliterated_last_name'],
+    ];
+    for (const [source, target] of nameFields) {
+      if (this.needsTransliteration(person[source])) {
+        person[target] = this.transliterate(person[source] as string);
+      }
+    }
+    if (person.residential_address) {
+      const transliterated = this.buildTransliteratedAddress(
+        person.residential_address as Record<string, unknown>,
+      );
+      if (transliterated) {
+        person.transliterated_residential_address = transliterated;
+      }
+    }
+  }
 
   private normalizeSubdivision(state: string, country: string): string {
     const alpha3 = this.toAlpha3(country);
@@ -1176,12 +1292,14 @@ export class BridgeCustomerService {
       }
 
       // Fetch images for identity document
+      // AUDIT 2026-07-31: mismo criterio que buildDocumentsArray — excluir solo
+      // los documentos reemplazados, no depender de que sigan en `pending`.
       let query = this.supabase
         .from('documents')
         .select('id, document_type, storage_path, mime_type, created_at')
         .eq('user_id', userId)
         .eq('subject_type', subjectType)
-        .eq('status', 'pending')
+        .neq('status', 'superseded')
         .order('created_at', { ascending: false });
 
       if (subjectId) {
@@ -1290,12 +1408,17 @@ export class BridgeCustomerService {
     subjectType: string,
     subjectId?: string,
   ): Promise<Record<string, unknown>[]> {
+    // AUDIT 2026-07-31: antes filtraba `.eq('status','pending')`. Hoy solo
+    // existen los estados `pending` y `superseded`, así que funcionaba — pero
+    // el día que compliance marque un documento como aprobado/rechazado, ese
+    // documento desaparecería del payload de Bridge en silencio. Se invierte
+    // el criterio: se excluye solo lo reemplazado.
     let query = this.supabase
       .from('documents')
       .select('id, document_type, storage_path, mime_type, created_at')
       .eq('user_id', userId)
       .eq('subject_type', subjectType)
-      .eq('status', 'pending')
+      .neq('status', 'superseded')
       .order('created_at', { ascending: false });
 
     if (subjectId) {
@@ -1506,13 +1629,25 @@ export class BridgeCustomerService {
       .select('*')
       .eq('business_id', businessId);
 
+    // H13-FIX: se guardan las entradas de directores en un mapa (en vez de
+    // pushearlas directo a `persons`) para poder fusionar más abajo el UBO
+    // vinculado (misma persona física, ej. el representante legal que
+    // también es dueño del negocio) antes de emitirlas a Bridge. Antes,
+    // director y UBO se procesaban como listas independientes con
+    // `has_ownership` hardcodeado por tabla de origen (director: false, UBO:
+    // true), así que la misma persona terminaba duplicada como dos
+    // associated_person distintas — o, si solo se cargaba el director,
+    // llegaba a Bridge sin ownership marcado (causa real del rechazo
+    // `sole_proprietorship_ubo_missing_ownership_or_control`).
+    const directorEntries = new Map<string, BuiltAssociatedPerson>();
+
     if (directors) {
       for (const dir of directors) {
         const person: Record<string, unknown> = {
           first_name: dir.first_name,
           last_name: dir.last_name,
           has_control: true, // H12: director implica control
-          has_ownership: false,
+          has_ownership: false, // se vuelve true si hay un UBO vinculado (ver abajo)
           is_signer: dir.is_signer ?? false,
           is_director: true,
           // P0-E: residential_address always present
@@ -1551,7 +1686,10 @@ export class BridgeCustomerService {
         const dirDocs = await this.buildDocumentsArray(userId, 'director', dir.id as string);
         if (dirDocs.length > 0) person.documents = dirDocs;
 
-        persons.push({
+        // AUDIT 2026-07-31: transliterated_* de personas nunca se generaba.
+        this.applyPersonTransliterations(person);
+
+        directorEntries.set(dir.id as string, {
           sourceId: dir.id as string,
           source: 'director',
           bridgeAssociatedPersonId:
@@ -1569,17 +1707,81 @@ export class BridgeCustomerService {
       .select('*')
       .eq('business_id', businessId);
 
+    const independentUboEntries: BuiltAssociatedPerson[] = [];
+
     if (ubos) {
       for (const ubo of ubos) {
+        // H13-FIX: si este UBO está vinculado a un director ya cargado
+        // (`director_id`), representa a la MISMA persona física — se fusiona
+        // en la entrada de ese director en vez de emitir una associated_person
+        // separada (evita duplicar a la misma persona ante Bridge).
+        const linkedDirectorId =
+          typeof ubo.director_id === 'string' ? ubo.director_id : null;
+        const linkedEntry = linkedDirectorId
+          ? directorEntries.get(linkedDirectorId)
+          : undefined;
+
+        if (linkedEntry) {
+          const person = linkedEntry.payload;
+          person.has_ownership = true;
+          person.has_control = Boolean(person.has_control) || Boolean(ubo.has_control);
+
+          if (ubo.ownership_percent !== undefined && ubo.ownership_percent !== null) {
+            person.ownership_percentage = Math.round(Number(ubo.ownership_percent));
+          }
+
+          if (!person.email && ubo.email) person.email = ubo.email;
+          if (!person.phone && ubo.phone) person.phone = ubo.phone;
+          if (!person.birth_date && ubo.date_of_birth) person.birth_date = ubo.date_of_birth;
+          if (!person.title && ubo.position) person.title = ubo.position;
+
+          // Bridge requires `title` when has_control is true (FinCEN Control Prong)
+          if (person.has_control && !person.title) {
+            throw new BadRequestException(
+              `${person.first_name} ${person.last_name} tiene control pero no tiene cargo (position/title). Bridge requiere el campo title.`,
+            );
+          }
+
+          // Completa identifying_information/documentos con los del registro
+          // de UBO solo si el lado del director no trajo nada.
+          if (!person.identifying_information) {
+            const uboIdInfo = await this.buildIdentifyingInformation(
+              ubo,
+              (ubo.country as string) ?? '',
+              userId,
+              'ubo',
+              ubo.id as string,
+            );
+            if (uboIdInfo.length > 0) person.identifying_information = uboIdInfo;
+          }
+          const uboDocs = await this.buildDocumentsArray(userId, 'ubo', ubo.id as string);
+          if (uboDocs.length > 0) {
+            const existingDocs = Array.isArray(person.documents)
+              ? (person.documents as unknown[])
+              : [];
+            person.documents = [...existingDocs, ...uboDocs];
+          }
+
+          this.applyPersonTransliterations(person);
+
+          continue; // no se emite una entrada separada para este UBO
+        }
+
+        // UBO independiente (no representa a la misma persona que ningún
+        // director cargado) — mismo comportamiento que antes.
         const person: Record<string, unknown> = {
           first_name: ubo.first_name,
           last_name: ubo.last_name,
           has_ownership: true, // H12: UBO implica ownership
           has_control: ubo.has_control ?? false,
           is_signer: ubo.is_signer ?? false,
+          // AUDIT 2026-07-31: is_director solo se enviaba para directores.
+          // Bridge lo pide en cada associated_person (lista completa de
+          // directores bajo política EEA/BBSA).
+          is_director: ubo.is_director ?? false,
         };
 
-        if (ubo.ownership_percent !== undefined) {
+        if (ubo.ownership_percent !== undefined && ubo.ownership_percent !== null) {
           // Bridge types ownership_percentage as `integer` — round defensively
           // even though the DTO/schema already reject decimals upstream.
           person.ownership_percentage = Math.round(
@@ -1622,7 +1824,9 @@ export class BridgeCustomerService {
         const uboDocs = await this.buildDocumentsArray(userId, 'ubo', ubo.id as string);
         if (uboDocs.length > 0) person.documents = uboDocs;
 
-        persons.push({
+        this.applyPersonTransliterations(person);
+
+        independentUboEntries.push({
           sourceId: ubo.id as string,
           source: 'ubo',
           bridgeAssociatedPersonId:
@@ -1633,6 +1837,8 @@ export class BridgeCustomerService {
         });
       }
     }
+
+    persons.push(...directorEntries.values(), ...independentUboEntries);
 
     return persons;
   }

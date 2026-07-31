@@ -12,6 +12,7 @@ import {
   Matches,
   Min,
   Max,
+  IsUUID,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -343,4 +344,32 @@ export class CreateUboDto {
   @IsString()
   @Length(1, 1024)
   position?: string;
+
+  /**
+   * H13-FIX: cuando este UBO representa a la MISMA persona física que un
+   * director ya registrado (ej. el representante legal que también es
+   * dueño), se linkea aquí para que buildAssociatedPersons() los fusione en
+   * un solo associated_person hacia Bridge en vez de enviar dos personas
+   * separadas para el mismo individuo.
+   */
+  @ApiPropertyOptional({
+    description:
+      'ID del business_directors al que representa esta misma persona (si aplica). Evita duplicar a la persona en el payload de Bridge.',
+  })
+  @IsOptional()
+  @IsUUID()
+  director_id?: string;
+
+  /**
+   * AUDIT 2026-07-31: Bridge acepta `is_director` en cada AssociatedPerson y
+   * lo exige bajo politica EEA/BBSA (lista completa de directores). Antes solo
+   * se enviaba para las filas de business_directors.
+   */
+  @ApiPropertyOptional({
+    example: false,
+    description: 'El UBO tambien es director designado de la empresa.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  is_director?: boolean;
 }

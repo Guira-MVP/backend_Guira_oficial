@@ -10,6 +10,8 @@ import {
   IsNumber,
   IsDateString,
   Matches,
+  Min,
+  Max,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -364,4 +366,53 @@ export class CreateBusinessDto {
   @IsString()
   @Length(2, 3)
   physical_country?: string;
+
+  // ── AUDIT 2026-07-31: campos del schema de Bridge que nunca se recolectaban ──
+
+  /**
+   * Bridge `customer_types_served`. Alimenta el perfil de riesgo del negocio.
+   */
+  @ApiPropertyOptional({ enum: ['individuals', 'businesses', 'both'] })
+  @IsOptional()
+  @IsEnum(['individuals', 'businesses', 'both'])
+  customer_types_served?: string;
+
+  /**
+   * Bridge `has_foreign_tax_registration`: el negocio tributa fuera de su pais
+   * de constitucion.
+   */
+  @ApiPropertyOptional({ example: false })
+  @IsOptional()
+  @IsBoolean()
+  has_foreign_tax_registration?: boolean;
+
+  /**
+   * Bridge `has_material_intermediary_ownership`: existe una persona juridica
+   * intermedia con 25% o mas de participacion.
+   */
+  @ApiPropertyOptional({ example: false })
+  @IsOptional()
+  @IsBoolean()
+  has_material_intermediary_ownership?: boolean;
+
+  /**
+   * Bridge `ownership_threshold` (5-25, default 25). Umbral a partir del cual
+   * un socio debe declararse como UBO.
+   */
+  @ApiPropertyOptional({ example: 25, minimum: 5, maximum: 25 })
+  @IsOptional()
+  @IsNumber()
+  @Min(5)
+  @Max(25)
+  ownership_threshold?: number;
+
+  /**
+   * Declaracion explicita de que ninguna persona fisica alcanza el
+   * `ownership_threshold`. Unica via para enviar un KYB no-sole_prop sin UBOs
+   * registrados; `sole_prop` siempre exige exactamente un UBO al 100%.
+   */
+  @ApiPropertyOptional({ example: false })
+  @IsOptional()
+  @IsBoolean()
+  declares_no_qualifying_ubos?: boolean;
 }
