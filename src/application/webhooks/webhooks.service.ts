@@ -735,9 +735,20 @@ export class WebhooksService {
     } else if (newStatus === 'incomplete' || newStatus === 'under_review') {
       // ── KYC INCOMPLETO / EN REVISIÓN EN BRIDGE ──
       // Bridge reporta issues que requieren atención del staff.
-      // Solo actuamos si el perfil ya fue enviado a Bridge (pending_bridge),
-      // para distinguir del estado transitorio inicial de creación.
-      if (profile.onboarding_status === 'pending_bridge') {
+      // Actuamos si el perfil ya fue enviado a Bridge (pending_bridge), o si
+      // quedó marcado 'kyc_issues' por una escalación automática previa de
+      // este mismo mecanismo — en ese segundo caso necesitamos seguir
+      // evaluando los eventos siguientes para poder REVERTIR la escalación
+      // si los issues que la causaron ya se resolvieron (ver reconcileResolvedBridgeIssues).
+      // AUDIT 2026-07-31: antes solo se evaluaba en 'pending_bridge', así que
+      // el evento SIGUIENTE a una escalación (con onboarding_status ya en
+      // 'kyc_issues') caía siempre en el `else` de abajo y no hacía nada —
+      // el cliente quedaba con needs_review pegado aunque Bridge ya hubiera
+      // resuelto el check pendiente (caso real: Devwolf, 2026-07-31 08:02-08:03).
+      if (
+        profile.onboarding_status === 'pending_bridge' ||
+        profile.onboarding_status === 'kyc_issues'
+      ) {
         const { issueSet, additionalRequirements } =
           this.extractEndorsementIssues(eventObject);
 
@@ -745,8 +756,9 @@ export class WebhooksService {
         // schema en su OpenAPI: "This field is deprecated. See endorsement.missing
         // instead") — ya no decide si hay issues bloqueantes, solo se conserva
         // para trazabilidad. `issueSet` ya filtra los marcadores de proceso
-        // interno de Bridge (kyb_review, post_processing, *_review, *_screen, etc.)
-        // que aparecen en `requirements.complete` una vez resueltos.
+        // interno de Bridge (kyb_review, post_processing, *_review, *_screen,
+        // *_verification, etc.) que aparecen en `requirements.complete` una
+        // vez resueltos.
         const hasBlockingIssues = issueSet.size > 0;
 
         if (hasBlockingIssues) {
@@ -757,6 +769,8 @@ export class WebhooksService {
             additionalRequirements,
             newStatus,
           );
+        } else if (profile.onboarding_status === 'kyc_issues') {
+          await this.reconcileResolvedBridgeIssues(profile, customerId);
         } else {
           this.logger.log(
             `customer.updated: customer ${customerId} → ${newStatus} (transitorio, sin issues bloqueantes)`,
@@ -838,6 +852,17 @@ export class WebhooksService {
     return (
       code.endsWith('_review') ||
       code.endsWith('_screen') ||
+      // AUDIT 2026-07-31: faltaba este patrón. `government_id_verification`,
+      // `selfie_verification`, `business_formation_document_verification`, etc.
+      // son checks automáticos de Bridge en curso (aparecen en `pending`
+      // mientras se procesan y pasan solos a `complete` segundos después) —
+      // ninguno es un dato que el cliente pueda corregir manualmente (no
+      // aparecen en la lista de "Requirements" real de Bridge). Sin este
+      // patrón, un `pending` transitorio como este se trataba como issue
+      // bloqueante: se le mandaba un correo de "correcciones necesarias" al
+      // cliente y se reabría el formulario, para un caso que se resolvía
+      // solo 30 segundos después (caso real: Devwolf, 2026-07-31 08:02-08:03).
+      code.endsWith('_verification') ||
       code.startsWith('duplicate_check_') ||
       code.startsWith('keyword_screening_')
     );
@@ -1016,6 +1041,121 @@ export class WebhooksService {
 
     this.logger.warn(
       `⚠️ customer.updated: perfil ${profile.id} marcado como kyc_issues (bridge_status=${bridgeStatus}). Staff notificado vía compliance review.`,
+    );
+  }
+
+  /**
+   * AUDIT+FIX 2026-07-31: revierte una escalación automática (needs_review /
+   * kyc_issues) cuando un evento posterior de Bridge confirma que los issues
+   * que la dispararon ya no están presentes (ej. un check `*_verification`
+   * que estaba `pending` terminó de procesarse solo). Sin esto, el cliente
+   * quedaba con el formulario reabierto y un correo de "correcciones
+   * necesarias" pendiente de algo que Bridge ya había resuelto por su cuenta.
+   *
+   * Solo actúa si el estado actual fue puesto por ESTE mecanismo automático
+   * (profile.onboarding_status === 'kyc_issues' Y las `observations` tienen
+   * la forma `{bridge_issues:[...]}` que escribe `applyBridgeBlockingIssues`)
+   * — nunca pisa una revisión manual de staff, que guarda `observations` como
+   * texto libre (el `reason` que el staff escribió), no como ese JSON.
+   */
+  private async reconcileResolvedBridgeIssues(
+    profile: { id: string; onboarding_status: string | null },
+    customerId: string,
+  ): Promise<void> {
+    const isAutoEscalated = (observations: unknown): boolean => {
+      if (typeof observations !== 'string' || !observations) return false;
+      try {
+        const parsed = JSON.parse(observations) as { bridge_issues?: unknown };
+        return Array.isArray(parsed.bridge_issues);
+      } catch {
+        return false;
+      }
+    };
+
+    const { data: kycApp } = await this.supabase
+      .from('kyc_applications')
+      .select('id, observations')
+      .eq('user_id', profile.id)
+      .eq('status', 'needs_review')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const { data: kybApp } = await this.supabase
+      .from('kyb_applications')
+      .select('id, observations')
+      .eq('requester_user_id', profile.id)
+      .eq('status', 'needs_review')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    let reverted = false;
+
+    if (kycApp && isAutoEscalated(kycApp.observations)) {
+      await this.supabase
+        .from('kyc_applications')
+        .update({
+          status: 'sent_to_bridge',
+          observations: null,
+          field_observations: {},
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', kycApp.id);
+      reverted = true;
+    }
+
+    if (kybApp && isAutoEscalated(kybApp.observations)) {
+      await this.supabase
+        .from('kyb_applications')
+        .update({
+          status: 'sent_to_bridge',
+          observations: null,
+          field_observations: {},
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', kybApp.id);
+      reverted = true;
+    }
+
+    if (!reverted) {
+      // El estado 'kyc_issues' no vino de este mecanismo (o ya fue tocado
+      // manualmente por staff) — no se toca nada.
+      this.logger.log(
+        `customer.updated: customer ${customerId} → issues resueltos, pero no se encontró una escalación automática pendiente para user ${profile.id} (sin acción)`,
+      );
+      return;
+    }
+
+    await this.supabase
+      .from('profiles')
+      .update({ onboarding_status: 'pending_bridge' })
+      .eq('id', profile.id);
+
+    await this.emitProfileStatusAndUserUpdate(profile.id, 'pending_bridge');
+
+    // Notificación in-app únicamente — sin email, para no generar más ruido
+    // que el correo original que ya se le mandó de más al cliente.
+    await this.supabase.from('notifications').insert({
+      user_id: profile.id,
+      type: 'onboarding',
+      title: 'Verificación en curso',
+      message:
+        'La revisión automática de tu solicitud continuó sin observaciones. No necesitas realizar ninguna acción, seguimos procesando tu verificación.',
+    });
+
+    await this.supabase.from('audit_logs').insert({
+      performed_by: null,
+      role: 'system',
+      action: 'BRIDGE_ISSUES_AUTO_RESOLVED',
+      table_name: 'profiles',
+      record_id: profile.id,
+      new_values: { bridge_customer_id: customerId },
+      source: 'webhook',
+    });
+
+    this.logger.log(
+      `customer.updated: customer ${customerId} → issues previamente reportados ya no están presentes. Revertido needs_review/kyc_issues automáticamente para user ${profile.id}.`,
     );
   }
 
