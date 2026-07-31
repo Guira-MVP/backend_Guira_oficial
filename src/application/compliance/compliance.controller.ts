@@ -140,6 +140,18 @@ export class AdminComplianceController {
     return this.actionsService.getReviewDetail(id);
   }
 
+  @Get('users/:userId/onboarding')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({
+    summary:
+      'Obtener el expediente de onboarding más reciente de un usuario (independiente de reviews abiertos)',
+  })
+  getOnboardingByUser(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+  ) {
+    return this.actionsService.getOnboardingByUserId(userId);
+  }
+
   // ── REVIEWS (Acciones) ────────────────────────────────────────────
 
   @Patch('reviews/:id/assign')

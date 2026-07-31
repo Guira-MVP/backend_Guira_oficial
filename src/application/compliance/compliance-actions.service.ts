@@ -142,40 +142,8 @@ export class ComplianceActionsService {
     let documents: any[] = [];
 
     if (userId) {
-      const { data: prof } = await this.supabase
-        .from('profiles')
-        .select('id, email, full_name, onboarding_status, bridge_customer_id')
-        .eq('id', userId)
-        .maybeSingle();
-      profileData = prof;
-
-      // Documents con signed URLs — generadas server-side
-      const { data: docs } = await this.supabase
-        .from('documents')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false });
-
-      // Filtrar solo el más reciente por tipo
-      const latestDocsMap = new Map<string, any>();
-      for (const doc of docs ?? []) {
-        const typeKey =
-          doc.document_type || doc.description || 'unknown_document';
-        if (!latestDocsMap.has(typeKey)) latestDocsMap.set(typeKey, doc);
-      }
-
-      documents = await Promise.all(
-        Array.from(latestDocsMap.values()).map(async (doc) => {
-          let signedUrl: string | null = null;
-          if (doc.storage_path) {
-            const { data: urlData } = await this.supabase.storage
-              .from('kyc-documents')
-              .createSignedUrl(doc.storage_path, 3600);
-            signedUrl = urlData?.signedUrl ?? null;
-          }
-          return { ...doc, signed_url: signedUrl };
-        }),
-      );
+      profileData = await this.getProfileSummary(userId);
+      documents = await this.getSignedDocumentsForUser(userId);
     }
 
     return {
@@ -189,6 +157,114 @@ export class ComplianceActionsService {
       profile: profileData,
       documents,
     };
+  }
+
+  /**
+   * Expediente de onboarding más reciente de un usuario, sin depender de que
+   * exista un compliance_review abierto (a diferencia de getReviewDetail).
+   * Usado para mostrar los datos de onboarding en el perfil de un usuario ya
+   * aprobado, cuyo review original ya fue cerrado y no aparece en la cola.
+   */
+  async getOnboardingByUserId(userId: string) {
+    const { data: kyc } = await this.supabase
+      .from('kyc_applications')
+      .select('*, people (*)')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const { data: kyb } = await this.supabase
+      .from('kyb_applications')
+      .select('*, businesses (*, business_directors(*), business_ubos(*))')
+      .eq('requester_user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    // Si existen ambas (caso raro), se prioriza la más reciente.
+    const app =
+      kyc && kyb
+        ? new Date(kyc.created_at) >= new Date(kyb.created_at)
+          ? { kind: 'kyc' as const, row: kyc }
+          : { kind: 'kyb' as const, row: kyb }
+        : kyc
+          ? { kind: 'kyc' as const, row: kyc }
+          : kyb
+            ? { kind: 'kyb' as const, row: kyb }
+            : null;
+
+    if (!app) {
+      throw new NotFoundException(
+        'Este usuario no tiene expediente de onboarding registrado.',
+      );
+    }
+
+    const onboardingType: 'personal' | 'company' =
+      app.kind === 'kyc' ? 'personal' : 'company';
+    const applicationData =
+      app.kind === 'kyc'
+        ? this.mapKycToFormData(app.row)
+        : this.mapKybToFormData(app.row);
+
+    const [profileData, documents] = await Promise.all([
+      this.getProfileSummary(userId),
+      this.getSignedDocumentsForUser(userId),
+    ]);
+
+    return {
+      id: app.row.id,
+      status: app.row.status,
+      user_id: userId,
+      onboarding_type: onboardingType,
+      application_data: applicationData,
+      previous_data: app.row.previous_data ?? null,
+      profile: profileData,
+      documents,
+      created_at: app.row.created_at,
+      updated_at: app.row.updated_at,
+    };
+  }
+
+  /** Perfil resumido usado por getReviewDetail y getOnboardingByUserId. */
+  private async getProfileSummary(userId: string) {
+    const { data: prof } = await this.supabase
+      .from('profiles')
+      .select('id, email, full_name, onboarding_status, bridge_customer_id')
+      .eq('id', userId)
+      .maybeSingle();
+    return prof;
+  }
+
+  /**
+   * Documentos más recientes por tipo, con signed URLs — usado por
+   * getReviewDetail y getOnboardingByUserId.
+   */
+  private async getSignedDocumentsForUser(userId: string) {
+    const { data: docs } = await this.supabase
+      .from('documents')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+
+    const latestDocsMap = new Map<string, any>();
+    for (const doc of docs ?? []) {
+      const typeKey = doc.document_type || doc.description || 'unknown_document';
+      if (!latestDocsMap.has(typeKey)) latestDocsMap.set(typeKey, doc);
+    }
+
+    return Promise.all(
+      Array.from(latestDocsMap.values()).map(async (doc) => {
+        let signedUrl: string | null = null;
+        if (doc.storage_path) {
+          const { data: urlData } = await this.supabase.storage
+            .from('kyc-documents')
+            .createSignedUrl(doc.storage_path, 3600);
+          signedUrl = urlData?.signedUrl ?? null;
+        }
+        return { ...doc, signed_url: signedUrl };
+      }),
+    );
   }
 
   /**
