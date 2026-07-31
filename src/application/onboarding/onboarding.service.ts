@@ -723,7 +723,7 @@ export class OnboardingService {
     // para sole_prop) después de que Bridge lo procesara.
     const { data: bizEntity } = await this.supabase
       .from('businesses')
-      .select('entity_type, ownership_threshold, declares_no_qualifying_ubos')
+      .select('entity_type, ownership_threshold, has_material_intermediary_ownership')
       .eq('id', biz.id)
       .single();
 
@@ -749,19 +749,12 @@ export class OnboardingService {
           'Una empresa unipersonal (sole_prop) debe tener exactamente un Beneficiario Final (UBO) registrado, con 100% de participación y control marcado. Bridge rechaza la cuenta si falta este registro (sole_proprietorship_ubo_missing_ownership_or_control).',
         );
       }
-    } else if (uboRows.length === 0 && !bizEntity?.declares_no_qualifying_ubos) {
-      // AUDIT 2026-07-31: para el resto de tipos de entidad Bridge NO tiene una
-      // regla dura — la atestación del control person basta y de hecho una SRL
-      // con 0 UBOs llegó a `under_review` sin issues de ownership. Por eso esto
-      // NO es un bloqueo incondicional: se exige registrar los dueños, salvo
-      // que el cliente declare explícitamente que ninguna persona física
-      // alcanza el umbral (`declares_no_qualifying_ubos`), que es justamente lo
-      // que la atestación afirma.
-      const threshold = Number(bizEntity?.ownership_threshold ?? 25);
-      throw new BadRequestException(
-        `Debes registrar como Beneficiario Final a toda persona con ${threshold}% o más de participación, o declarar explícitamente que ninguna persona alcanza ese umbral. La certificación de estructura de propiedad por sí sola no identifica a los dueños ante Bridge.`,
-      );
     }
+    // Para el resto de entity_types, Bridge NO tiene una regla dura de conteo
+    // de UBOs (una SRL con 0 UBOs llegó a `under_review` sin issues de
+    // ownership): la atestación del control person (verificada arriba en
+    // `attestedCount`) es lo único que Bridge exige para ese caso. No se
+    // bloquea aquí — hacerlo sin que Bridge lo pida sería una regresión.
 
     // Bridge requiere proof_of_nature_of_business si no se declara
     // primary_website. Con sitio web sigue siendo recomendable, y puede llegar
@@ -783,6 +776,24 @@ export class OnboardingService {
       if (!natureDocCount || natureDocCount === 0) {
         throw new BadRequestException(
           'Sin sitio web declarado, debes adjuntar evidencia de la naturaleza del negocio (folleto, catálogo, contrato o factura)',
+        );
+      }
+    }
+
+    // Bridge exige el organigrama de propiedad ("ownership organizational
+    // chart verifying UBOs encompassing all intermediaries") cuando la
+    // empresa declara una sociedad intermedia con ≥25% de participación.
+    if (bizEntity?.has_material_intermediary_ownership) {
+      const { count: ownershipDocCount } = await this.supabase
+        .from('documents')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', userId)
+        .eq('subject_type', 'business')
+        .eq('document_type', 'ownership_information');
+
+      if (!ownershipDocCount || ownershipDocCount === 0) {
+        throw new BadRequestException(
+          'Declaraste una sociedad intermedia con 25% o más de participación: debes adjuntar el organigrama de propiedad que la incluya, junto con sus beneficiarios finales.',
         );
       }
     }
@@ -815,8 +826,7 @@ export class OnboardingService {
         // business_ubos en 0 filas). Ahora reflejan las validaciones que
         // acaban de pasar arriba.
         directors_complete: Boolean(dirCount && dirCount > 0),
-        ubos_complete:
-          uboRows.length > 0 || Boolean(bizEntity?.declares_no_qualifying_ubos),
+        ubos_complete: uboRows.length > 0,
         documents_complete: Boolean(docCount && docCount > 0),
         updated_at: new Date().toISOString(),
         observations: null,

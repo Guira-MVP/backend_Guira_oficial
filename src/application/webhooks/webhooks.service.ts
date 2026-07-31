@@ -2517,57 +2517,71 @@ export class WebhooksService {
           updated_at: new Date().toISOString(),
         });
 
-        // Para off-ramp: liberar la reserva ANTES de asentar el ledger.
-        // El trigger update_balance_on_ledger_entry calcula:
-        //   available = available + LEAST(0, v_diff + reserved)
-        // Si released=0 ya, el resultado es correcto.
-        // Si released≠0 al momento del settle, el trigger podría violar
-        // CHECK (available >= 0) aunque el balance total sea suficiente.
-        const offRampFlows = [
-          'bridge_wallet_to_crypto',
-          'bridge_wallet_to_fiat_us',
-        ];
-        if (offRampFlows.includes(paymentOrder.flow_type)) {
-          const totalReserved = parseFloat(paymentOrder.amount ?? '0');
-          if (totalReserved > 0) {
-            await this.supabase.rpc('release_reserved_balance', {
-              p_user_id: paymentOrder.user_id,
-              p_currency: (
-                paymentOrder.source_currency ??
-                paymentOrder.currency ??
-                'USDC'
-              ).toUpperCase(),
-              p_amount: totalReserved,
-            });
-            this.logger.log(
-              `💰 Reserva liberada para order ${paymentOrder.id}: ${totalReserved} ${paymentOrder.currency}`,
-            );
-          }
-        }
+        // Para off-ramp: la reserva se libera exclusivamente vía el trigger
+        // update_balance_on_ledger_entry cuando el ledger_entry debit pasa a
+        // 'settled' más abajo (ver migración
+        // 20260620_fix_update_balance_on_ledger_entry_debit_reservation.sql).
+        // Antes había aquí una llamada manual a release_reserved_balance que
+        // duplicaba ese mismo ajuste de reserved/available para el mismo
+        // evento de settle: cuando dos retiros del mismo cliente y moneda se
+        // solapaban en el tiempo, la duplicación "robaba" reserva de la orden
+        // equivocada y dejaba available_amount inflado por encima del saldo
+        // real (bug diagnosticado 2026-07-31, caso semperteguiemmanuel@gmail.com).
+        // Se eliminó — no hace falta reemplazo, el settle de abajo (debit) ya
+        // dispara el trigger correcto.
 
-        // Asentar ledger entries vinculadas a la payment_order
-        // Si tenemos receipt.final_amount de Bridge, actualizar el monto real recibido
-        const { data: settledEntries, error: settleError } = await this.supabase
-          .from('ledger_entries')
-          .update({
-            status: 'settled',
-            ...(receiptFinalAmount != null
-              ? { amount: receiptFinalAmount }
-              : {}),
-          })
-          .eq('reference_type', 'payment_order')
-          .eq('reference_id', paymentOrder.id)
-          .eq('status', 'pending')
-          .select('id');
+        // Asentar ledger entries vinculadas a la payment_order.
+        // IMPORTANTE: `amount` SOLO se sobrescribe con receiptFinalAmount para
+        // entradas type='credit' (on-ramp flexible, donde el monto real solo
+        // se conoce al recibir el webhook). Para type='debit' (off-ramp), el
+        // monto insertado al crear la orden (`totalNeeded`, ver
+        // payment-orders.service.ts) YA es el bruto reservado —
+        // receiptFinalAmount es el NETO que Bridge entregó en destino y jamás
+        // debe sobrescribir el ledger de un débito: el cliente debe pagar la
+        // comisión con su propio saldo, no quedársela como saldo fantasma
+        // (bug diagnosticado 2026-07-31, causa raíz A).
+        const { data: settledCreditEntries, error: settleCreditError } =
+          await this.supabase
+            .from('ledger_entries')
+            .update({
+              status: 'settled',
+              ...(receiptFinalAmount != null
+                ? { amount: receiptFinalAmount }
+                : {}),
+            })
+            .eq('reference_type', 'payment_order')
+            .eq('reference_id', paymentOrder.id)
+            .eq('status', 'pending')
+            .eq('type', 'credit')
+            .select('id');
 
-        if (settleError) {
+        if (settleCreditError) {
           this.logger.error(
-            `❌ Error al asentar ledger entries para order ${paymentOrder.id}: ${settleError.message}`,
+            `❌ Error al asentar ledger entries (credit) para order ${paymentOrder.id}: ${settleCreditError.message}`,
           );
-          throw new Error(`Ledger settle failed for order ${paymentOrder.id}: ${settleError.message}`);
+          throw new Error(`Ledger settle (credit) failed for order ${paymentOrder.id}: ${settleCreditError.message}`);
         }
 
-        const settledCount = settledEntries?.length ?? 0;
+        const { data: settledDebitEntries, error: settleDebitError } =
+          await this.supabase
+            .from('ledger_entries')
+            .update({ status: 'settled' }) // nunca sobrescribir amount en débitos
+            .eq('reference_type', 'payment_order')
+            .eq('reference_id', paymentOrder.id)
+            .eq('status', 'pending')
+            .eq('type', 'debit')
+            .select('id');
+
+        if (settleDebitError) {
+          this.logger.error(
+            `❌ Error al asentar ledger entries (debit) para order ${paymentOrder.id}: ${settleDebitError.message}`,
+          );
+          throw new Error(`Ledger settle (debit) failed for order ${paymentOrder.id}: ${settleDebitError.message}`);
+        }
+
+        const settledCount =
+          (settledCreditEntries?.length ?? 0) +
+          (settledDebitEntries?.length ?? 0);
 
         // Safety net: si no había ledger_entry pending para on-ramps,
         // crear uno settled directamente para que el trigger actualice balances.

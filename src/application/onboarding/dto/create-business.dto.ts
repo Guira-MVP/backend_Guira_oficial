@@ -405,14 +405,4 @@ export class CreateBusinessDto {
   @Min(5)
   @Max(25)
   ownership_threshold?: number;
-
-  /**
-   * Declaracion explicita de que ninguna persona fisica alcanza el
-   * `ownership_threshold`. Unica via para enviar un KYB no-sole_prop sin UBOs
-   * registrados; `sole_prop` siempre exige exactamente un UBO al 100%.
-   */
-  @ApiPropertyOptional({ example: false })
-  @IsOptional()
-  @IsBoolean()
-  declares_no_qualifying_ubos?: boolean;
 }
