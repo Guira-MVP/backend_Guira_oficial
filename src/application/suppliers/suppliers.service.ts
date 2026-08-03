@@ -18,6 +18,7 @@ import { BridgeService } from '../bridge/bridge.service';
 const FIAT_RAIL_TO_CURRENCY: Record<string, string> = {
   ach: 'usd',
   wire: 'usd',
+  ach_wire: 'usd',
   sepa: 'eur',
   spei: 'mxn',
   pix: 'brl',
@@ -118,6 +119,10 @@ export class SuppliersService {
 
   /** Crea un proveedor para el usuario. */
   async create(userId: string, dto: CreateSupplierDto) {
+    if (dto.payment_rail === 'ach_wire') {
+      return this.createAchWireSupplierPair(userId, dto);
+    }
+
     const isFiat = dto.payment_rail !== 'crypto';
     const normalizedEmail = this.normalizeEmail(dto.contact_email);
 
@@ -427,6 +432,245 @@ export class SuppliersService {
     });
 
     return { ...data, beneficiary_address_valid };
+  }
+
+  /**
+   * Crea un proveedor de EE.UU. con ambos rails (ACH y Wire) a partir de una sola
+   * external account de Bridge — Bridge no distingue ACH de Wire a nivel de external
+   * account (ambos son account_type "us"), solo a nivel de liquidation address
+   * (destination_payment_rail). Reutilizar la misma EA para las dos liquidation
+   * addresses evita el error "duplicate_external_account" que Bridge devuelve si se
+   * intenta crear una segunda EA idéntica para el mismo cliente.
+   */
+  private async createAchWireSupplierPair(userId: string, dto: CreateSupplierDto) {
+    const normalizedEmail = this.normalizeEmail(dto.contact_email);
+
+    if (normalizedEmail) {
+      const { data: existing } = await this.supabase
+        .from('suppliers')
+        .select('id, name, payment_rail')
+        .eq('user_id', userId)
+        .eq('contact_email', normalizedEmail)
+        .in('payment_rail', ['ach', 'wire'])
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (existing) {
+        throw new ConflictException(
+          `El contacto "${normalizedEmail}" ya tiene una cuenta ${(existing as any).payment_rail.toUpperCase()} registrada ` +
+            `(proveedor: "${(existing as any).name}"). Usa "Añadir método" en la agenda para agregar el rail faltante.`,
+        );
+      }
+    }
+
+    await this.assertFiatSupplierCurrencyActive('usd');
+
+    // Registrar la cuenta bancaria en Bridge una sola vez. El payload de Bridge para
+    // ACH y Wire es idéntico (mismo account_type "us"), así que pasar payment_rail:
+    // 'ach' aquí es arbitrario — nunca se reenvía 'ach_wire' a bridgeService/Bridge.
+    const ea = await this.bridgeService.createExternalAccount(userId, {
+      account_owner_name: dto.name,
+      currency: dto.currency.toLowerCase(),
+      payment_rail: 'ach',
+      bank_name: dto.bank_name,
+      account_number: dto.account_number,
+      routing_number: dto.routing_number,
+      checking_or_savings: dto.checking_or_savings,
+      address: dto.address,
+    });
+
+    const beneficiary_address_valid =
+      (ea as any).beneficiary_address_valid ?? null;
+
+    const createLiquidationAddressForRail = (rail: 'ach' | 'wire') => {
+      const token = Date.now().toString(36).toUpperCase();
+      const railRefs =
+        rail === 'ach'
+          ? { destination_ach_reference: 'GUIRA' }
+          : { destination_wire_message: `Pago via Guira ${token}` };
+
+      return this.bridgeService.createLiquidationAddress(userId, {
+        currency: 'usdc',
+        chain: 'solana',
+        external_account_id: ea.bridge_external_account_id as string,
+        destination_payment_rail: rail,
+        destination_currency: 'usd',
+        ...railRefs,
+      });
+    };
+
+    let laAch: Awaited<ReturnType<typeof createLiquidationAddressForRail>>;
+    try {
+      laAch = await createLiquidationAddressForRail('ach');
+    } catch (err) {
+      this.logger.error(
+        `Proveedor ${dto.name} (ACH+Wire): external account creada (${ea.id}) pero falló la liquidation address ACH: ${err.message}`,
+      );
+      await this.rollbackOrphanedExternalAccount(userId, ea.id as string);
+      throw new BadRequestException(
+        'No se pudo registrar el proveedor porque los datos enviados son inválidos. ' +
+          'Por favor revise la información ingresada (dirección, datos bancarios) e intente de nuevo.',
+      );
+    }
+
+    let laWire: Awaited<ReturnType<typeof createLiquidationAddressForRail>>;
+    try {
+      laWire = await createLiquidationAddressForRail('wire');
+    } catch (err) {
+      this.logger.error(
+        `Proveedor ${dto.name} (ACH+Wire): LA ACH (${laAch.bridge_liquidation_address_id}) creada pero falló la liquidation address Wire: ${err.message}`,
+      );
+      await this.deactivateOrphanedLiquidationAddress(
+        userId,
+        laAch.bridge_liquidation_address_id as string,
+      );
+      await this.rollbackOrphanedExternalAccount(userId, ea.id as string);
+      throw new BadRequestException(
+        'No se pudo registrar el proveedor porque los datos enviados son inválidos. ' +
+          'Por favor revise la información ingresada (dirección, datos bancarios) e intente de nuevo.',
+      );
+    }
+
+    const bank_details: Record<string, unknown> = {
+      bank_name: dto.bank_name,
+      account_number: dto.account_number,
+      routing_number: dto.routing_number,
+      checking_or_savings: dto.checking_or_savings,
+      address: dto.address ?? null,
+    };
+    Object.keys(bank_details).forEach(
+      (k) => bank_details[k] === undefined && delete bank_details[k],
+    );
+
+    const supplierCurrency = dto.currency.toLowerCase();
+    const rows = [
+      {
+        user_id: userId,
+        name: dto.name,
+        currency: supplierCurrency,
+        payment_rail: 'ach',
+        bank_details,
+        contact_email: normalizedEmail,
+        notes: dto.notes ?? null,
+        bridge_external_account_id: ea.id,
+        bridge_liquidation_address_id: laAch.bridge_liquidation_address_id,
+        is_active: true,
+        is_verified: false,
+      },
+      {
+        user_id: userId,
+        name: dto.name,
+        currency: supplierCurrency,
+        payment_rail: 'wire',
+        bank_details,
+        contact_email: normalizedEmail,
+        notes: dto.notes ?? null,
+        bridge_external_account_id: ea.id,
+        bridge_liquidation_address_id: laWire.bridge_liquidation_address_id,
+        is_active: true,
+        is_verified: false,
+      },
+    ];
+
+    const { data, error } = await this.supabase
+      .from('suppliers')
+      .insert(rows)
+      .select();
+
+    if (error) {
+      this.logger.error(
+        `Fallo al guardar el par ACH+Wire "${dto.name}" en DB tras crear recursos en Bridge ` +
+          `(EA local id=${ea.id}, LA ACH=${laAch.bridge_liquidation_address_id}, LA Wire=${laWire.bridge_liquidation_address_id}): ${error.message}`,
+      );
+      await this.deactivateOrphanedLiquidationAddress(
+        userId,
+        laAch.bridge_liquidation_address_id as string,
+      );
+      await this.deactivateOrphanedLiquidationAddress(
+        userId,
+        laWire.bridge_liquidation_address_id as string,
+      );
+      await this.rollbackOrphanedExternalAccount(userId, ea.id as string);
+      throwDbError(error);
+    }
+
+    const achRow = data!.find((r) => r.payment_rail === 'ach')!;
+    const wireRow = data!.find((r) => r.payment_rail === 'wire')!;
+
+    await this.supabase.from('audit_logs').insert([
+      {
+        performed_by: userId,
+        role: 'client',
+        action: 'CREATE_SUPPLIER',
+        table_name: 'suppliers',
+        record_id: achRow.id,
+        new_values: {
+          name: dto.name,
+          contact_email: normalizedEmail,
+          payment_rail: 'ach',
+          currency: supplierCurrency,
+        },
+      },
+      {
+        performed_by: userId,
+        role: 'client',
+        action: 'CREATE_SUPPLIER',
+        table_name: 'suppliers',
+        record_id: wireRow.id,
+        new_values: {
+          name: dto.name,
+          contact_email: normalizedEmail,
+          payment_rail: 'wire',
+          currency: supplierCurrency,
+        },
+      },
+    ]);
+
+    return {
+      ach: { ...achRow, beneficiary_address_valid },
+      wire: { ...wireRow, beneficiary_address_valid },
+    };
+  }
+
+  /** Elimina una external account huérfana de Bridge tras un fallo parcial. */
+  private async rollbackOrphanedExternalAccount(
+    userId: string,
+    eaId: string,
+  ): Promise<void> {
+    try {
+      await this.bridgeService.deleteExternalAccount(userId, eaId);
+      this.logger.log(`Rollback exitoso: EA ${eaId} eliminada de Bridge y DB`);
+    } catch (rollbackErr) {
+      this.logger.error(
+        `Rollback fallido para EA ${eaId}: ${rollbackErr.message}. Requiere limpieza manual en Bridge.`,
+      );
+    }
+  }
+
+  /**
+   * Desactiva localmente una liquidation address huérfana. Bridge no expone DELETE
+   * para liquidation addresses, así que el máximo rollback posible es marcarla
+   * inactiva localmente y dejar rastro para limpieza manual.
+   */
+  private async deactivateOrphanedLiquidationAddress(
+    userId: string,
+    bridgeLiquidationAddressId: string,
+  ): Promise<void> {
+    const { error } = await this.supabase
+      .from('bridge_liquidation_addresses')
+      .update({ is_active: false })
+      .eq('bridge_liquidation_address_id', bridgeLiquidationAddressId)
+      .eq('user_id', userId);
+
+    if (error) {
+      this.logger.error(
+        `No se pudo desactivar la Liquidation Address huérfana ${bridgeLiquidationAddressId}: ${error.message}. Requiere limpieza manual.`,
+      );
+    } else {
+      this.logger.warn(
+        `Liquidation Address ${bridgeLiquidationAddressId} desactivada localmente (huérfana en Bridge) tras fallo parcial de creación.`,
+      );
+    }
   }
 
   /** Lista proveedores activos del usuario. */

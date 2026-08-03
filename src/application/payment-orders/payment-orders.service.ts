@@ -2663,7 +2663,7 @@ export class PaymentOrdersService {
     }
     const { data: supplier } = await this.supabase
       .from('suppliers')
-      .select('id, name, bridge_external_account_id, bank_details')
+      .select('id, name, bridge_external_account_id, bank_details, payment_rail')
       .eq('id', dto.supplier_id)
       .eq('user_id', userId)
       .single();
@@ -2675,11 +2675,12 @@ export class PaymentOrdersService {
     }
 
     // 2. Cargar external_account del proveedor (sin filtrar por user_id — pertenece al proveedor)
+    // El rail (ach/wire/etc.) se lee de `supplier.payment_rail`, no de `extAccount.payment_rail`:
+    // una misma external account puede estar compartida por dos proveedores (par ACH+Wire), cada
+    // uno con su propio rail correcto.
     const { data: extAccount } = await this.supabase
       .from('bridge_external_accounts')
-      .select(
-        'id, account_type, currency, bridge_external_account_id, payment_rail',
-      )
+      .select('id, account_type, currency, bridge_external_account_id')
       .eq('id', supplier.bridge_external_account_id)
       .eq('is_active', true)
       .single();
@@ -2690,7 +2691,7 @@ export class PaymentOrdersService {
       );
     }
 
-    if (!extAccount.payment_rail) {
+    if (!supplier.payment_rail) {
       throw new BadRequestException(
         'La cuenta bancaria del proveedor no tiene payment_rail configurado. ' +
           'Actualice los datos del proveedor antes de realizar el retiro.',
@@ -2833,17 +2834,17 @@ export class PaymentOrdersService {
       const idempotencyKey = `po_w2f_${order.id}`;
       const orderToken = order.id.slice(0, 8).toUpperCase();
       const railRef: Record<string, string> = {};
-      if (extAccount.payment_rail === 'sepa') {
+      if (supplier.payment_rail === 'sepa') {
         railRef.sepa_reference = `Guira ${orderToken}`;
-      } else if (extAccount.payment_rail === 'wire') {
+      } else if (supplier.payment_rail === 'wire') {
         railRef.wire_message = `Guira ${orderToken}`;
-      } else if (extAccount.payment_rail === 'ach') {
+      } else if (supplier.payment_rail === 'ach') {
         railRef.ach_reference = 'GUIRA';
-      } else if (extAccount.payment_rail === 'spei') {
+      } else if (supplier.payment_rail === 'spei') {
         railRef.spei_reference = `Guira ${orderToken}`;
-      } else if (extAccount.payment_rail === 'faster_payments') {
+      } else if (supplier.payment_rail === 'faster_payments') {
         railRef.reference = orderToken;
-      } else if (extAccount.payment_rail === 'pix') {
+      } else if (supplier.payment_rail === 'pix') {
         railRef.reference = `Guira ${orderToken}`;
       }
 
@@ -2857,7 +2858,7 @@ export class PaymentOrdersService {
             bridge_wallet_id: wallet.provider_wallet_id,
           },
           destination: {
-            payment_rail: extAccount.payment_rail,
+            payment_rail: supplier.payment_rail,
             currency: (extAccount.currency ?? 'usd').toLowerCase(),
             external_account_id: extAccount.bridge_external_account_id,
             ...railRef,
@@ -2887,7 +2888,7 @@ export class PaymentOrdersService {
           bridge_transfer_id: transferId,
           source_payment_rail: 'bridge_wallet',
           source_currency: sourceCurrency.toLowerCase(),
-          destination_payment_rail: extAccount.payment_rail,
+          destination_payment_rail: supplier.payment_rail,
           destination_currency: (extAccount.currency ?? 'usd').toLowerCase(),
           amount: dto.amount,
           developer_fee_amount: fee_amount,
@@ -2980,7 +2981,7 @@ export class PaymentOrdersService {
     // 1. Validar proveedor: debe pertenecer al usuario y tener bridge_external_account_id
     const { data: supplier } = await this.supabase
       .from('suppliers')
-      .select('id, name, bridge_external_account_id')
+      .select('id, name, bridge_external_account_id, payment_rail')
       .eq('id', dto.supplier_id)
       .eq('user_id', userId)
       .single();
@@ -2994,9 +2995,11 @@ export class PaymentOrdersService {
     // 2. Cargar datos de la external_account del proveedor en Bridge
     // FIX #1: No filtrar por user_id — la cuenta bancaria pertenece al PROVEEDOR (supplier),
     // no al usuario que realiza la transferencia. El supplier ya fue validado como del usuario.
+    // El rail se lee de `supplier.payment_rail`, no de `extAccount.payment_rail`: una misma
+    // external account puede estar compartida por dos proveedores (par ACH+Wire).
     const { data: extAccount } = await this.supabase
       .from('bridge_external_accounts')
-      .select('id, bridge_external_account_id, payment_rail, currency')
+      .select('id, bridge_external_account_id, currency')
       .eq('id', supplier.bridge_external_account_id)
       .eq('is_active', true)
       .single();
@@ -3007,7 +3010,7 @@ export class PaymentOrdersService {
       );
     }
 
-    if (!extAccount.payment_rail) {
+    if (!supplier.payment_rail) {
       throw new BadRequestException(
         'La cuenta bancaria del proveedor no tiene payment_rail configurado. ' +
           'Actualice los datos del proveedor antes de realizar el retiro.',
@@ -3101,7 +3104,7 @@ export class PaymentOrdersService {
             from_address: dto.source_address,
           },
           destination: {
-            payment_rail: extAccount.payment_rail,
+            payment_rail: supplier.payment_rail,
             currency: (extAccount.currency ?? 'usd').toLowerCase(),
             external_account_id: extAccount.bridge_external_account_id,
           },
@@ -3134,7 +3137,7 @@ export class PaymentOrdersService {
           bridge_transfer_id: transferId,
           source_payment_rail: dto.source_network.toLowerCase(),
           source_currency: sourceCurrency.toLowerCase(),
-          destination_payment_rail: extAccount.payment_rail,
+          destination_payment_rail: supplier.payment_rail,
           destination_currency: (extAccount.currency ?? 'usd').toLowerCase(),
           amount: dto.amount,
           developer_fee_amount: fee_amount,

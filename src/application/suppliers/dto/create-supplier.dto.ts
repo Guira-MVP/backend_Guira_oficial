@@ -99,9 +99,14 @@ export class CreateSupplierDto {
 
   @ApiProperty({
     example: 'spei',
+    description:
+      '"ach_wire" es un valor especial: crea un proveedor con AMBOS rails (ACH y Wire) ' +
+      'compartiendo la misma cuenta bancaria de EE.UU., generando dos liquidation addresses. ' +
+      'Nunca se persiste tal cual — las filas guardadas siempre quedan como "ach" o "wire".',
     enum: [
       'ach',
       'wire',
+      'ach_wire',
       'sepa',
       'spei',
       'pix',
@@ -114,6 +119,7 @@ export class CreateSupplierDto {
   @IsIn([
     'ach',
     'wire',
+    'ach_wire',
     'sepa',
     'spei',
     'pix',
@@ -143,7 +149,7 @@ export class CreateSupplierDto {
 
   // ── ACH / Wire ──
   @ApiPropertyOptional({ example: '1210002481111' })
-  @ValidateIf(o => ['ach', 'wire', 'co_bank_transfer', 'faster_payments'].includes(o.payment_rail))
+  @ValidateIf(o => ['ach', 'wire', 'ach_wire', 'co_bank_transfer', 'faster_payments'].includes(o.payment_rail))
   @IsNotEmpty()
   @IsString()
   account_number?: string;
@@ -344,9 +350,32 @@ export class UpdateSupplierDto {
   @IsString()
   currency?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: '"ach_wire" no es válido aquí — un proveedor existente no puede convertirse a un par combinado.',
+    enum: [
+      'ach',
+      'wire',
+      'sepa',
+      'spei',
+      'pix',
+      'bre_b',
+      'faster_payments',
+      'co_bank_transfer',
+      'crypto',
+    ],
+  })
   @IsOptional()
-  @IsString()
+  @IsIn([
+    'ach',
+    'wire',
+    'sepa',
+    'spei',
+    'pix',
+    'bre_b',
+    'faster_payments',
+    'co_bank_transfer',
+    'crypto',
+  ])
   payment_rail?: string;
 
   @ApiPropertyOptional()
