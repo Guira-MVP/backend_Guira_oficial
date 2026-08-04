@@ -75,6 +75,7 @@ export class FeesService {
       .from('fees_config')
       .insert({
         ...feeFields,
+        payment_rail: feeFields.payment_rail.toLowerCase(),
         is_active: true,
       })
       .select()
@@ -229,6 +230,10 @@ export class FeesService {
     actorId: string,
     actorRole: string,
   ) {
+    // Normalizar payment_rail/currency a minúsculas para consistencia con fees_config
+    const normalizedPaymentRail = dto.payment_rail?.toLowerCase();
+    const normalizedCurrency = dto.currency?.toLowerCase();
+
     // Validar que no exista un override activo duplicado para la misma
     // combinación user + operation + rail + currency
     const { data: conflict } = await this.supabase
@@ -236,8 +241,8 @@ export class FeesService {
       .select('id')
       .eq('user_id', dto.user_id)
       .eq('operation_type', dto.operation_type)
-      .eq('payment_rail', dto.payment_rail)
-      .eq('currency', dto.currency.toLowerCase())
+      .eq('payment_rail', normalizedPaymentRail)
+      .eq('currency', normalizedCurrency)
       .eq('is_active', true)
       .maybeSingle();
 
@@ -250,13 +255,11 @@ export class FeesService {
     // D4 Fix: Asegurar que valid_from siempre tenga un valor
     const today = new Date().toISOString().split('T')[0];
 
-    // D6 Fix: Normalizar currency a minúsculas para consistencia con fees_config
-    const normalizedCurrency = dto.currency?.toLowerCase();
-
     const { data, error } = await this.supabase
       .from('customer_fee_overrides')
       .insert({
         ...dto,
+        payment_rail: normalizedPaymentRail,
         currency: normalizedCurrency,
         valid_from: dto.valid_from ?? today,
         is_active: true,
@@ -432,13 +435,14 @@ export class FeesService {
   }> {
     const today = new Date().toISOString().split('T')[0];
     const normalizedCurrency = currency.toLowerCase();
+    const normalizedPaymentRail = paymentRail.toLowerCase();
 
     const { data: override } = await this.supabase
       .from('customer_fee_overrides')
       .select('*')
       .eq('user_id', userId)
       .eq('operation_type', operationType)
-      .eq('payment_rail', paymentRail)
+      .eq('payment_rail', normalizedPaymentRail)
       .eq('currency', normalizedCurrency)
       .eq('is_active', true)
       .or(`valid_from.is.null,valid_from.lte.${today}`)
@@ -453,7 +457,7 @@ export class FeesService {
         .from('fees_config')
         .select('*')
         .eq('operation_type', operationType)
-        .eq('payment_rail', paymentRail)
+        .eq('payment_rail', normalizedPaymentRail)
         .eq('currency', normalizedCurrency)
         .eq('is_active', true)
         .maybeSingle();
@@ -521,13 +525,14 @@ export class FeesService {
   ): Promise<string> {
     const today = new Date().toISOString().split('T')[0];
     const normalizedCurrency = currency.toLowerCase();
+    const normalizedPaymentRail = paymentRail.toLowerCase();
 
     const { data: override } = await this.supabase
       .from('customer_fee_overrides')
       .select('fee_percent')
       .eq('user_id', userId)
       .eq('operation_type', operationType)
-      .eq('payment_rail', paymentRail)
+      .eq('payment_rail', normalizedPaymentRail)
       .eq('currency', normalizedCurrency)
       .eq('is_active', true)
       .or(`valid_from.is.null,valid_from.lte.${today}`)
@@ -542,7 +547,7 @@ export class FeesService {
       .from('fees_config')
       .select('fee_percent')
       .eq('operation_type', operationType)
-      .eq('payment_rail', paymentRail)
+      .eq('payment_rail', normalizedPaymentRail)
       .eq('currency', normalizedCurrency)
       .eq('is_active', true)
       .maybeSingle();
@@ -563,6 +568,7 @@ export class FeesService {
   ): Promise<{ fee_amount: number; net_amount: number }> {
     const today = new Date().toISOString().split('T')[0];
     const normalizedCurrency = currency.toLowerCase();
+    const normalizedPaymentRail = paymentRail.toLowerCase();
 
     // 1. Buscar override del cliente para esta divisa específica
     const { data: override } = await this.supabase
@@ -570,7 +576,7 @@ export class FeesService {
       .select('*')
       .eq('user_id', userId)
       .eq('operation_type', operationType)
-      .eq('payment_rail', paymentRail)
+      .eq('payment_rail', normalizedPaymentRail)
       .eq('currency', normalizedCurrency)
       .eq('is_active', true)
       .or(`valid_from.is.null,valid_from.lte.${today}`)
@@ -584,7 +590,7 @@ export class FeesService {
         .from('fees_config')
         .select('*')
         .eq('operation_type', operationType)
-        .eq('payment_rail', paymentRail)
+        .eq('payment_rail', normalizedPaymentRail)
         .eq('currency', normalizedCurrency)
         .eq('is_active', true)
         .maybeSingle();
@@ -652,12 +658,17 @@ export class FeesService {
     // 2. Obtener overrides existentes para este usuario y operación
     const { data: existing } = await this.supabase
       .from('customer_fee_overrides')
-      .select('currency')
+      .select('currency, payment_rail')
       .eq('user_id', userId)
       .eq('operation_type', operationType);
 
-    const existingCurrencies = new Set(
-      (existing ?? []).map((e) => (e.currency as string).toLowerCase()),
+    // Clave compuesta currency|payment_rail: un mismo operation_type puede tener
+    // varios rails para la misma divisa (ej. COP vía bre_b y co_bank_transfer),
+    // cada combinación necesita su propio override independiente.
+    const existingKeys = new Set(
+      (existing ?? []).map(
+        (e) => `${(e.currency as string).toLowerCase()}|${(e.payment_rail as string).toLowerCase()}`,
+      ),
     );
 
     const today = new Date().toISOString().split('T')[0];
@@ -666,14 +677,15 @@ export class FeesService {
     // 3. Crear solo las que no existen
     for (const feeRow of feeRows) {
       const cur = (feeRow.currency as string).toLowerCase();
-      if (existingCurrencies.has(cur)) continue;
+      const rail = (feeRow.payment_rail as string).toLowerCase();
+      if (existingKeys.has(`${cur}|${rail}`)) continue;
 
       const { error: insertErr } = await this.supabase
         .from('customer_fee_overrides')
         .insert({
           user_id:        userId,
           operation_type: operationType,
-          payment_rail:   feeRow.payment_rail,
+          payment_rail:   rail,
           currency:       cur,
           fee_type:       'percent',
           fee_percent:    0,
@@ -688,7 +700,7 @@ export class FeesService {
 
       if (insertErr) {
         this.logger.warn(
-          `[initOperationOverrides] No se pudo crear override para ${operationType}/${cur}: ${insertErr.message}`,
+          `[initOperationOverrides] No se pudo crear override para ${operationType}/${rail}/${cur}: ${insertErr.message}`,
         );
         continue;
       }

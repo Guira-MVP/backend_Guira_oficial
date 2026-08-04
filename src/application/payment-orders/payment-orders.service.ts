@@ -2714,11 +2714,15 @@ export class PaymentOrdersService {
     // Verificar saldo del token específico
     const sourceCurrency = (dto.source_currency ?? 'usdc').toUpperCase();
 
+    // Comisión indexada por RIEL/DIVISA DE DESTINO (no por el token de origen):
+    // ACH y Wire (o cualquier otro riel) pueden tener comisiones distintas aunque
+    // el cliente retire el mismo token.
+    const destCurrency = (extAccount.currency ?? 'USD').toUpperCase();
     const { fee_amount, net_amount } = await this.feesService.calculateFee(
       userId,
       'ramp_off_fiat_us',
-      'bridge',
-      sourceCurrency,
+      supplier.payment_rail,
+      destCurrency,
       dto.amount,
     );
     const { data: balance } = await this.supabase
@@ -2744,7 +2748,6 @@ export class PaymentOrdersService {
 
     // Validar que el rate congelado no difiera >3% del rate live (solo para destinos no-USD).
     // Protege contra rates obsoletos si el cliente tardó horas en confirmar en el paso review.
-    const destCurrency = (extAccount.currency ?? 'USD').toUpperCase();
     if (
       destCurrency !== 'USD' &&
       dto.exchange_rate_applied &&

@@ -11,6 +11,7 @@ import {
   Min,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { FEE_PAYMENT_RAILS } from '../../../common/constants/fiat-rail-catalog.constants';
 
 export class InitOperationOverridesDto {
   @ApiProperty({ description: 'ID del usuario al que se inicializan los overrides' })
@@ -168,8 +169,8 @@ export class CreateFeeOverrideDto {
   ])
   operation_type: string;
 
-  @ApiProperty({ example: 'psav', enum: ['psav', 'bridge'] })
-  @IsIn(['psav', 'bridge'])
+  @ApiProperty({ example: 'psav', enum: FEE_PAYMENT_RAILS })
+  @IsIn(FEE_PAYMENT_RAILS)
   payment_rail: string;
 
   @ApiProperty({

@@ -14,18 +14,7 @@ import {
   UpdateSupplierDto,
 } from './dto/create-supplier.dto';
 import { BridgeService } from '../bridge/bridge.service';
-
-const FIAT_RAIL_TO_CURRENCY: Record<string, string> = {
-  ach: 'usd',
-  wire: 'usd',
-  ach_wire: 'usd',
-  sepa: 'eur',
-  spei: 'mxn',
-  pix: 'brl',
-  bre_b: 'cop',
-  co_bank_transfer: 'cop',
-  faster_payments: 'gbp',
-};
+import { FIAT_RAIL_TO_CURRENCY } from '../../common/constants/fiat-rail-catalog.constants';
 
 @Injectable()
 export class SuppliersService {
