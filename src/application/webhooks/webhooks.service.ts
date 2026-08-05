@@ -2656,8 +2656,11 @@ export class WebhooksService {
           });
         }
 
-        // Comprobante PSAV — generado automáticamente al completar fiat_bo_to_bridge_wallet (fire-and-forget)
-        if (paymentOrder.flow_type === 'fiat_bo_to_bridge_wallet') {
+        // Comprobante PSAV — generado automáticamente al completar (fire-and-forget).
+        // fiat_bo_to_bridge_wallet: fondeo de wallet. bolivia_to_world: solo cuando se
+        // completó vía Bridge Transfer (comisión mixta/fija) — el camino LA/drain
+        // (comisión porcentual) ya lo dispara aparte en completeDrainOrder().
+        if (['fiat_bo_to_bridge_wallet', 'bolivia_to_world'].includes(paymentOrder.flow_type ?? '')) {
           void this.paymentOrdersService.storePsavReceiptOnCompletion(paymentOrder.id);
         }
 

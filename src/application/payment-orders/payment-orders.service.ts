@@ -558,62 +558,11 @@ export class PaymentOrdersService {
     );
 
     // Obtener el número completo del JSON bank_details en la tabla 'suppliers'
-    // y validar que el proveedor tenga una liquidation address configurada
     const { data: supplier } = await this.supabase
       .from('suppliers')
-      .select('bank_details, bridge_liquidation_address_id')
+      .select('bank_details, bridge_liquidation_address_id, payment_rail')
       .eq('bridge_external_account_id', dto.external_account_id)
       .single();
-
-    if (!supplier?.bridge_liquidation_address_id) {
-      throw new BadRequestException(
-        'El proveedor seleccionado no tiene una liquidation address configurada en Bridge. ' +
-          'Contacte al administrador para configurarla antes de crear la orden.',
-      );
-    }
-
-    const { data: liquidationAddressForFee } = await this.supabase
-      .from('bridge_liquidation_addresses')
-      .select('bridge_liquidation_address_id, developer_fee_percent')
-      .eq('user_id', userId)
-      .eq(
-        'bridge_liquidation_address_id',
-        supplier.bridge_liquidation_address_id,
-      )
-      .single();
-
-    if (!liquidationAddressForFee) {
-      throw new BadRequestException(
-        `Liquidation address "${supplier.bridge_liquidation_address_id}" no encontrada en la base de datos.`,
-      );
-    }
-
-    const liquidationFeePercent = this.parseLiquidationFeePercent(
-      liquidationAddressForFee.developer_fee_percent,
-      liquidationAddressForFee.bridge_liquidation_address_id,
-    );
-
-    const fullAccountNumber =
-      supplier?.bank_details?.account_number ??
-      extAccount.account_last_4 ??
-      extAccount.iban ??
-      extAccount.swift_bic;
-
-    // Obtener canal PSAV del usuario para depósito en BOB
-    const psavAccount = await this.psavService.getDepositAccountForUser(
-      userId,
-      'bank_bo',
-      'BOB',
-    );
-    const depositInstructions =
-      this.psavService.formatDepositInstructions(psavAccount);
-
-    // El fee de este flujo debe respetar el porcentaje congelado en la
-    // liquidation address, no el fees_config global actual.
-    const { fee_amount, net_amount } = this.calculateFeeFromLiquidationAddress(
-      dto.amount!,
-      liquidationFeePercent,
-    );
 
     // Obtener tipo de cambio para la divisa destino real (BOB_EUR, BOB_USD, BOB_MXN…).
     // USDC/USDT se anclan a USD. Fallback a BOB_USD si el par aún no está configurado.
@@ -630,6 +579,95 @@ export class PaymentOrdersService {
         ? dto.exchange_rate_applied
         : rateData.effective_rate;
 
+    // Resolver si el riel del proveedor tiene una comisión mixta/fija configurada
+    // (Bridge Transfer, ej. Wire con recargo fijo) o porcentual pura (Liquidation
+    // Address, flujo de siempre) — la rama se decide por fee_type, no por el riel.
+    const feeConfigRow = supplier?.payment_rail
+      ? await this.feesService.getFeeConfigRow(
+          userId,
+          'interbank_bo_out',
+          supplier.payment_rail,
+          destinationCurrency,
+        )
+      : null;
+    const usesBridgeTransfer =
+      feeConfigRow?.fee_type === 'mixed' || feeConfigRow?.fee_type === 'fixed';
+
+    let fee_amount: number;
+    let net_amount: number;
+    let liquidationFeePercent: number | null = null;
+    let liquidationAddressId: string | null = null;
+
+    if (usesBridgeTransfer) {
+      // Comisión mixta/fija: no se exige Liquidation Address — solo external_account.
+      // El % + fijo se calculan en USD (calculateFee no conoce BOB) y se reconvierten
+      // a BOB para mantener la convención de columnas-en-BOB de esta tabla.
+      const grossUsd = dto.amount! / appliedRate;
+      const { fee_amount: feeAmountUsd, net_amount: netAmountUsd } =
+        await this.feesService.calculateFee(
+          userId,
+          'interbank_bo_out',
+          supplier!.payment_rail,
+          destinationCurrency,
+          grossUsd,
+        );
+      fee_amount = parseFloat((feeAmountUsd * appliedRate).toFixed(2));
+      net_amount = parseFloat((netAmountUsd * appliedRate).toFixed(2));
+      liquidationFeePercent = feeConfigRow!.fee_percent;
+    } else {
+      // Comisión porcentual pura: flujo de siempre vía Liquidation Address.
+      if (!supplier?.bridge_liquidation_address_id) {
+        throw new BadRequestException(
+          'El proveedor seleccionado no tiene una liquidation address configurada en Bridge. ' +
+            'Contacte al administrador para configurarla antes de crear la orden.',
+        );
+      }
+
+      const { data: liquidationAddressForFee } = await this.supabase
+        .from('bridge_liquidation_addresses')
+        .select('bridge_liquidation_address_id, developer_fee_percent')
+        .eq('user_id', userId)
+        .eq(
+          'bridge_liquidation_address_id',
+          supplier.bridge_liquidation_address_id,
+        )
+        .single();
+
+      if (!liquidationAddressForFee) {
+        throw new BadRequestException(
+          `Liquidation address "${supplier.bridge_liquidation_address_id}" no encontrada en la base de datos.`,
+        );
+      }
+
+      liquidationFeePercent = this.parseLiquidationFeePercent(
+        liquidationAddressForFee.developer_fee_percent,
+        liquidationAddressForFee.bridge_liquidation_address_id,
+      );
+      liquidationAddressId = liquidationAddressForFee.bridge_liquidation_address_id;
+
+      // El fee de este flujo debe respetar el porcentaje congelado en la
+      // liquidation address, no el fees_config global actual.
+      ({ fee_amount, net_amount } = this.calculateFeeFromLiquidationAddress(
+        dto.amount!,
+        liquidationFeePercent,
+      ));
+    }
+
+    const fullAccountNumber =
+      supplier?.bank_details?.account_number ??
+      extAccount.account_last_4 ??
+      extAccount.iban ??
+      extAccount.swift_bic;
+
+    // Obtener canal PSAV del usuario para depósito en BOB
+    const psavAccount = await this.psavService.getDepositAccountForUser(
+      userId,
+      'bank_bo',
+      'BOB',
+    );
+    const depositInstructions =
+      this.psavService.formatDepositInstructions(psavAccount);
+
     // Crear orden
     const { data: order, error } = await this.supabase
       .from('payment_orders')
@@ -642,9 +680,8 @@ export class PaymentOrdersService {
         currency: 'BOB',
         fee_amount,
         net_amount,
-        fee_source: 'liquidation_address',
-        bridge_liquidation_address_id:
-          liquidationAddressForFee.bridge_liquidation_address_id,
+        fee_source: usesBridgeTransfer ? 'bridge_transfer' : 'liquidation_address',
+        bridge_liquidation_address_id: liquidationAddressId,
         bridge_liquidation_fee_percent: liquidationFeePercent,
         destination_type: 'external_account',
         destination_currency: destinationCurrency,
@@ -3960,84 +3997,213 @@ export class PaymentOrdersService {
       reference_id: orderId,
     });
 
-    // ── Bolivia-to-World: flujo asistido por staff via liquidation address ──
-    // NO se crea Bridge Transfer automáticamente. El staff depositará USDC manualmente
-    // en la liquidation address del proveedor y el webhook drain confirmará el expediente.
+    // ── Bolivia-to-World: flujo asistido por staff ──
+    // Comisión porcentual (fee_source='liquidation_address'): NO se crea Bridge Transfer
+    // automáticamente. El staff depositará USDC manualmente en la liquidation address del
+    // proveedor y el webhook drain confirmará el expediente.
+    // Comisión mixta/fija (fee_source='bridge_transfer'): se crea el Transfer aquí mismo,
+    // recién al aprobar — Bridge genera una dirección de depósito fresca por-transferencia.
     if (order.flow_type === 'bolivia_to_world') {
-      // 1. Cargar supplier y su bridge_liquidation_address_id
       if (!order.supplier_id) {
         throw new BadRequestException(
-          'La orden bolivia_to_world no tiene supplier_id asignado. No se puede resolver la liquidation address.',
+          'La orden bolivia_to_world no tiene supplier_id asignado. No se puede resolver el proveedor.',
         );
       }
 
       const { data: supplier } = await this.supabase
         .from('suppliers')
-        .select('id, name, bridge_liquidation_address_id')
+        .select('id, name, bridge_liquidation_address_id, payment_rail')
         .eq('id', order.supplier_id)
         .single();
 
-      if (!supplier?.bridge_liquidation_address_id) {
-        throw new BadRequestException(
-          `El proveedor "${supplier?.name ?? order.supplier_id}" no tiene liquidation address configurada en Bridge.`,
+      if (order.fee_source === 'bridge_transfer') {
+        // ── Rama nueva: comisión mixta/fija vía Bridge Transfer ──
+        const { data: profile } = await this.supabase
+          .from('profiles')
+          .select('bridge_customer_id')
+          .eq('id', order.user_id)
+          .single();
+
+        if (!profile?.bridge_customer_id) {
+          throw new BadRequestException(
+            'El usuario no tiene un bridge_customer_id configurado. Por favor, completa el registro.',
+          );
+        }
+
+        const { data: extAccount } = await this.supabase
+          .from('bridge_external_accounts')
+          .select('bridge_external_account_id')
+          .eq('id', order.external_account_id)
+          .single();
+
+        if (!extAccount?.bridge_external_account_id) {
+          throw new NotFoundException(
+            'Cuenta externa de destino no encontrada en Bridge.',
+          );
+        }
+
+        const grossUsd = amountToDeposit as number;
+        const developerFeeUsd = parseFloat(
+          (parseFloat(order.fee_amount) / (exchangeRate as number)).toFixed(2),
+        );
+        const idempotencyKey = `po_b2w_${order.id}`;
+        const orderToken = order.id.slice(0, 8).toUpperCase();
+
+        // El Transfer se crea recién aquí, al aprobar. Si falla, revertir la orden a
+        // 'deposit_received' (no dejarla varada en 'processing' sin bridge_transfer_id) —
+        // reintentar la aprobación es seguro gracias a la Idempotency-Key.
+        try {
+          const bridgeResult = await this.bridgeApi.post<Record<string, unknown>>(
+            '/v0/transfers',
+            {
+              on_behalf_of: profile.bridge_customer_id,
+              source: { payment_rail: 'solana', currency: 'usdc' },
+              destination: {
+                payment_rail: supplier!.payment_rail,
+                currency: order.destination_currency,
+                external_account_id: extAccount.bridge_external_account_id,
+                ...(supplier!.payment_rail === 'wire'
+                  ? { wire_message: `Guira ${orderToken}` }
+                  : {}),
+              },
+              amount: grossUsd.toFixed(2),
+              developer_fee: developerFeeUsd.toFixed(2),
+              client_reference_id: order.id,
+            },
+            idempotencyKey,
+          );
+
+          const transferId = (bridgeResult?.id ?? null) as string | null;
+          const sourceDepositInstructions = bridgeResult?.source_deposit_instructions as
+            | Record<string, unknown>
+            | undefined;
+
+          const transferInstructions = {
+            type: 'bridge_transfer',
+            bridge_transfer_id: transferId,
+            to_address: sourceDepositInstructions?.to_address ?? null,
+            chain: 'solana',
+            currency: 'usdc',
+            payment_rail: 'solana',
+            destination_payment_rail: supplier!.payment_rail,
+            destination_currency: order.destination_currency,
+            destination_external_account_id: extAccount.bridge_external_account_id,
+            developer_fee_percent: order.bridge_liquidation_fee_percent,
+            developer_fee_usd: developerFeeUsd,
+            fee_source: 'bridge_transfer',
+            supplier_name: supplier?.name,
+            amount_to_deposit: grossUsd,
+          };
+
+          await this.supabase
+            .from('payment_orders')
+            .update({
+              bridge_transfer_id: transferId,
+              bridge_source_deposit_instructions: transferInstructions,
+            })
+            .eq('id', orderId);
+
+          const netAmountUsd = parseFloat((grossUsd - developerFeeUsd).toFixed(2));
+          await this.supabase.from('bridge_transfers').insert({
+            user_id: order.user_id,
+            bridge_transfer_id: transferId,
+            source_payment_rail: 'solana',
+            source_currency: 'usdc',
+            destination_payment_rail: supplier!.payment_rail,
+            destination_currency: (order.destination_currency ?? 'usd').toLowerCase(),
+            amount: grossUsd,
+            developer_fee_amount: developerFeeUsd,
+            net_amount: netAmountUsd,
+            status: 'pending',
+            bridge_state: (bridgeResult?.state as string) ?? 'awaiting_funds',
+            bridge_raw_response: bridgeResult,
+          });
+
+          updated.bridge_transfer_id = transferId;
+          updated.bridge_source_deposit_instructions = transferInstructions;
+
+          this.logger.log(
+            `📋 Orden bolivia_to_world ${orderId} en processing (bridge_transfer) — staff debe depositar ` +
+              `${grossUsd} usdc en ${transferInstructions.to_address ?? 'N/A'} ` +
+              `(riel destino: ${supplier!.payment_rail}, proveedor: ${supplier?.name})`,
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          await this.supabase
+            .from('payment_orders')
+            .update({ status: 'deposit_received' })
+            .eq('id', orderId);
+          this.logger.error(
+            `❌ Falló la creación del Bridge Transfer para la orden ${orderId}: ${message}. ` +
+              `Orden revertida a 'deposit_received' — reintentar la aprobación es seguro.`,
+          );
+          throw new BadRequestException(
+            `No se pudo crear la transferencia en Bridge: ${message}. La orden quedó disponible para reintentar la aprobación.`,
+          );
+        }
+      } else {
+        // ── Rama existente: comisión porcentual vía Liquidation Address ──
+        if (!supplier?.bridge_liquidation_address_id) {
+          throw new BadRequestException(
+            `El proveedor "${supplier?.name ?? order.supplier_id}" no tiene liquidation address configurada en Bridge.`,
+          );
+        }
+
+        const { data: liqAddr } = await this.supabase
+          .from('bridge_liquidation_addresses')
+          .select(
+            'id, bridge_liquidation_address_id, chain, currency, address, destination_payment_rail, destination_currency, destination_external_account_id, destination_address, developer_fee_percent',
+          )
+          .eq(
+            'bridge_liquidation_address_id',
+            supplier.bridge_liquidation_address_id,
+          )
+          .single();
+
+        if (!liqAddr) {
+          throw new BadRequestException(
+            `Liquidation address "${supplier.bridge_liquidation_address_id}" no encontrada en la base de datos.`,
+          );
+        }
+
+        // Persistir datos de liquidation como instrucciones de depósito para el staff
+        const liquidationInstructions = {
+          type: 'liquidation_address',
+          bridge_liquidation_address_id: liqAddr.bridge_liquidation_address_id,
+          to_address: liqAddr.address,
+          chain: liqAddr.chain,
+          currency: liqAddr.currency,
+          payment_rail: liqAddr.chain,
+          destination_payment_rail: liqAddr.destination_payment_rail,
+          destination_currency: liqAddr.destination_currency,
+          destination_external_account_id:
+            liqAddr.destination_external_account_id,
+          destination_address: liqAddr.destination_address,
+          developer_fee_percent: liqAddr.developer_fee_percent,
+          fee_source: 'liquidation_address',
+          supplier_name: supplier.name,
+          amount_to_deposit: amountToDeposit,
+        };
+
+        // Solo se persisten las instrucciones operativas de depósito. El fee
+        // (bridge_liquidation_fee_percent, fee_source) y el bridge_liquidation_address_id
+        // quedaron fijados al crear el expediente y NO se reescriben aquí.
+        await this.supabase
+          .from('payment_orders')
+          .update({
+            bridge_source_deposit_instructions: liquidationInstructions,
+          })
+          .eq('id', orderId);
+
+        // Propagar cambios al objeto que se retorna
+        updated.bridge_source_deposit_instructions = liquidationInstructions;
+
+        this.logger.log(
+          `📋 Orden bolivia_to_world ${orderId} en processing — staff debe depositar ` +
+            `${amountToDeposit ?? 'N/A'} ${liqAddr.currency} en liquidation address ${liqAddr.address} ` +
+            `(chain: ${liqAddr.chain}, proveedor: ${supplier.name})`,
         );
       }
-
-      // 2. Consultar bridge_liquidation_addresses para obtener datos de depósito
-      const { data: liqAddr } = await this.supabase
-        .from('bridge_liquidation_addresses')
-        .select(
-          'id, bridge_liquidation_address_id, chain, currency, address, destination_payment_rail, destination_currency, destination_external_account_id, destination_address, developer_fee_percent',
-        )
-        .eq(
-          'bridge_liquidation_address_id',
-          supplier.bridge_liquidation_address_id,
-        )
-        .single();
-
-      if (!liqAddr) {
-        throw new BadRequestException(
-          `Liquidation address "${supplier.bridge_liquidation_address_id}" no encontrada en la base de datos.`,
-        );
-      }
-
-      // 3. Persistir datos de liquidation como instrucciones de depósito para el staff
-      const liquidationInstructions = {
-        type: 'liquidation_address',
-        bridge_liquidation_address_id: liqAddr.bridge_liquidation_address_id,
-        to_address: liqAddr.address,
-        chain: liqAddr.chain,
-        currency: liqAddr.currency,
-        payment_rail: liqAddr.chain,
-        destination_payment_rail: liqAddr.destination_payment_rail,
-        destination_currency: liqAddr.destination_currency,
-        destination_external_account_id:
-          liqAddr.destination_external_account_id,
-        destination_address: liqAddr.destination_address,
-        developer_fee_percent: liqAddr.developer_fee_percent,
-        fee_source: 'liquidation_address',
-        supplier_name: supplier.name,
-        amount_to_deposit: amountToDeposit,
-      };
-
-      // Solo se persisten las instrucciones operativas de depósito. El fee
-      // (bridge_liquidation_fee_percent, fee_source) y el bridge_liquidation_address_id
-      // quedaron fijados al crear el expediente y NO se reescriben aquí.
-      await this.supabase
-        .from('payment_orders')
-        .update({
-          bridge_source_deposit_instructions: liquidationInstructions,
-        })
-        .eq('id', orderId);
-
-      // Propagar cambios al objeto que se retorna
-      updated.bridge_source_deposit_instructions = liquidationInstructions;
-
-      this.logger.log(
-        `📋 Orden bolivia_to_world ${orderId} en processing — staff debe depositar ` +
-          `${amountToDeposit ?? 'N/A'} ${liqAddr.currency} en liquidation address ${liqAddr.address} ` +
-          `(chain: ${liqAddr.chain}, proveedor: ${supplier.name})`,
-      );
     }
 
     // ── Bolivia-to-Wallet: flujo asistido por staff via liquidation address (crypto) ──

@@ -1345,12 +1345,16 @@ export class BridgeCustomerService {
         }
       }
 
-      // BUG4-FIX: Bridge requires image_front for government ID types
+      // BUG4-FIX: Bridge requires image_front for government ID types.
+      // Antes esto solo se logueaba como warning y el envío continuaba con
+      // un identifying_information incompleto — así fue como un UBO llegó
+      // a Bridge sin su documento de identidad (caso J.A.K. ENERGY GROUP,
+      // 2026-08-05). Se aborta el envío en vez de mandarlo a medias.
       if (!item.image_front) {
-        this.logger.warn(
-          `[buildIdentifyingInformation] image_front ausente para ${entity.id_type as string} ` +
+        throw new BadGatewayException(
+          `No se encontró el documento de identidad (image_front) para ${entity.id_type as string} ` +
           `(subject_type=${subjectType}, subject_id=${subjectId ?? 'none'}). ` +
-          `Bridge puede rechazar el payload sin imagen del documento.`,
+          `No se puede enviar a Bridge sin ese documento.`,
         );
       }
 

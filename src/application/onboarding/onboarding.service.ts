@@ -19,6 +19,7 @@ import { OrdersGateway } from '../orders/orders.gateway';
 import { AdminGateway } from '../admin/admin.gateway';
 import * as crypto from 'crypto';
 import type { MobileDocumentTargetDto } from './dto/create-mobile-token.dto';
+import { getRequiredIdentityDocTypes } from './document-requirements';
 
 const ALLOWED_MIME_TYPES = [
   'application/pdf',
@@ -522,6 +523,8 @@ export class OnboardingService {
       );
     }
 
+    let director: Record<string, unknown>;
+
     if (signers?.[0]) {
       const { data, error } = await this.supabase
         .from('business_directors')
@@ -532,17 +535,31 @@ export class OnboardingService {
         .single();
 
       if (error) throwDbError(error);
-      return data;
+      director = data;
+    } else {
+      const { data, error } = await this.supabase
+        .from('business_directors')
+        .insert({ ...dto, business_id: biz.id })
+        .select()
+        .single();
+
+      if (error) throwDbError(error);
+      director = data;
     }
 
-    const { data, error } = await this.supabase
-      .from('business_directors')
-      .insert({ ...dto, business_id: biz.id })
-      .select()
-      .single();
+    // El panel de subida por QR (Step 5) sube el documento del representante
+    // legal antes de que este registro exista, así que queda con
+    // subject_id=null. Al crear/actualizar el director, reclamamos esos
+    // documentos huérfanos para que buildIdentifyingInformation los encuentre.
+    await this.supabase
+      .from('documents')
+      .update({ subject_id: director.id })
+      .eq('user_id', userId)
+      .eq('subject_type', 'director')
+      .is('subject_id', null)
+      .eq('status', 'pending');
 
-    if (error) throwDbError(error);
-    return data;
+    return director;
   }
 
   /** Elimina un director de la empresa del usuario. */
@@ -674,6 +691,79 @@ export class OnboardingService {
   async getKybApplicationForClient(userId: string) {
     const app = await this.getKybApplication(userId);
     return this.sanitizeApplicationForClient(app);
+  }
+
+  /**
+   * Verifica que cada director y cada UBO no fusionado con un director
+   * tenga al menos un documento de identidad activo del tipo requerido por
+   * su id_type. Guardarraíl de backend: antes solo el frontend validaba
+   * esto, así que un documento perdido en DB (supersede cruzado, fallo de
+   * storage, o cualquier otra causa) podía llegar hasta Bridge sin que nada
+   * lo detuviera — como pasó con J.A.K. ENERGY GROUP el 2026-08-05.
+   */
+  async assertIdentityDocumentsComplete(businessId: string, userId: string) {
+    const { data: directors, error: dirError } = await this.supabase
+      .from('business_directors')
+      .select('id, id_type, first_name, last_name')
+      .eq('business_id', businessId);
+    if (dirError) throwDbError(dirError);
+
+    const { data: ubos, error: uboError } = await this.supabase
+      .from('business_ubos')
+      .select('id, id_type, first_name, last_name, director_id')
+      .eq('business_id', businessId);
+    if (uboError) throwDbError(uboError);
+
+    const subjects: {
+      subjectType: 'director' | 'ubo';
+      subjectId: string;
+      idType: string;
+      name: string;
+    }[] = [];
+
+    for (const director of directors ?? []) {
+      subjects.push({
+        subjectType: 'director',
+        subjectId: director.id,
+        idType: director.id_type,
+        name: `${director.first_name ?? ''} ${director.last_name ?? ''}`.trim(),
+      });
+    }
+    for (const ubo of ubos ?? []) {
+      // Los UBOs fusionados con el representante legal (director_id set) se
+      // validan a través de ese director — mismo criterio que usa
+      // buildAssociatedPersons para fusionarlos en un solo associated_person.
+      if (ubo.director_id) continue;
+      subjects.push({
+        subjectType: 'ubo',
+        subjectId: ubo.id,
+        idType: ubo.id_type,
+        name: `${ubo.first_name ?? ''} ${ubo.last_name ?? ''}`.trim(),
+      });
+    }
+
+    for (const subject of subjects) {
+      const requiredTypes = getRequiredIdentityDocTypes(subject.idType);
+      if (requiredTypes.length === 0) continue;
+
+      const { data: activeDocs, error } = await this.supabase
+        .from('documents')
+        .select('document_type')
+        .eq('user_id', userId)
+        .eq('subject_type', subject.subjectType)
+        .eq('subject_id', subject.subjectId)
+        .eq('status', 'pending')
+        .in('document_type', requiredTypes);
+      if (error) throwDbError(error);
+
+      const foundTypes = new Set((activeDocs ?? []).map((d) => d.document_type as string));
+      const missing = requiredTypes.filter((t) => !foundTypes.has(t));
+      if (missing.length > 0) {
+        throw new BadRequestException(
+          `${subject.name || 'Una persona registrada'} no tiene el documento de identidad completo (falta: ${missing.join(', ')}). Sube el documento antes de enviar a Bridge.`,
+        );
+      }
+    }
   }
 
   /** Envía el expediente KYB para revisión. */
@@ -810,6 +900,9 @@ export class OnboardingService {
         'Debes adjuntar al menos un documento de la empresa',
       );
     }
+
+    // Verificar que cada director/UBO tenga su documento de identidad activo
+    await this.assertIdentityDocumentsComplete(biz.id, userId);
 
     // Verificar ToS
     if (!app.tos_accepted_at) {
@@ -1020,7 +1113,7 @@ export class OnboardingService {
     let query = this.supabase
       .from('documents')
       .select(
-        'id, document_type, subject_type, file_name, mime_type, file_size_bytes, status, created_at',
+        'id, document_type, subject_type, subject_id, file_name, mime_type, file_size_bytes, status, created_at',
       )
       .eq('user_id', userId)
       .eq('status', 'pending') // Solo documentos activos (excluye superseded)

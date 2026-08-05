@@ -556,6 +556,59 @@ export class FeesService {
   }
 
   /**
+   * Retorna la fila de configuración de fee completa (fee_type/fee_percent/fee_fixed),
+   * considerando overrides del cliente → global. A diferencia de getFeePercent(), expone
+   * fee_type — necesario para decidir, ANTES de calcular nada, si una operación usa un
+   * mecanismo de comisión porcentual pura o mixta (fijo+%). Retorna null si no hay ninguna
+   * fila configurada (ni override ni global).
+   */
+  async getFeeConfigRow(
+    userId: string,
+    operationType: string,
+    paymentRail: string,
+    currency: string,
+  ): Promise<{
+    fee_type: 'percent' | 'fixed' | 'mixed';
+    fee_percent: number;
+    fee_fixed: number;
+  } | null> {
+    const today = new Date().toISOString().split('T')[0];
+    const normalizedCurrency = currency.toLowerCase();
+    const normalizedPaymentRail = paymentRail.toLowerCase();
+
+    const { data: override } = await this.supabase
+      .from('customer_fee_overrides')
+      .select('fee_type, fee_percent, fee_fixed')
+      .eq('user_id', userId)
+      .eq('operation_type', operationType)
+      .eq('payment_rail', normalizedPaymentRail)
+      .eq('currency', normalizedCurrency)
+      .eq('is_active', true)
+      .or(`valid_from.is.null,valid_from.lte.${today}`)
+      .or(`valid_until.is.null,valid_until.gte.${today}`)
+      .maybeSingle();
+
+    const row = override ?? (
+      await this.supabase
+        .from('fees_config')
+        .select('fee_type, fee_percent, fee_fixed')
+        .eq('operation_type', operationType)
+        .eq('payment_rail', normalizedPaymentRail)
+        .eq('currency', normalizedCurrency)
+        .eq('is_active', true)
+        .maybeSingle()
+    ).data;
+
+    if (!row) return null;
+
+    return {
+      fee_type: row.fee_type as 'percent' | 'fixed' | 'mixed',
+      fee_percent: parseFloat(row.fee_percent ?? '0'),
+      fee_fixed: parseFloat(row.fee_fixed ?? '0'),
+    };
+  }
+
+  /**
    * Calcula el fee para una operación, considerando overrides del cliente.
    * Retorna fee_amount y net_amount.
    */

@@ -10,6 +10,7 @@ import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
 import { throwDbError } from '../../core/utils/db-error.util';
 import { BridgeService } from '../bridge/bridge.service';
 import { BridgeCustomerService } from '../onboarding/bridge-customer.service';
+import { OnboardingService } from '../onboarding/onboarding.service';
 import { EmailService } from '../email/email.service';
 import { PsavService } from '../psav/psav.service';
 import { SetLimitsDto } from './dto/admin-compliance.dto';
@@ -24,6 +25,7 @@ export class ComplianceActionsService {
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly bridgeService: BridgeService,
     private readonly bridgeCustomerService: BridgeCustomerService,
+    private readonly onboardingService: OnboardingService,
     private readonly emailService: EmailService,
     private readonly psavService: PsavService,
     private readonly adminGateway: AdminGateway,
@@ -247,9 +249,14 @@ export class ComplianceActionsService {
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
+    // La clave incluye subject_type + subject_id: representante legal y cada
+    // UBO comparten user_id (quien sube es siempre el solicitante) y pueden
+    // compartir document_type (ej. varios con id_type='passport'), así que
+    // deduplicar solo por document_type colapsaba los documentos de distintas
+    // personas en uno solo, ocultando los de los UBOs en el panel de staff.
     const latestDocsMap = new Map<string, any>();
     for (const doc of docs ?? []) {
-      const typeKey = doc.document_type || doc.description || 'unknown_document';
+      const typeKey = `${doc.subject_type ?? 'self'}:${doc.subject_id ?? 'none'}:${doc.document_type || doc.description || 'unknown_document'}`;
       if (!latestDocsMap.has(typeKey)) latestDocsMap.set(typeKey, doc);
     }
 
@@ -350,6 +357,7 @@ export class ComplianceActionsService {
       legal_rep_state: director?.state,
 
       ubos: ubos.map((u: any) => ({
+        id: u.id,
         first_names: u.first_name,
         last_names: u.last_name,
         percentage: u.ownership_percent,
@@ -566,6 +574,17 @@ export class ComplianceActionsService {
       throw new BadRequestException(
         'El cliente no tiene bridge_customer_id. Use "Aprobar" para el primer envío.',
       );
+    }
+
+    if (review.subject_type === 'kyb_applications') {
+      const { data: business } = await this.supabase
+        .from('businesses')
+        .select('id')
+        .eq('user_id', userId)
+        .single();
+      if (business) {
+        await this.onboardingService.assertIdentityDocumentsComplete(business.id, userId);
+      }
     }
 
     await this.bridgeCustomerService.updateCustomerInBridge(userId, profile.bridge_customer_id);
