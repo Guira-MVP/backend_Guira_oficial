@@ -966,13 +966,20 @@ export class OnboardingService {
 
     // ── Soft-Delete: marcar documentos previos del mismo tipo como 'superseded' ──
     // Esto evita la acumulación de registros duplicados manteniendo historial de auditoría.
-    const { data: previousDocs } = await this.supabase
+    // Debe filtrar por subject_id: un mismo user_id puede tener varios UBOs/directores
+    // (subject_type='ubo'/'director') compartiendo document_type, y sin este filtro se
+    // supersedía por error el documento de una persona distinta.
+    let previousDocsQuery = this.supabase
       .from('documents')
       .select('id, storage_path')
       .eq('user_id', userId)
       .eq('document_type', documentType)
       .eq('subject_type', subjectType)
       .eq('status', 'pending');
+    previousDocsQuery = subjectId
+      ? previousDocsQuery.eq('subject_id', subjectId)
+      : previousDocsQuery.is('subject_id', null);
+    const { data: previousDocs } = await previousDocsQuery;
 
     if (previousDocs && previousDocs.length > 0) {
       const prevIds = previousDocs.map((d) => d.id);
