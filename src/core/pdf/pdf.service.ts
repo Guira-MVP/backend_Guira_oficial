@@ -1493,4 +1493,408 @@ export class PdfService {
       throw error;
     }
   }
+
+  // ═══════════════════════════════════════════════════════════
+  //  EXPEDIENTE DE ONBOARDING — Resumen para envío manual a
+  //  proveedores de onboarding (ej. Pythas). Las secciones y
+  //  etiquetas deben reflejar buildStructuredSections() en
+  //  frontend_guira_staff/features/staff/components/onboarding-detail-page.tsx
+  //  — si cambian los campos allí, actualizar también aquí.
+  // ═══════════════════════════════════════════════════════════
+
+  private readonly ONBOARDING_STATUS_LABELS: Record<string, string> = {
+    pending: 'Pendiente',
+    in_progress: 'En progreso',
+    kyc_started: 'KYC iniciado',
+    kyb_started: 'KYB iniciado',
+    kyc_submitted: 'KYC enviado',
+    kyb_submitted: 'KYB enviado',
+    in_review: 'En revisión',
+    pending_bridge: 'Pendiente Bridge',
+    kyc_issues: 'Con observaciones',
+    bridge_rejected: 'Rechazado por Bridge',
+    approved: 'Aprobado',
+    rejected: 'Rechazado',
+    suspended: 'Suspendido',
+  };
+
+  private readonly ONBOARDING_HIGH_RISK_LABELS: Record<string, string> = {
+    adult_entertainment: 'Entretenimiento para adultos',
+    gambling: 'Apuestas / Juegos de azar',
+    hold_client_funds: 'Custodia de fondos de clientes',
+    investment_services: 'Servicios de inversión',
+    lending_banking: 'Préstamos y banca',
+    marijuana_or_related_services: 'Cannabis / Marihuana',
+    money_services: 'Servicios de dinero (MSB)',
+    nicotine_tobacco_or_related_services: 'Tabaco / Nicotina',
+    operate_foreign_exchange_virtual_currencies_brokerage_otc: 'Exchange / OTC de divisas o criptomonedas',
+    pharmaceuticals: 'Farmacéutica / Medicamentos',
+    precious_metals_precious_stones_jewelry: 'Metales preciosos / Joyería',
+    safe_deposit_box_rentals: 'Alquiler de cajas de seguridad',
+    third_party_payment_processing: 'Procesamiento de pagos de terceros',
+    weapons_firearms_and_explosives: 'Armas de fuego y explosivos',
+    none_of_the_above: 'Ninguna de las anteriores',
+  };
+
+  private normalizeOnboardingObject(value: unknown): Record<string, any> {
+    return value && typeof value === 'object' ? (value as Record<string, any>) : {};
+  }
+
+  private obBool(value: unknown): string | null {
+    return value === true ? 'Sí' : value === false ? 'No' : null;
+  }
+
+  private obHighRisk(value: unknown): string | null {
+    if (!Array.isArray(value) || value.length === 0) return null;
+    const labels = value
+      .filter((item): item is string => typeof item === 'string' && item !== 'none_of_the_above')
+      .map((item) => this.ONBOARDING_HIGH_RISK_LABELS[item] ?? item);
+    return labels.length > 0 ? labels.join(', ') : null;
+  }
+
+  /** Espejo de buildStructuredSections() del frontend — mismas etiquetas en español. */
+  private buildOnboardingSections(
+    onboardingType: 'personal' | 'company',
+    data: Record<string, any>,
+  ): Array<{ title: string; rows: any[][] }> {
+    const r = (label: string, value: unknown): any[] | null => {
+      if (value === null || value === undefined) return null;
+      if (typeof value === 'string' && value.trim() === '') return null;
+      return this.row(label, this.toDisplay(value));
+    };
+    const compact = (rows: Array<any[] | null>) => rows.filter((row): row is any[] => row !== null);
+
+    if (onboardingType === 'company') {
+      const ubos = Array.isArray(data.ubos) ? data.ubos : [];
+      const sections: Array<{ title: string; rows: any[][] }> = [
+        {
+          title: 'Identidad societaria',
+          rows: compact([
+            r('Razón social', data.company_legal_name),
+            r('NIT / Tax ID', data.tax_id),
+            r('Tipo de entidad', data.entity_type),
+            r('Descripción de actividad', data.business_description),
+            r('Sitio web', data.business_website),
+            r('Correo de la empresa', data.email),
+            r('Teléfono de la empresa', data.business_phone),
+          ]),
+        },
+        {
+          title: 'Dirección legal y representante',
+          rows: compact([
+            r('Dirección legal', data.business_street),
+            r('Ciudad', data.business_city),
+            r('País', data.business_country),
+            r('Nombres representante', data.legal_rep_first_names),
+            r('Apellidos representante', data.legal_rep_last_names),
+            r('Estado / provincia representante', data.legal_rep_state),
+            r('Cargo', data.legal_rep_position),
+            r('Tipo de documento representante', data.legal_rep_id_type),
+            r('Documento representante', data.legal_rep_id_number),
+            r('Correo representante', data.legal_rep_email),
+            r('Nacionalidad representante', data.legal_rep_nationality),
+            r('Representante es PEP', this.obBool(data.legal_rep_is_pep)),
+          ]),
+        },
+        {
+          title: 'Perfil financiero',
+          rows: compact([
+            r('Propósito de la cuenta', data.purpose),
+            r('Origen de fondos', data.source_of_funds),
+            r('Volumen mensual estimado', data.estimated_monthly_volume),
+            r('Ingresos anuales estimados', data.estimated_annual_revenue_usd),
+            r('Presta servicios de dinero (MSB)', this.obBool(data.conducts_money_services)),
+            r('Actividades de alto riesgo', this.obHighRisk(data.high_risk_activities)),
+          ]),
+        },
+      ];
+
+      ubos.forEach((ubo: any, index: number) => {
+        const n = this.normalizeOnboardingObject(ubo);
+        const fullName = [n.first_names, n.last_names].filter(Boolean).join(' ').trim();
+        sections.push({
+          title: `Beneficiario final — UBO ${index + 1}`,
+          rows: compact([
+            r('Nombre completo', fullName || null),
+            r('Participación', n.percentage),
+            r('Nacionalidad', n.nationality),
+            r('Estado / provincia', n.state),
+            r('Tipo de documento', n.id_type),
+            r('Número de documento', n.id_number),
+            r('Correo', n.email),
+            r('Es PEP', this.obBool(n.is_pep)),
+            r('Control operacional', this.obBool(n.has_control)),
+            r('Cargo', n.position),
+          ]),
+        });
+      });
+
+      return sections;
+    }
+
+    return [
+      {
+        title: 'Identidad personal',
+        rows: compact([
+          r('Nombres', data.first_names),
+          r('Segundo nombre', data.middle_name),
+          r('Apellidos', data.last_names),
+          r('Fecha de nacimiento', data.dob),
+          r('Nacionalidad', data.nationality),
+          r('Tipo de documento', data.id_document_type),
+          r('Número de documento', data.id_number),
+          r('Vencimiento del documento', data.id_expiry),
+          r('Tax ID', data.tax_id),
+          r('Teléfono', data.phone),
+        ]),
+      },
+      {
+        title: 'Dirección declarada',
+        rows: compact([
+          r('Dirección', data.street),
+          r('Dirección adicional', data.street2),
+          r('Ciudad', data.city),
+          r('Estado / provincia', data.state_province),
+          r('País', data.country),
+          r('Código postal', data.postal_code),
+          r('País de residencia', data.country_of_residence),
+        ]),
+      },
+      {
+        title: 'Perfil financiero',
+        rows: compact([
+          r('Ocupación', data.occupation),
+          r('Estatus laboral', data.employment_status),
+          r('Propósito de la cuenta', data.purpose),
+          r('Propósito (especificación)', data.purpose_other),
+          r('Origen de fondos', data.source_of_funds),
+          r('Volumen mensual estimado', data.estimated_monthly_volume),
+          r('Es PEP', this.obBool(data.is_pep)),
+        ]),
+      },
+    ];
+  }
+
+  async generateOnboardingSummaryPdf(input: {
+    reviewId: string;
+    onboardingType: 'personal' | 'company';
+    status: string;
+    openedAt?: string | null;
+    closedAt?: string | null;
+    observations?: string | null;
+    bridgeCustomerId?: string | null;
+    displayName: string;
+    profileEmail?: string | null;
+    applicationData: Record<string, any>;
+    events: Array<{ decision?: string; reason?: string; created_at?: string }>;
+    documentsSummary: Array<{ ownerLabel: string; docTypeLabel: string; included: boolean }>;
+    generatedByLabel: string;
+  }): Promise<Buffer> {
+    try {
+      const logo = this.loadLogo();
+      const typeLabel = input.onboardingType === 'company' ? 'KYB EMPRESARIAL' : 'KYC INDIVIDUAL';
+      const statusLabel = this.ONBOARDING_STATUS_LABELS[input.status] ?? input.status;
+
+      const sectionHeader = (title: string, cols: number) => {
+        const cells: any[] = [{ text: title, style: 'sectionHeader', colSpan: cols }];
+        for (let i = 1; i < cols; i++) cells.push({});
+        return cells;
+      };
+
+      const borderedLayout = {
+        hLineWidth: () => 0.6,
+        vLineWidth: (i: number, node: any) => (i === 0 || i === node.table.widths.length ? 0.6 : 0),
+        hLineColor: () => COLORS.border,
+        vLineColor: () => COLORS.border,
+        paddingLeft: () => 10,
+        paddingRight: () => 10,
+        paddingTop: () => 6,
+        paddingBottom: () => 6,
+      };
+
+      const statusRows = this.filterNd([
+        this.row('Estado KYC/KYB', statusLabel),
+        this.row('Correo', this.toDisplay(input.profileEmail)),
+        this.row('Fecha de envío', input.openedAt ? this.fmtDate(input.openedAt) : 'N/D'),
+        this.row('Última actualización', input.closedAt ? this.fmtDate(input.closedAt) : 'N/D'),
+        this.row('Bridge customer ID', this.toDisplay(input.bridgeCustomerId)),
+        this.row('Observaciones del revisor', this.toDisplay(input.observations)),
+      ]);
+
+      const dataSections = this.buildOnboardingSections(input.onboardingType, input.applicationData);
+
+      const eventRows = input.events.length > 0
+        ? input.events.map((e) => [
+            { text: e.created_at ? this.fmtDate(e.created_at) : 'N/D', style: 'tLabel' },
+            { text: this.toDisplay(e.decision), style: 'tValue' },
+            { text: this.toDisplay(e.reason), style: 'tValue' },
+          ])
+        : [[{ text: 'Sin eventos registrados.', style: 'tLabel', colSpan: 3 }, {}, {}]];
+
+      const docRows = input.documentsSummary.length > 0
+        ? input.documentsSummary.map((d) => [
+            { text: d.ownerLabel, style: 'tLabel' },
+            { text: d.docTypeLabel, style: 'tValue' },
+            {
+              text: d.included ? 'Incluido en este paquete' : 'No disponible en Storage',
+              style: 'tValue',
+              color: d.included ? COLORS.success : COLORS.destructive,
+            },
+          ])
+        : [[{ text: 'No se encontraron documentos asociados.', style: 'tLabel', colSpan: 3 }, {}, {}]];
+
+      const content: any[] = [
+        // ═══ HEADER BAND ═══
+        {
+          table: {
+            widths: ['*'],
+            body: [[
+              {
+                columns: [
+                  { ...logo, margin: [0, 2, 0, 0] },
+                  {
+                    stack: [
+                      { text: 'EXPEDIENTE DE ONBOARDING', style: 'headerTitle' },
+                      { text: `${typeLabel} — ${input.displayName}`, style: 'headerSubtitle', margin: [0, 3, 0, 0] },
+                    ],
+                    alignment: 'right' as const,
+                  },
+                ],
+                fillColor: COLORS.navy,
+                margin: [20, 16, 20, 16],
+              },
+            ]],
+          },
+          layout: 'noBorders',
+          margin: [0, 0, 0, 0],
+        },
+        { canvas: [{ type: 'rect', x: 0, y: 0, w: 523, h: 3, color: COLORS.accent }], margin: [0, 0, 0, 14] },
+
+        // ═══ META ROW ═══
+        {
+          table: {
+            widths: ['33%', '34%', '33%'],
+            body: [[
+              { stack: [{ text: 'ID DE EXPEDIENTE', style: 'metaLabel' }, { text: input.reviewId, style: 'metaId' }], margin: [8, 6, 8, 6] },
+              { stack: [{ text: 'GENERADO EL', style: 'metaLabel' }, { text: this.fmtDate(new Date().toISOString()), style: 'metaValue', fontSize: 8 }], margin: [8, 6, 8, 6] },
+              { stack: [{ text: 'GENERADO POR', style: 'metaLabel' }, { text: input.generatedByLabel, style: 'metaValue', fontSize: 8 }], margin: [8, 6, 8, 6] },
+            ]],
+          },
+          layout: {
+            hLineWidth: () => 0.5,
+            vLineWidth: (i: number, node: any) => (i === 0 || i === node.table.widths.length ? 0.5 : 0.3),
+            hLineColor: () => COLORS.border,
+            vLineColor: () => COLORS.border,
+          },
+          margin: [0, 0, 0, 10],
+        },
+
+        {
+          text: 'Documento generado para envío manual a proveedores de onboarding (ej. Pythas). Contiene información sensible de KYC/KYB — manejar de forma confidencial.',
+          style: 'disclaimer',
+          margin: [0, 0, 0, 16],
+        },
+
+        // ═══ ESTADO DEL EXPEDIENTE ═══
+        {
+          table: { headerRows: 1, widths: ['30%', '70%'], body: [sectionHeader('ESTADO DEL EXPEDIENTE', 2), ...statusRows] },
+          layout: borderedLayout,
+          margin: [0, 0, 0, 14],
+        },
+
+        // ═══ SECCIONES DE DATOS (KYC / KYB) ═══
+        ...dataSections.map((section) => ({
+          table: { headerRows: 1, widths: ['30%', '70%'] as const, body: [sectionHeader(section.title.toUpperCase(), 2), ...section.rows] },
+          layout: borderedLayout,
+          margin: [0, 0, 0, 14] as [number, number, number, number],
+        })),
+
+        // ═══ HISTORIAL DE DECISIONES ═══
+        {
+          table: {
+            headerRows: 1,
+            widths: ['22%', '23%', '55%'],
+            body: [
+              [{ text: 'FECHA', style: 'sectionHeader' }, { text: 'DECISIÓN', style: 'sectionHeader' }, { text: 'MOTIVO', style: 'sectionHeader' }],
+              ...eventRows,
+            ],
+          },
+          layout: borderedLayout,
+          margin: [0, 0, 0, 14],
+        },
+
+        // ═══ DOCUMENTOS INCLUIDOS ═══
+        {
+          table: {
+            headerRows: 1,
+            widths: ['30%', '35%', '35%'],
+            body: [
+              [{ text: 'TITULAR', style: 'sectionHeader' }, { text: 'TIPO DE DOCUMENTO', style: 'sectionHeader' }, { text: 'ESTADO', style: 'sectionHeader' }],
+              ...docRows,
+            ],
+          },
+          layout: borderedLayout,
+          margin: [0, 0, 0, 20],
+        },
+
+        { canvas: [{ type: 'rect', x: 0, y: 0, w: 523, h: 2, color: COLORS.accent }], margin: [0, 0, 0, 12] },
+
+        {
+          text: [
+            { text: 'Aviso de confidencialidad: ', bold: true },
+            'Este documento contiene datos personales y sensibles de cumplimiento (KYC/KYB). Su uso está restringido a la validación de onboarding con proveedores autorizados de Guira. soporte@guiracorp.com',
+          ],
+          style: 'disclaimer',
+          alignment: 'justify' as const,
+        },
+      ];
+
+      const docDefinition: TDocumentDefinitions = {
+        pageSize: 'A4',
+        pageMargins: [36, 36, 36, 60],
+        defaultStyle: { font: 'Helvetica', fontSize: 9, color: COLORS.text },
+        content,
+
+        footer: (currentPage, pageCount) => ({
+          columns: [
+            {
+              stack: [
+                { text: 'Guira — Plataforma de Operaciones Interbancarias', style: 'footerBrand' },
+                { text: 'www.guiracorp.com  |  soporte@guiracorp.com', style: 'footerContact' },
+              ],
+              alignment: 'left' as const,
+            },
+            {
+              text: `Página ${currentPage} de ${pageCount}`,
+              style: 'footerPage',
+              alignment: 'right' as const,
+            },
+          ],
+          margin: [36, 0, 36, 0],
+        }),
+
+        styles: {
+          brandFallback: { fontSize: 20, bold: true, color: COLORS.white },
+          headerTitle: { fontSize: 14, bold: true, color: COLORS.white, characterSpacing: 1.2 },
+          headerSubtitle: { fontSize: 9, color: COLORS.accent, characterSpacing: 0.3 },
+          metaLabel: { fontSize: 7.5, bold: true, color: COLORS.muted, characterSpacing: 0.8, margin: [0, 0, 0, 3] },
+          metaId: { fontSize: 7.5, color: COLORS.text, characterSpacing: 0.2 },
+          metaValue: { fontSize: 9.5, color: COLORS.text },
+          sectionHeader: { fontSize: 9, bold: true, color: COLORS.white, fillColor: COLORS.navy, characterSpacing: 1 },
+          tLabel: { fontSize: 8.5, color: COLORS.muted },
+          tValue: { fontSize: 9, color: COLORS.text, bold: true },
+          disclaimer: { fontSize: 7, color: COLORS.muted, lineHeight: 1.4 },
+          footerBrand: { fontSize: 7.5, bold: true, color: COLORS.navy },
+          footerContact: { fontSize: 7, color: COLORS.muted, margin: [0, 1, 0, 0] },
+          footerPage: { fontSize: 7.5, color: COLORS.muted },
+        },
+      };
+
+      const pdf = this.printer.createPdf(docDefinition);
+      return await pdf.getBuffer();
+    } catch (error) {
+      this.logger.error('Error generando PDF de resumen de onboarding', error);
+      throw error;
+    }
+  }
 }

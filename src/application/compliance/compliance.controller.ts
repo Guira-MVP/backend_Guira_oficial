@@ -8,6 +8,8 @@ import {
   Patch,
   UseGuards,
   ParseUUIDPipe,
+  Res,
+  StreamableFile,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -18,6 +20,7 @@ import {
 import type { AuthenticatedUser } from '../../core/guards/supabase-auth.guard';
 import { ComplianceService } from './compliance.service';
 import { ComplianceActionsService } from './compliance-actions.service';
+import { OnboardingExportService } from './onboarding-export.service';
 import {
   RegisterDocumentDto,
   GetDocumentUploadUrlDto,
@@ -106,7 +109,10 @@ export class ComplianceController {
 @Controller('admin/compliance')
 @UseGuards(RolesGuard)
 export class AdminComplianceController {
-  constructor(private readonly actionsService: ComplianceActionsService) {}
+  constructor(
+    private readonly actionsService: ComplianceActionsService,
+    private readonly exportService: OnboardingExportService,
+  ) {}
 
   // ── REVIEWS (Lectura) ─────────────────────────────────────────────
 
@@ -138,6 +144,32 @@ export class AdminComplianceController {
   })
   getReviewDetail(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.actionsService.getReviewDetail(id);
+  }
+
+  @Get('reviews/:id/export-zip')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({
+    summary:
+      'Descargar ZIP completo del expediente (resumen PDF + documentos) para envío manual a proveedores como Pythas',
+  })
+  async exportReviewZip(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Res({ passthrough: true }) res: any,
+  ) {
+    const { buffer, filename } = await this.exportService.exportOnboardingZip(
+      id,
+      actor.id,
+      actor.profile.role,
+    );
+
+    res.set({
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Length': buffer.length,
+    });
+
+    return new StreamableFile(buffer);
   }
 
   @Get('users/:userId/onboarding')
