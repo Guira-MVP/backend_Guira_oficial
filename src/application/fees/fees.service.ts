@@ -609,6 +609,66 @@ export class FeesService {
   }
 
   /**
+   * Lanza si NO hay tarifa activa (ni override de cliente ni global) para la
+   * combinación operación/riel/divisa.
+   *
+   * Existe porque calculateFee() devuelve `fee_amount: 0` en silencio cuando no
+   * encuentra configuración: para los flujos históricos eso es el comportamiento
+   * asumido, pero en un flujo nuevo significaría operar gratis sin que nadie se
+   * entere (fuga de ingresos silenciosa).
+   *
+   * De paso convierte fees_config.is_active en un interruptor real por riel de
+   * destino: desactivar la fila deshabilita esa región para el flujo.
+   *
+   * ⚠️ Es un método aparte y NO modifica calculateFee() a propósito: llamarlo es
+   * opt-in por flujo, así que los flujos existentes conservan su comportamiento.
+   * Hoy solo lo usa wallet_to_world.
+   */
+  async assertFeeConfigured(
+    userId: string,
+    operationType: string,
+    paymentRail: string,
+    currency: string,
+  ): Promise<void> {
+    const today = new Date().toISOString().split('T')[0];
+    const normalizedCurrency = currency.toLowerCase();
+    const normalizedPaymentRail = paymentRail.toLowerCase();
+
+    // Mismo orden de resolución que calculateFee: override del cliente primero.
+    const { data: override } = await this.supabase
+      .from('customer_fee_overrides')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('operation_type', operationType)
+      .eq('payment_rail', normalizedPaymentRail)
+      .eq('currency', normalizedCurrency)
+      .eq('is_active', true)
+      .or(`valid_from.is.null,valid_from.lte.${today}`)
+      .or(`valid_until.is.null,valid_until.gte.${today}`)
+      .maybeSingle();
+
+    if (override) return;
+
+    const { data: globalFee } = await this.supabase
+      .from('fees_config')
+      .select('id')
+      .eq('operation_type', operationType)
+      .eq('payment_rail', normalizedPaymentRail)
+      .eq('currency', normalizedCurrency)
+      .eq('is_active', true)
+      .maybeSingle();
+
+    if (globalFee) return;
+
+    this.logger.warn(
+      `Sin tarifa activa para ${operationType}/${normalizedPaymentRail}/${normalizedCurrency} (user ${userId})`,
+    );
+    throw new BadRequestException(
+      `El destino ${normalizedPaymentRail.toUpperCase()} (${normalizedCurrency.toUpperCase()}) no está habilitado en este momento. Elige otro destino o contacta a soporte.`,
+    );
+  }
+
+  /**
    * Calcula el fee para una operación, considerando overrides del cliente.
    * Retorna fee_amount y net_amount.
    */

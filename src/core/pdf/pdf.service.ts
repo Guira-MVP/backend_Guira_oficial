@@ -35,6 +35,7 @@ const FLOW_LABELS: Record<string, string> = {
   bridge_wallet_to_fiat_bo: 'Retiro Guira - Cuenta BOB',
   bridge_wallet_to_fiat_us: 'Retiro Guira - Cuenta Exterior',
   bridge_wallet_to_crypto: 'Retiro Guira - Wallet Crypto',
+  wallet_to_world: 'Envio Wallet Externa - Cuenta Exterior',
   bolivia_to_world: 'Bolivia - Exterior',
   bolivia_to_wallet: 'Bolivia - Wallet Crypto',
   wallet_to_wallet: 'Wallet - Wallet (Crypto)',
@@ -268,8 +269,10 @@ export class PdfService {
     // Estos flujos guardan exchange_rate_applied = 1.0, por lo que el chequeo de
     // stablecoin DEBE tener prioridad; de lo contrario la etiqueta nunca se mostraba
     // (el valor 1.0 hacía que siempre se imprimiera el "1" crudo).
-    // bridge_wallet_to_fiat_us excluido: acepta divisas no-USD (EUR, etc.)
-    // con tipo de cambio real distinto de 1, por lo que debe leer exchange_rate_applied.
+    // bridge_wallet_to_fiat_us y wallet_to_world excluidos: aceptan divisas no-USD
+    // (EUR, MXN, BRL, COP, GBP) con tipo de cambio real distinto de 1, por lo que
+    // deben leer exchange_rate_applied (el webhook lo sobreescribe con la tasa
+    // real de Bridge al completarse).
     const STABLECOIN_FLOWS = [
       'wallet_to_wallet',
       'bridge_wallet_to_crypto',
@@ -308,8 +311,11 @@ export class PdfService {
       );
     }
 
-    // ── crypto_to_bridge_wallet: network + sender address ──
-    if (ft === 'crypto_to_bridge_wallet') {
+    // ── Depósitos on-chain desde wallet externa: red + dirección del remitente ──
+    // wallet_to_world comparte la mecánica de crypto_to_bridge_wallet: el cliente
+    // paga desde su propia wallet (Binance, etc.), NO desde la billetera Guira, así
+    // que aquí no se muestra clientWallet sino el remitente real que registró Bridge.
+    if (ft === 'crypto_to_bridge_wallet' || ft === 'wallet_to_world') {
       rows.push(
         this.row('Red de Depósito', this.toDisplay(order.source_network)),
       );
@@ -380,7 +386,9 @@ export class PdfService {
       const holder = clientBankAccount?.account_holder || order.destination_account_holder;
       if (holder) rows.push(this.row('Titular', this.toDisplay(holder)));
       rows.push(this.row('País', 'Bolivia'));
-    } else if (ft === 'bridge_wallet_to_fiat_us') {
+    } else if (ft === 'bridge_wallet_to_fiat_us' || ft === 'wallet_to_world') {
+      // Mismo destino en ambos flujos: la cuenta bancaria del proveedor.
+      // Solo cambia el origen de los fondos (billetera Guira vs. wallet externa).
       if (supplier?.name) rows.push(this.row('Proveedor', this.toDisplay(supplier.name)));
       const holder = order.destination_account_holder
         || bd.business_name
@@ -522,8 +530,10 @@ export class PdfService {
       );
     }
 
-    // ── bridge_wallet_to_fiat_us ─────────────────────────
-    else if (ft === 'bridge_wallet_to_fiat_us') {
+    // ── bridge_wallet_to_fiat_us / wallet_to_world ───────
+    // Bloque de destino compartido: ambos liquidan en la cuenta bancaria del
+    // proveedor por el mismo riel (ACH, Wire, SEPA, SPEI, PIX, Bre-B, FPS).
+    else if (ft === 'bridge_wallet_to_fiat_us' || ft === 'wallet_to_world') {
       const bd: any = supplier?.bank_details ?? {};
       const rail = (supplier?.payment_rail ?? '').toLowerCase();
       const railLabel = this.RAIL_LABELS[rail] ?? (rail ? rail.toUpperCase() : 'N/D');
@@ -596,7 +606,7 @@ export class PdfService {
       return order.destination_currency ?? order.currency ?? 'N/D';
     }
     // Off-ramps to fiat: stablecoin is the source (stored in currency column)
-    if (['bridge_wallet_to_fiat_bo', 'bridge_wallet_to_fiat_us'].includes(order.flow_type)) {
+    if (['bridge_wallet_to_fiat_bo', 'bridge_wallet_to_fiat_us', 'wallet_to_world'].includes(order.flow_type)) {
       return (order.currency ?? order.source_currency ?? 'N/D').toUpperCase();
     }
     return 'N/D';

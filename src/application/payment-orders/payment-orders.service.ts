@@ -47,6 +47,9 @@ import {
   resolveFiatBoPsavMatch,
   resolvePsavCryptoSource,
   FIAT_BO_OFF_RAMP_SOURCE_CURRENCIES,
+  isValidWalletToWorldSource,
+  getWalletToWorldMinAmount,
+  WALLET_TO_WORLD_SOURCE_ROUTES,
 } from '../../common/constants/bridge-route-catalog.constants';
 import {
   isValidTransferRoute,
@@ -327,6 +330,8 @@ export class PaymentOrdersService {
           'MAX_BRIDGE_WALLET_TO_CRYPTO_USD',
           'MIN_BRIDGE_WALLET_TO_FIAT_US_USD',
           'MAX_BRIDGE_WALLET_TO_FIAT_US_USD',
+          'MIN_WALLET_TO_WORLD_USD',
+          'MAX_WALLET_TO_WORLD_USD',
         ]
           .map((k) => `key.eq.${k}`)
           .join(','),
@@ -1555,6 +1560,46 @@ export class PaymentOrdersService {
     }
   }
 
+  /**
+   * Bloquea si el usuario ya tiene un wallet_to_world activo con el mismo
+   * token de origen hacia el mismo proveedor.
+   *
+   * Es más estricto que sus hermanos porque incluye 'waiting_deposit': con
+   * allow_any_from_address Bridge emite UNA dirección por transfer, así que dos
+   * órdenes activas iguales serían indistinguibles al momento de pagar y el
+   * depósito podría liquidarse contra la orden equivocada.
+   *
+   * Respaldado por idx_po_w2w_active_per_src_supplier — el listado de estados
+   * debe coincidir exactamente con el WHERE de ese índice.
+   */
+  private async assertNoConflictingWalletToWorld(
+    userId: string,
+    sourceCurrency: string,
+    supplierId: string,
+  ): Promise<void> {
+    const normCurrency = sourceCurrency.toUpperCase();
+
+    const { data: conflicting } = await this.supabase
+      .from('payment_orders')
+      .select('id, status, created_at')
+      .eq('user_id', userId)
+      .eq('flow_type', 'wallet_to_world')
+      .eq('source_currency', normCurrency)
+      .eq('supplier_id', supplierId)
+      .in('status', ['created', 'waiting_deposit', 'processing'])
+      .limit(1)
+      .maybeSingle();
+
+    if (conflicting) {
+      const shortId = conflicting.id.slice(0, 8);
+      throw new ConflictException(
+        `Ya tienes un envío activo (${shortId}) desde ${normCurrency} ` +
+          `hacia este proveedor. Complétalo o cancélalo antes de crear uno ` +
+          `nuevo — de lo contrario los dos QR serían indistinguibles al pagar.`,
+      );
+    }
+  }
+
   // ═══════════════════════════════════════════════
   //  WALLET RAMP ORDERS (CATEGORY: wallet_ramp)
   // ═══════════════════════════════════════════════
@@ -1587,6 +1632,7 @@ export class PaymentOrdersService {
       case WalletRampFlowType.BRIDGE_WALLET_TO_CRYPTO:
       case WalletRampFlowType.BRIDGE_WALLET_TO_FIAT_US:
       case WalletRampFlowType.WALLET_TO_FIAT:
+      case WalletRampFlowType.WALLET_TO_WORLD:
         inputCurrency = dto.source_currency?.toUpperCase() ?? 'USDC';
         break;
     }
@@ -1640,6 +1686,9 @@ export class PaymentOrdersService {
         break;
       case WalletRampFlowType.WALLET_TO_FIAT:
         walletRampOrder = await this.createWalletToFiat(userId, dto);
+        break;
+      case WalletRampFlowType.WALLET_TO_WORLD:
+        walletRampOrder = await this.createWalletToWorld(userId, dto);
         break;
       default:
         throw new BadRequestException(`Flujo no soportado: ${dto.flow_type}`);
@@ -3236,6 +3285,406 @@ export class PaymentOrdersService {
     return order;
   }
 
+  /**
+   * 2.8 Wallet Externa → Exterior (Bridge Transfer con QR de depósito)
+   *
+   * El cliente paga desde su wallet externa (Binance, Trust, etc.) escaneando
+   * el QR que devuelve Bridge; Bridge convierte y liquida en la cuenta bancaria
+   * del proveedor.
+   *
+   * Combina el ORIGEN de crypto_to_bridge_wallet (features.allow_any_from_address
+   * → Bridge emite una dirección de depósito) con el DESTINO de
+   * bridge_wallet_to_fiat_us (external_account del proveedor + riel + referencia).
+   *
+   * Diferencias clave con bridge_wallet_to_fiat_us:
+   *   - NO se envía bridge_wallet_id: los fondos no salen de la wallet custodiada.
+   *   - NO se consulta ni se reserva saldo — el dinero nunca pasa por Guira.
+   *   - NO se escribe en ledger_entries (ver comentario extenso más abajo).
+   *   - Se llama a Bridge ANTES de crear la orden: una orden en espera sin
+   *     dirección de depósito es inservible para el cliente.
+   *   - El estado inicial es 'waiting_deposit', no 'created'.
+   *
+   * Monto FIJO (sin features.flexible_amount): el cliente debe enviar el importe
+   * exacto. Si envía de más o de menos, Bridge no procesa y la orden queda en
+   * waiting_deposit sin webhook de cierre → requiere gestión manual con soporte
+   * Bridge. Por eso el importe exacto se muestra de forma prominente en el QR.
+   */
+  private async createWalletToWorld(
+    userId: string,
+    dto: CreateWalletRampOrderDto,
+  ) {
+    // ── 1. Validaciones de entrada ──
+    if (!dto.supplier_id) {
+      throw new BadRequestException(
+        'Debes especificar un proveedor (supplier_id) para el flujo wallet_to_world',
+      );
+    }
+    if (!dto.source_network) {
+      throw new BadRequestException(
+        'Debes especificar la red de origen (source_network)',
+      );
+    }
+    if (!dto.source_currency) {
+      throw new BadRequestException(
+        'Debes especificar el token de origen (source_currency)',
+      );
+    }
+    if (!dto.business_purpose) {
+      throw new BadRequestException(
+        'El motivo de la operación (business_purpose) es obligatorio para este flujo',
+      );
+    }
+
+    const sourceNetwork = dto.source_network.toLowerCase();
+    const sourceCurrency = dto.source_currency.toUpperCase();
+
+    // ── 2. Validar la ruta on-chain contra el catálogo Bridge ──
+    // Sin esto Bridge devolvería igualmente una dirección y el cliente podría
+    // enviar fondos reales a una ruta que Bridge no liquida.
+    if (!isValidWalletToWorldSource(sourceNetwork, sourceCurrency)) {
+      const permitidas = Object.entries(WALLET_TO_WORLD_SOURCE_ROUTES)
+        .map(([net, r]) => `${net} (${r.currencies.join('/').toUpperCase()})`)
+        .join(', ');
+      throw new BadRequestException(
+        `La combinación ${sourceNetwork}/${sourceCurrency} no está soportada para este flujo. ` +
+          `Combinaciones disponibles: ${permitidas}.`,
+      );
+    }
+
+    const routeMin = getWalletToWorldMinAmount(sourceNetwork, sourceCurrency);
+    if (routeMin > 0 && dto.amount < routeMin) {
+      throw new BadRequestException(
+        `El monto mínimo para ${sourceCurrency} en ${sourceNetwork} es ${routeMin}. Ingresaste ${dto.amount}.`,
+      );
+    }
+
+    // ── 3. Proveedor y su cuenta bancaria en Bridge ──
+    const { data: supplier } = await this.supabase
+      .from('suppliers')
+      .select('id, name, bridge_external_account_id, bank_details, payment_rail')
+      .eq('id', dto.supplier_id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!supplier || !supplier.bridge_external_account_id) {
+      throw new NotFoundException(
+        'Proveedor no encontrado o no tiene cuenta bancaria registrada en Bridge.',
+      );
+    }
+
+    // El rail se lee de supplier.payment_rail, no de extAccount.payment_rail:
+    // una misma external account puede estar compartida por dos proveedores
+    // (par ACH+Wire), cada uno con su propio riel correcto.
+    const { data: extAccount } = await this.supabase
+      .from('bridge_external_accounts')
+      .select('id, account_type, currency, bridge_external_account_id')
+      .eq('id', supplier.bridge_external_account_id)
+      .eq('is_active', true)
+      .single();
+
+    if (!extAccount || !extAccount.bridge_external_account_id) {
+      throw new NotFoundException(
+        'La cuenta bancaria del proveedor no está activa o no está registrada en Bridge.',
+      );
+    }
+
+    if (!supplier.payment_rail) {
+      throw new BadRequestException(
+        'La cuenta bancaria del proveedor no tiene payment_rail configurado. ' +
+          'Actualice los datos del proveedor antes de realizar el envío.',
+      );
+    }
+
+    // ── 4. Customer de Bridge (KYC completado) ──
+    const { data: profile } = await this.supabase
+      .from('profiles')
+      .select('bridge_customer_id')
+      .eq('id', userId)
+      .single();
+
+    if (!profile?.bridge_customer_id) {
+      throw new BadRequestException(
+        'El usuario no tiene una cuenta Bridge activa. Completa el KYC antes de operar.',
+      );
+    }
+
+    // ── 5. Comisión, indexada por RIEL/DIVISA DE DESTINO ──
+    // assertFeeConfigured convierte fees_config.is_active en el interruptor real
+    // de la región: sin fila activa el destino se rechaza con un error claro, en
+    // lugar de cobrar 0 en silencio como haría calculateFee por sí solo.
+    const destCurrency = (extAccount.currency ?? 'USD').toUpperCase();
+    await this.feesService.assertFeeConfigured(
+      userId,
+      'ramp_off_wallet_world',
+      supplier.payment_rail,
+      destCurrency,
+    );
+    const { fee_amount, net_amount } = await this.feesService.calculateFee(
+      userId,
+      'ramp_off_wallet_world',
+      supplier.payment_rail,
+      destCurrency,
+      dto.amount,
+    );
+
+    // ── 6. Un solo envío activo por token + proveedor ──
+    await this.assertNoConflictingWalletToWorld(
+      userId,
+      sourceCurrency,
+      dto.supplier_id,
+    );
+
+    // ── 7. Validar que la tasa congelada siga vigente (destinos no-USD) ──
+    if (
+      destCurrency !== 'USD' &&
+      dto.exchange_rate_applied &&
+      dto.exchange_rate_applied > 0
+    ) {
+      const liveRate = await this.exchangeRatesService.getRate(
+        `USD_${destCurrency}`,
+      );
+      const liveBase = liveRate.effective_rate;
+      const deviation = Math.abs(dto.exchange_rate_applied - liveBase) / liveBase;
+      const MAX_RATE_DEVIATION = 0.03;
+      if (deviation > MAX_RATE_DEVIATION) {
+        throw new BadRequestException(
+          `La cotización ha variado un ${(deviation * 100).toFixed(1)}% desde que fue generada. ` +
+            `Por favor vuelve a cotizar para continuar.`,
+        );
+      }
+    }
+
+    // ── 8. Wallet de referencia (solo para agrupar en la UI; NO se debita) ──
+    // Lookup propio en vez de getUserWallet(): ese helper exige provider_wallet_id
+    // (wallet vinculada a Bridge) y aquí no se usa ninguna wallet custodiada — los
+    // fondos llegan on-chain desde fuera y salen hacia el banco del proveedor.
+    // Exigirlo bloquearía sin motivo a clientes con las wallets aún sin provisionar.
+    const walletQuery = this.supabase
+      .from('wallets')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('is_active', true);
+
+    if (dto.wallet_id) {
+      walletQuery.eq('id', dto.wallet_id);
+    }
+
+    const { data: wallet } = await walletQuery.limit(1).maybeSingle();
+
+    if (!wallet) {
+      throw new NotFoundException(
+        'No se encontró una billetera activa para asociar el expediente.',
+      );
+    }
+
+    // ── 9. Llamar a Bridge ANTES de crear la orden ──
+    // Si Bridge falla no queda ninguna orden huérfana: no hay saldo reservado
+    // que revertir, así que basta con no insertar nada.
+    const orderId = crypto.randomUUID();
+    const idempotencyKey = `po_w2w_${orderId}`;
+    const orderToken = orderId.slice(0, 8).toUpperCase();
+
+    // Referencia que el proveedor verá en su extracto bancario. Es un campo del
+    // DESTINO, ortogonal al origen on-chain: se mantiene igual que en fiat_us.
+    const railRef: Record<string, string> = {};
+    if (supplier.payment_rail === 'sepa') {
+      railRef.sepa_reference = `Guira ${orderToken}`;
+    } else if (supplier.payment_rail === 'wire') {
+      railRef.wire_message = `Guira ${orderToken}`;
+    } else if (supplier.payment_rail === 'ach') {
+      railRef.ach_reference = 'GUIRA';
+    } else if (supplier.payment_rail === 'spei') {
+      railRef.spei_reference = `Guira ${orderToken}`;
+    } else if (supplier.payment_rail === 'faster_payments') {
+      railRef.reference = orderToken;
+    } else if (supplier.payment_rail === 'pix') {
+      railRef.reference = `Guira ${orderToken}`;
+    }
+
+    let bridgeTransfer: Record<string, unknown>;
+    try {
+      bridgeTransfer = await this.bridgeApi.post<Record<string, unknown>>(
+        '/v0/transfers',
+        {
+          on_behalf_of: profile.bridge_customer_id,
+          amount: dto.amount.toFixed(2),
+          ...(fee_amount > 0 && { developer_fee: fee_amount.toFixed(2) }),
+          source: {
+            currency: sourceCurrency.toLowerCase(),
+            payment_rail: sourceNetwork,
+          },
+          destination: {
+            currency: (extAccount.currency ?? 'usd').toLowerCase(),
+            payment_rail: supplier.payment_rail,
+            external_account_id: extAccount.bridge_external_account_id,
+            ...railRef,
+          },
+          // Sin from_address: el cliente puede pagar desde cualquier wallet.
+          // Sin flexible_amount: el importe debe ser exacto (decisión de producto).
+          features: { allow_any_from_address: true },
+          client_reference_id: orderId,
+        },
+        idempotencyKey,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error(
+        `❌ [wallet_to_world] Bridge Transfer falló para user ${userId}: ${message}`,
+      );
+      throw new BadRequestException(
+        `No se pudo generar la dirección de depósito en Bridge: ${message}`,
+      );
+    }
+
+    // ── 10. Extraer la dirección de depósito que verá el cliente como QR ──
+    const bridgeInstr = bridgeTransfer.source_deposit_instructions as
+      | Record<string, string>
+      | undefined;
+    const depositAddress =
+      bridgeInstr?.to_address ?? bridgeInstr?.address ?? '';
+
+    if (!depositAddress) {
+      // Un QR vacío es peor que un error: el cliente creería que puede pagar.
+      this.logger.error(
+        `❌ [wallet_to_world] Bridge no devolvió dirección de depósito. Transfer: ${bridgeTransfer.id}`,
+      );
+      throw new BadRequestException(
+        'Bridge no devolvió una dirección de depósito. Inténtalo de nuevo o contacta a soporte.',
+      );
+    }
+
+    const bridgeDepositInstructions = {
+      type: 'liquidation_address',
+      address: depositAddress,
+      chain: bridgeInstr?.payment_rail ?? bridgeInstr?.chain ?? sourceNetwork,
+      currency: bridgeInstr?.currency ?? sourceCurrency.toLowerCase(),
+      // El importe de Bridge tiene prioridad: si redondea decimales del token,
+      // el suyo es el que compara su watcher on-chain.
+      amount: bridgeInstr?.amount ?? dto.amount.toFixed(2),
+      label: `Depósito exacto ${dto.amount.toFixed(2)} ${sourceCurrency} (${sourceNetwork})`,
+    };
+
+    const transferId = (bridgeTransfer.id ?? null) as string | null;
+
+    // ── 11. Crear la orden ya con las instrucciones de pago ──
+    const isNonUsdWithRate =
+      destCurrency !== 'USD' &&
+      !!dto.exchange_rate_applied &&
+      dto.exchange_rate_applied > 0;
+
+    const bankDetails = supplier.bank_details as Record<string, unknown> | null;
+    const rawAccountNumber = bankDetails?.account_number as string | undefined;
+    const destinationAccountNumber = rawAccountNumber
+      ? `****${rawAccountNumber.slice(-4)}`
+      : null;
+
+    const { data: order, error } = await this.supabase
+      .from('payment_orders')
+      .insert({
+        id: orderId,
+        user_id: userId,
+        // Referencia para agrupar en la UI del cliente. Los fondos NO salen de
+        // esta wallet — llegan on-chain desde una wallet externa.
+        wallet_id: wallet.id,
+        flow_type: 'wallet_to_world',
+        flow_category: 'wallet_ramp',
+        requires_psav: false,
+        // 'crypto_external' es el valor ya establecido en producción para "origen
+        // cripto fuera de Guira" (lo usa crypto_to_bridge_wallet, que comparte
+        // exactamente este mecanismo de depósito por QR). NO usar 'on_chain_wallet':
+        // solo existe en el código de wallet_to_fiat, nunca generó una fila, y sería
+        // un segundo sinónimo que fragmentaría los reportes por source_type.
+        source_type: 'crypto_external',
+        source_network: sourceNetwork,
+        source_currency: sourceCurrency,
+        // La dirección de origen se conoce recién cuando llega el depósito;
+        // el webhook la completa con el remitente real.
+        source_address: null,
+        amount: dto.amount,
+        currency: sourceCurrency,
+        fee_amount,
+        net_amount,
+        destination_type: 'external_account',
+        destination_currency: extAccount.currency ?? 'USD',
+        // Para USD la conversión es 1:1. Para el resto se usa la tasa congelada
+        // por el cliente; el webhook transfer.complete la sobrescribe con
+        // receipt.exchange_rate (la tasa real de Bridge).
+        exchange_rate_applied: isNonUsdWithRate ? dto.exchange_rate_applied : 1.0,
+        amount_destination: isNonUsdWithRate
+          ? parseFloat((net_amount * dto.exchange_rate_applied!).toFixed(2))
+          : net_amount,
+        external_account_id: extAccount.id,
+        supplier_id: supplier.id,
+        destination_bank_name: (bankDetails?.bank_name as string) ?? null,
+        destination_account_holder: supplier.name ?? null,
+        destination_account_number: destinationAccountNumber,
+        bridge_transfer_id: transferId,
+        bridge_source_deposit_instructions: bridgeDepositInstructions,
+        business_purpose: dto.business_purpose,
+        supporting_document_url: dto.supporting_document_url,
+        notes: dto.notes,
+        status: 'waiting_deposit',
+      })
+      .select()
+      .single();
+
+    if (error) throwDbError(error);
+
+    // ── 12. Registrar el transfer para que el webhook pueda vincularlo ──
+    const { error: btErr } = await this.supabase
+      .from('bridge_transfers')
+      .insert({
+        user_id: userId,
+        bridge_transfer_id: transferId,
+        source_payment_rail: sourceNetwork,
+        source_currency: sourceCurrency.toLowerCase(),
+        destination_payment_rail: supplier.payment_rail,
+        destination_currency: (extAccount.currency ?? 'usd').toLowerCase(),
+        amount: dto.amount,
+        developer_fee_amount: fee_amount,
+        net_amount,
+        status: 'pending',
+        bridge_state: (bridgeTransfer.state as string) ?? 'awaiting_funds',
+        bridge_raw_response: bridgeTransfer,
+      });
+
+    if (btErr) {
+      // No es bloqueante para el cliente (ya tiene su QR), pero sin esta fila
+      // handleTransferFailed no puede resolver el usuario del transfer.
+      this.logger.error(
+        `❌ [wallet_to_world] No se pudo registrar bridge_transfers de la orden ${orderId}: ${btErr.message}. ` +
+          `Transfer Bridge ${transferId} — requiere conciliación manual.`,
+      );
+    }
+
+    // ── 13. ledger_entries: NO se escribe NADA. A propósito. ──
+    //
+    // NO copiar aquí el bloque de bridge_wallet_to_fiat_us. En este flujo los
+    // fondos llegan on-chain desde una wallet externa y nunca tocan el saldo
+    // Guira del cliente, así que no hay nada que asentar.
+    //
+    // Escribir un ledger_entry type='debit' provocaría un CARGO FANTASMA:
+    //   1. handleTransferComplete asienta a 'settled' toda fila pendiente de la
+    //      orden filtrando solo por reference_id, sin mirar el flow_type.
+    //   2. El trigger update_balance_on_ledger_entry convierte ese settled en un
+    //      descuento real sobre balances.
+    //   3. Como aquí nunca se llamó reserve_balance, reserved_amount es 0 y el
+    //      descuento sale íntegro del saldo disponible del cliente.
+    //
+    // Tampoco existe un tipo neutro: ledger_entries.type solo admite
+    // credit|debit y wallet_id es NOT NULL. El registro de auditoría es
+    // payment_orders, y la traza completa queda en bridge_transfers.
+    // (wallet_to_fiat arrastra este mismo bug latente; hoy no explota solo
+    //  porque su INSERT falla en silencio por una FK mal puesta.)
+
+    this.logger.log(
+      `📋 Orden wallet_to_world: ${orderId} — ${dto.amount} ${sourceCurrency} (${sourceNetwork}) → ` +
+        `${supplier.name} vía ${supplier.payment_rail} (${destCurrency}) | Bridge transfer: ${transferId}`,
+    );
+
+    return order;
+  }
+
   // ═══════════════════════════════════════════════
   //  USER QUERIES & ACTIONS
   // ═══════════════════════════════════════════════
@@ -3810,6 +4259,7 @@ export class PaymentOrdersService {
         'bolivia_to_world',
         'world_to_bolivia',
         'bridge_wallet_to_fiat_us',
+        'wallet_to_world',
       ])
       .eq('status', 'completed');
 
@@ -3879,6 +4329,7 @@ export class PaymentOrdersService {
         'bolivia_to_world',
         'world_to_bolivia',
         'bridge_wallet_to_fiat_us',
+        'wallet_to_world',
       ])
       .eq('status', 'completed')
       .order('created_at', { ascending: false });
@@ -5162,6 +5613,8 @@ export class PaymentOrdersService {
         return this.createBridgeWalletToFiatUs(userId, dto);
       case WalletRampFlowType.WALLET_TO_FIAT:
         return this.createWalletToFiat(userId, dto);
+      case WalletRampFlowType.WALLET_TO_WORLD:
+        return this.createWalletToWorld(userId, dto);
       default:
         throw new BadRequestException(`Flujo no soportado: ${dto.flow_type}`);
     }

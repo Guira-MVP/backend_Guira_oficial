@@ -91,6 +91,7 @@ const FLOW_LABELS: Record<string, string> = {
   bridge_wallet_to_fiat_bo: 'Guira a Bolivia',
   bridge_wallet_to_crypto: 'Guira a cripto',
   bridge_wallet_to_fiat_us: 'Guira al exterior',
+  wallet_to_world: 'Wallet externa al exterior',
   va_deposit: 'Depósito cuenta virtual',
 };
 

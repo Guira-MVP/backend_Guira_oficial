@@ -18,7 +18,7 @@ import {
 } from '../../../common/constants/guira-crypto-config.constants';
 import { IsBlockchainAddressForNetwork } from '../../bridge/validators/is-blockchain-address.validator';
 
-/** Redes on-chain válidas para el flujo wallet_to_fiat */
+/** Redes on-chain válidas para los flujos wallet_to_fiat y wallet_to_world */
 export const WALLET_TO_FIAT_ALLOWED_NETWORKS = [
   'ethereum',
   'solana',
@@ -34,6 +34,12 @@ export enum WalletRampFlowType {
   BRIDGE_WALLET_TO_CRYPTO = 'bridge_wallet_to_crypto',
   BRIDGE_WALLET_TO_FIAT_US = 'bridge_wallet_to_fiat_us',
   WALLET_TO_FIAT = 'wallet_to_fiat',
+  /**
+   * Off-ramp on-chain: el cliente paga desde su wallet externa (Binance, etc.)
+   * escaneando el QR que devuelve Bridge, y los fondos se liquidan en la cuenta
+   * bancaria del proveedor. Nunca tocan el saldo Guira del cliente.
+   */
+  WALLET_TO_WORLD = 'wallet_to_world',
 }
 
 export class CreateWalletRampOrderDto {
@@ -131,7 +137,9 @@ export class CreateWalletRampOrderDto {
   // ── crypto_to_bridge_wallet: origen crypto ──
   @ApiPropertyOptional()
   @ValidateIf((o) =>
-    ['crypto_to_bridge_wallet', 'wallet_to_fiat'].includes(o.flow_type),
+    ['crypto_to_bridge_wallet', 'wallet_to_fiat', 'wallet_to_world'].includes(
+      o.flow_type,
+    ),
   )
   @IsString()
   @IsNotEmpty()
@@ -143,6 +151,9 @@ export class CreateWalletRampOrderDto {
   })
   source_network?: string;
 
+  // Nota: wallet_to_world NO lleva source_address a propósito. Bridge recibe
+  // features.allow_any_from_address y devuelve una dirección de depósito, así
+  // que el cliente puede pagar desde cualquier wallet externa sin declararla.
   @ApiPropertyOptional()
   @ValidateIf((o) => o.flow_type === 'wallet_to_fiat')
   @IsString()
@@ -161,6 +172,7 @@ export class CreateWalletRampOrderDto {
       'bridge_wallet_to_fiat_us',
       'crypto_to_bridge_wallet',
       'wallet_to_fiat',
+      'wallet_to_world',
     ].includes(o.flow_type),
   )
   @IsString()
@@ -175,19 +187,20 @@ export class CreateWalletRampOrderDto {
   })
   source_currency?: string;
 
-  // ── wallet_to_fiat / bridge_wallet_to_fiat_us / bridge_wallet_to_crypto: proveedor destino ──
+  // ── wallet_to_fiat / bridge_wallet_to_fiat_us / bridge_wallet_to_crypto / wallet_to_world: proveedor destino ──
   @ApiPropertyOptional({
     description:
-      'UUID del proveedor (supplier) destino. Requerido para wallet_to_fiat, bridge_wallet_to_fiat_us y bridge_wallet_to_crypto.',
+      'UUID del proveedor (supplier) destino. Requerido para wallet_to_fiat, bridge_wallet_to_fiat_us, bridge_wallet_to_crypto y wallet_to_world.',
   })
   @ValidateIf((o) =>
     [
       'wallet_to_fiat',
       'bridge_wallet_to_fiat_us',
       'bridge_wallet_to_crypto',
+      'wallet_to_world',
     ].includes(o.flow_type),
   )
-  @IsNotEmpty({ message: 'supplier_id es obligatorio para wallet_to_fiat, bridge_wallet_to_fiat_us y bridge_wallet_to_crypto' })
+  @IsNotEmpty({ message: 'supplier_id es obligatorio para wallet_to_fiat, bridge_wallet_to_fiat_us, bridge_wallet_to_crypto y wallet_to_world' })
   @IsUUID()
   supplier_id?: string;
 
@@ -201,6 +214,7 @@ export class CreateWalletRampOrderDto {
       'wallet_to_fiat',
       'fiat_bo_to_bridge_wallet',
       'crypto_to_bridge_wallet',
+      'wallet_to_world',
     ].includes(o.flow_type),
   )
   @IsNotEmpty({

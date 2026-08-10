@@ -813,6 +813,8 @@ export class AdminPaymentOrdersController {
       'MAX_BRIDGE_WALLET_TO_FIAT_US_USD',
       'MIN_BRIDGE_WALLET_TO_CRYPTO_USD',
       'MAX_BRIDGE_WALLET_TO_CRYPTO_USD',
+      'MIN_WALLET_TO_WORLD_USD',
+      'MAX_WALLET_TO_WORLD_USD',
     ]);
     if (!ALLOWED_LIMIT_KEYS.has(key)) {
       throw new BadRequestException(`Clave de límite no permitida: ${key}`);

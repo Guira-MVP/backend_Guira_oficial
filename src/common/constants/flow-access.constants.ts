@@ -7,7 +7,7 @@
  * WalletRampFlowType de los DTOs de payment-orders).
  *
  * Regla por país:
- *   - Bolivia (BOL) o país indeterminado (NULL) → ve los 9 flujos gobernados.
+ *   - Bolivia (BOL) o país indeterminado (NULL) → ve los 10 flujos gobernados.
  *   - Cualquier otro país → solo los flujos globales (NON_BOLIVIA_DEFAULT_FLOWS).
  *
  * El override de staff (tabla customer_flow_overrides) tiene prioridad sobre el
@@ -20,7 +20,7 @@
 /** Códigos de Bolivia aceptados (alpha-3 preferido; alpha-2 por compatibilidad). */
 export const BOLIVIA_COUNTRY_CODES = ['BOL', 'BO'] as const;
 
-/** Los 9 flujos de pago sujetos a la regla de visibilidad por país + override. */
+/** Los 10 flujos de pago sujetos a la regla de visibilidad por país + override. */
 export const COUNTRY_GOVERNED_FLOWS = [
   // Interbank
   'bolivia_to_world',
@@ -33,6 +33,7 @@ export const COUNTRY_GOVERNED_FLOWS = [
   'bridge_wallet_to_fiat_bo',
   'bridge_wallet_to_crypto',
   'bridge_wallet_to_fiat_us',
+  'wallet_to_world',
 ] as const;
 
 /**
@@ -70,6 +71,9 @@ export const NON_BOLIVIA_DEFAULT_FLOWS: readonly GovernedFlow[] = [
   'crypto_to_bridge_wallet',
   'bridge_wallet_to_crypto',
   'bridge_wallet_to_fiat_us',
+  // Off-ramp on-chain: el cliente paga desde su wallet externa vía QR, no
+  // necesita saldo en Guira — por eso es visible en todos los países.
+  'wallet_to_world',
 ];
 
 /** True si el flow_type es uno de los gobernados por este subsistema. */

@@ -2476,10 +2476,14 @@ export class WebhooksService {
             ...(receiptFinalAmount != null
               ? { amount_destination: receiptFinalAmount }
               : {}),
-            // Para retiros bridge_wallet_to_fiat_us a divisas no-USD (MXN, EUR, BRL, COP, GBP):
+            // Para retiros al exterior a divisas no-USD (MXN, EUR, BRL, COP, GBP):
             // sobreescribir con la tasa real de Bridge como fuente de verdad.
+            // Ambos flujos congelan una tasa estimada al crear la orden; sin esto
+            // el comprobante PDF quedaría con esa estimación para siempre.
             ...(receiptExchangeRate != null &&
-              paymentOrder.flow_type === 'bridge_wallet_to_fiat_us' &&
+              ['bridge_wallet_to_fiat_us', 'wallet_to_world'].includes(
+                paymentOrder.flow_type,
+              ) &&
               (paymentOrder.destination_currency ?? '').toUpperCase() !== 'USD'
                 ? { exchange_rate_applied: receiptExchangeRate }
                 : {}),
@@ -2861,8 +2865,19 @@ export class WebhooksService {
     const isOffRampWalletFlow =
       failedOrder != null && offRampWalletFlows.includes(failedOrder.flow_type);
 
+    // Flujos on-chain: los fondos llegan desde una wallet externa y nunca pasan
+    // por el saldo Guira, así que NUNCA se llamó reserve_balance. Liberar aquí
+    // sería regalar saldo: release_reserved_balance incrementa available_amount
+    // de forma incondicional, sin comprobar que exista una reserva previa.
+    // Se excluyen de la liberación genérica y tampoco entran en el bloque de
+    // liberación por source_currency de más abajo (no están en offRampWalletFlows).
+    const noReservationFlows = ['wallet_to_world'];
+    const isNoReservationFlow =
+      failedOrder != null &&
+      noReservationFlows.includes(failedOrder.flow_type);
+
     // 4. Liberar saldo reservado (solo para flujos que no tienen liberación propia)
-    if (transfer && !isOffRampWalletFlow) {
+    if (transfer && !isOffRampWalletFlow && !isNoReservationFlow) {
       await this.supabase.rpc('release_reserved_balance', {
         p_user_id: transfer.user_id,
         p_currency: currency.toUpperCase(),
@@ -2919,11 +2934,18 @@ export class WebhooksService {
 
     // 5. Notificación y activity log (solo si tenemos el registro local)
     if (transfer) {
+      // En flujos on-chain no hubo saldo retenido que devolver: los fondos
+      // llegaron (o iban a llegar) desde una wallet externa. Prometer una
+      // devolución al saldo sería falso.
+      const failMessage = isNoReservationFlow
+        ? `Tu pago de $${transfer.amount} falló. Si ya enviaste los fondos, contacta a soporte para gestionar la devolución.`
+        : `Tu pago de $${transfer.amount} falló. El saldo ha sido devuelto a tu cuenta.`;
+
       await this.supabase.from('notifications').insert({
         user_id: transfer.user_id,
         type: 'alert',
         title: 'Pago Fallido',
-        message: `Tu pago de $${transfer.amount} falló. El saldo ha sido devuelto a tu cuenta.`,
+        message: failMessage,
         reference_type: 'bridge_transfer',
         reference_id: transfer.id,
       });

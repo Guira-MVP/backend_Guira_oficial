@@ -406,3 +406,55 @@ export function resolveFiatBoPsavMatch<
     minAmount,
   };
 }
+
+// ═══════════════════════════════════════════════════════════════════
+//  CATÁLOGO ORIGEN ON-CHAIN → FIAT (wallet_to_world)
+//
+//  El cliente paga desde su wallet externa (Binance, Trust, etc.) hacia la
+//  dirección que Bridge devuelve con features.allow_any_from_address. Bridge
+//  convierte y liquida a la cuenta bancaria del proveedor.
+//
+//  A diferencia de wallet_to_fiat —que no valida nada— aquí SÍ validamos la
+//  combinación red/token: si aceptamos una que Bridge no liquida, Bridge
+//  devuelve dirección igual y el cliente enviaría fondos reales a una ruta no
+//  procesable, sin return_instructions para recuperarlos.
+//
+//  ⚠️ ARRANQUE RESTRICTIVO A PROPÓSITO. Esta tabla está derivada de
+//  BRIDGE_RAMP_ON_ROUTES, cuya cabecera declara estar filtrada a *destino
+//  Solana*, no a destino fiat. Los pares realmente soportados hacia fiat deben
+//  confirmarse contra el sandbox de Bridge antes de ampliar. Añadir una red o
+//  un token aquí es un cambio de una línea una vez verificado.
+//
+//  Nota: el token además debe estar activo en currency_settings.is_active
+//  (lo valida assertCurrencyActive). Hoy solo usdc lo está.
+// ═══════════════════════════════════════════════════════════════════
+
+/** { [source_network]: { currencies: [...], min: monto_mínimo } } */
+export const WALLET_TO_WORLD_SOURCE_ROUTES: Record<
+  string,
+  { currencies: readonly string[]; min: number }
+> = {
+  solana:   { currencies: ['usdc'], min: 1 },
+  ethereum: { currencies: ['usdc'], min: 1 },
+};
+
+/** Valida si la combinación red/token de origen es soportada para wallet_to_world */
+export function isValidWalletToWorldSource(
+  sourceNetwork: string,
+  sourceCurrency: string,
+): boolean {
+  return (
+    WALLET_TO_WORLD_SOURCE_ROUTES[
+      sourceNetwork.toLowerCase()
+    ]?.currencies.includes(sourceCurrency.toLowerCase()) ?? false
+  );
+}
+
+/** Monto mínimo para una combinación red/token de origen. 0 si la ruta no existe. */
+export function getWalletToWorldMinAmount(
+  sourceNetwork: string,
+  sourceCurrency: string,
+): number {
+  if (!isValidWalletToWorldSource(sourceNetwork, sourceCurrency)) return 0;
+  return WALLET_TO_WORLD_SOURCE_ROUTES[sourceNetwork.toLowerCase()].min;
+}

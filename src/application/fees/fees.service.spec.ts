@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { FeesService } from './fees.service';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
+import { AdminGateway } from '../admin/admin.gateway';
 import { Logger } from '@nestjs/common';
 
 const mockSupabase = {
@@ -12,6 +13,11 @@ const mockSupabase = {
   maybeSingle: jest.fn(),
 };
 
+const mockAdminGateway = {
+  emitFeeConfigUpdated: jest.fn(),
+  emitFeeOverrideUpdated: jest.fn(),
+};
+
 describe('FeesService', () => {
   let service: FeesService;
 
@@ -20,6 +26,7 @@ describe('FeesService', () => {
       providers: [
         FeesService,
         { provide: SUPABASE_CLIENT, useValue: mockSupabase },
+        { provide: AdminGateway, useValue: mockAdminGateway },
       ],
     }).compile();
 
@@ -40,7 +47,7 @@ describe('FeesService', () => {
       error: null,
     }); // cliente override
 
-    const result = await service.calculateFee('user-id', 'payout', 'ach', 100);
+    const result = await service.calculateFee('user-id', 'payout', 'ach', 'usd', 100);
 
     expect(result.fee_amount).toBe(2.5);
     expect(result.net_amount).toBe(97.5);
@@ -56,7 +63,7 @@ describe('FeesService', () => {
       error: null,
     }); // global param
 
-    const result = await service.calculateFee('user-id', 'payout', 'ach', 1000);
+    const result = await service.calculateFee('user-id', 'payout', 'ach', 'usd', 1000);
 
     expect(result.fee_amount).toBe(15.0); // 1.5% de 1000
     expect(result.net_amount).toBe(985.0);
@@ -80,6 +87,7 @@ describe('FeesService', () => {
       'user-id',
       'payout',
       'ach',
+      'usd',
       100,
     );
     expect(resultMin.fee_amount).toBe(10);
@@ -96,9 +104,48 @@ describe('FeesService', () => {
       'user-id',
       'payout',
       'ach',
+      'usd',
       100000,
     );
     expect(resultMax.fee_amount).toBe(50);
     expect(resultMax.net_amount).toBe(99950);
+  });
+
+  // ── assertFeeConfigured: cierra la fuga silenciosa de cobrar 0 ──
+  describe('assertFeeConfigured', () => {
+    it('pasa si existe un override activo del cliente', async () => {
+      mockSupabase.maybeSingle.mockResolvedValueOnce({ data: { id: 'ovr-1' }, error: null });
+
+      await expect(
+        service.assertFeeConfigured('user-id', 'ramp_off_wallet_world', 'ach', 'USD'),
+      ).resolves.toBeUndefined();
+    });
+
+    it('pasa si no hay override pero sí tarifa global activa', async () => {
+      mockSupabase.maybeSingle.mockResolvedValueOnce({ data: null, error: null }); // sin override
+      mockSupabase.maybeSingle.mockResolvedValueOnce({ data: { id: 'fee-1' }, error: null }); // global
+
+      await expect(
+        service.assertFeeConfigured('user-id', 'ramp_off_wallet_world', 'sepa', 'EUR'),
+      ).resolves.toBeUndefined();
+    });
+
+    it('lanza BadRequest si no hay ni override ni tarifa global activa', async () => {
+      mockSupabase.maybeSingle.mockResolvedValueOnce({ data: null, error: null }); // sin override
+      mockSupabase.maybeSingle.mockResolvedValueOnce({ data: null, error: null }); // sin global
+
+      await expect(
+        service.assertFeeConfigured('user-id', 'ramp_off_wallet_world', 'pix', 'BRL'),
+      ).rejects.toThrow(/no está habilitado/i);
+    });
+
+    it('normaliza riel y divisa a minúsculas en el lookup', async () => {
+      mockSupabase.maybeSingle.mockResolvedValueOnce({ data: { id: 'ovr-1' }, error: null });
+
+      await service.assertFeeConfigured('user-id', 'ramp_off_wallet_world', 'ACH', 'USD');
+
+      expect(mockSupabase.eq).toHaveBeenCalledWith('payment_rail', 'ach');
+      expect(mockSupabase.eq).toHaveBeenCalledWith('currency', 'usd');
+    });
   });
 });
