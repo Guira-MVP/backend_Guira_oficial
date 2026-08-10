@@ -144,6 +144,19 @@ describe('PaymentOrdersService — wallet_to_world', () => {
     expect(payload.destination.ach_reference).toBe('GUIRA');
   });
 
+  it('funciona SIN wallet_id — no hay billetera Guira de origen que elegir', async () => {
+    const supabase = makeSupabase();
+    const { service, bridgePost } = makeService(supabase);
+    const { wallet_id: _omitido, ...sinWallet } = validDto;
+
+    const order = await service.createWalletToWorld('user-1', sinWallet);
+
+    expect(bridgePost).toHaveBeenCalledTimes(1);
+    expect(order.status).toBe('waiting_deposit');
+    // El servicio resuelve una wallet activa por su cuenta, solo como referencia.
+    expect(order.wallet_id).toBe('wallet-1');
+  });
+
   it('NUNCA reserva saldo — los fondos no salen del balance Guira', async () => {
     const supabase = makeSupabase();
     const { service } = makeService(supabase);

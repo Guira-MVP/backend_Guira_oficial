@@ -53,8 +53,12 @@ export class CreateWalletRampOrderDto {
   @Min(0.01)
   amount: number;
 
-  // ── wallet_id: requerido para todos los flujos rampa ──
+  // ── wallet_id: requerido para todos los flujos rampa EXCEPTO wallet_to_world ──
+  // En wallet_to_world los fondos llegan on-chain desde una wallet externa del
+  // cliente, así que no hay billetera Guira de origen que seleccionar. El servicio
+  // resuelve una wallet activa por su cuenta, solo como referencia del expediente.
   @ApiPropertyOptional()
+  @ValidateIf((o) => o.flow_type !== 'wallet_to_world')
   @IsUUID()
   wallet_id?: string;
 
