@@ -121,8 +121,16 @@ export class AdminComplianceController {
   @ApiOperation({ summary: 'Listar reviews pendientes / abiertos' })
   @ApiQuery({ name: 'priority', required: false })
   @ApiQuery({ name: 'assigned_to', required: false })
-  @ApiQuery({ name: 'limit', required: false, description: 'Máx 200, default 200' })
-  @ApiQuery({ name: 'offset', required: false, description: 'Para paginación server-side' })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    description: 'Máx 200, default 200',
+  })
+  @ApiQuery({
+    name: 'offset',
+    required: false,
+    description: 'Para paginación server-side',
+  })
   listOpenReviews(
     @Query('priority') priority?: string,
     @Query('assigned_to') assignedTo?: string,
@@ -134,7 +142,11 @@ export class AdminComplianceController {
     if (assignedTo) filters.assigned_to = assignedTo;
     const parsedLimit = limit ? Math.min(parseInt(limit, 10) || 200, 200) : 200;
     const parsedOffset = offset ? Math.max(parseInt(offset, 10) || 0, 0) : 0;
-    return this.actionsService.listOpenReviews(filters, parsedLimit, parsedOffset);
+    return this.actionsService.listOpenReviews(
+      filters,
+      parsedLimit,
+      parsedOffset,
+    );
   }
 
   @Get('reviews/:id')
@@ -178,10 +190,35 @@ export class AdminComplianceController {
     summary:
       'Obtener el expediente de onboarding más reciente de un usuario (independiente de reviews abiertos)',
   })
-  getOnboardingByUser(
-    @Param('userId', new ParseUUIDPipe()) userId: string,
-  ) {
+  getOnboardingByUser(@Param('userId', new ParseUUIDPipe()) userId: string) {
     return this.actionsService.getOnboardingByUserId(userId);
+  }
+
+  @Get('users/:userId/onboarding/export-zip')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({
+    summary:
+      'Descargar ZIP del expediente de onboarding de un usuario (resumen PDF + documentos) para envío manual a proveedores como Pythas',
+  })
+  async exportUserOnboardingZip(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Res({ passthrough: true }) res: any,
+  ) {
+    const { buffer, filename } =
+      await this.exportService.exportOnboardingZipByUserId(
+        userId,
+        actor.id,
+        actor.profile.role,
+      );
+
+    res.set({
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Length': buffer.length,
+    });
+
+    return new StreamableFile(buffer);
   }
 
   // ── REVIEWS (Acciones) ────────────────────────────────────────────
@@ -194,7 +231,12 @@ export class AdminComplianceController {
     @Body() dto: AssignReviewDto,
     @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.actionsService.assignReview(id, dto.staff_user_id, actor.id, actor.profile.role);
+    return this.actionsService.assignReview(
+      id,
+      dto.staff_user_id,
+      actor.id,
+      actor.profile.role,
+    );
   }
 
   @Patch('reviews/:id/unassign')
@@ -249,13 +291,19 @@ export class AdminComplianceController {
     @Body() dto: ApproveReviewDto,
     @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.actionsService.approveReview(id, actor.id, dto.reason, actor.profile.role);
+    return this.actionsService.approveReview(
+      id,
+      actor.id,
+      dto.reason,
+      actor.profile.role,
+    );
   }
 
   @Post('reviews/:id/resend-to-bridge')
   @Roles('staff', 'admin', 'super_admin')
   @ApiOperation({
-    summary: 'Re-enviar datos a Bridge via PUT cuando el estado está atascado en pending_bridge',
+    summary:
+      'Re-enviar datos a Bridge via PUT cuando el estado está atascado en pending_bridge',
   })
   resendToBridge(
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -274,7 +322,12 @@ export class AdminComplianceController {
     @Body() dto: RejectReviewDto,
     @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.actionsService.rejectReview(id, actor.id, dto.reason, actor.profile.role);
+    return this.actionsService.rejectReview(
+      id,
+      actor.id,
+      dto.reason,
+      actor.profile.role,
+    );
   }
 
   @Post('reviews/:id/request-changes')
@@ -317,6 +370,11 @@ export class AdminUserController {
     @Body() dto: SetLimitsDto,
     @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.actionsService.setTransactionLimits(userId, actor.id, dto, actor.profile.role);
+    return this.actionsService.setTransactionLimits(
+      userId,
+      actor.id,
+      dto,
+      actor.profile.role,
+    );
   }
 }

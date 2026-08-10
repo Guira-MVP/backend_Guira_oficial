@@ -1686,7 +1686,6 @@ export class PdfService {
     displayName: string;
     profileEmail?: string | null;
     applicationData: Record<string, any>;
-    events: Array<{ decision?: string; reason?: string; created_at?: string }>;
     documentsSummary: Array<{ ownerLabel: string; docTypeLabel: string; included: boolean }>;
     generatedByLabel: string;
   }): Promise<Buffer> {
@@ -1722,14 +1721,6 @@ export class PdfService {
       ]);
 
       const dataSections = this.buildOnboardingSections(input.onboardingType, input.applicationData);
-
-      const eventRows = input.events.length > 0
-        ? input.events.map((e) => [
-            { text: e.created_at ? this.fmtDate(e.created_at) : 'N/D', style: 'tLabel' },
-            { text: this.toDisplay(e.decision), style: 'tValue' },
-            { text: this.toDisplay(e.reason), style: 'tValue' },
-          ])
-        : [[{ text: 'Sin eventos registrados.', style: 'tLabel', colSpan: 3 }, {}, {}]];
 
       const docRows = input.documentsSummary.length > 0
         ? input.documentsSummary.map((d) => [
@@ -1808,20 +1799,6 @@ export class PdfService {
           layout: borderedLayout,
           margin: [0, 0, 0, 14] as [number, number, number, number],
         })),
-
-        // ═══ HISTORIAL DE DECISIONES ═══
-        {
-          table: {
-            headerRows: 1,
-            widths: ['22%', '23%', '55%'],
-            body: [
-              [{ text: 'FECHA', style: 'sectionHeader' }, { text: 'DECISIÓN', style: 'sectionHeader' }, { text: 'MOTIVO', style: 'sectionHeader' }],
-              ...eventRows,
-            ],
-          },
-          layout: borderedLayout,
-          margin: [0, 0, 0, 14],
-        },
 
         // ═══ DOCUMENTOS INCLUIDOS ═══
         {

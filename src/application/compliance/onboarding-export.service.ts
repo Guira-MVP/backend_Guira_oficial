@@ -72,13 +72,71 @@ export class OnboardingExportService {
     private readonly pdfService: PdfService,
   ) {}
 
+  /** Export keyed by compliance_reviews.id — usado desde la pestaña "Revisión" del expediente. */
   async exportOnboardingZip(
     reviewId: string,
     actorId: string,
     actorRole: string,
   ): Promise<{ buffer: Buffer; filename: string }> {
     const detail: any = await this.actionsService.getReviewDetail(reviewId);
+    const observations =
+      Array.isArray(detail.comments) && detail.comments.length > 0
+        ? (detail.comments[0]?.body ?? null)
+        : null;
 
+    return this.buildZipFromDetail(detail, {
+      actorId,
+      actorRole,
+      referenceId: reviewId,
+      openedAt: detail.opened_at ?? null,
+      closedAt: detail.closed_at ?? null,
+      observations,
+      auditTableName: 'compliance_reviews',
+      auditRecordId: reviewId,
+    });
+  }
+
+  /**
+   * Export keyed por user_id — usado desde la pestaña "Onboarding" del
+   * perfil de usuario. No depende de que exista un review abierto, por lo
+   * que sigue funcionando después de que Bridge ya aprobó al cliente
+   * (momento en el que se envía este paquete a Pythas).
+   */
+  async exportOnboardingZipByUserId(
+    userId: string,
+    actorId: string,
+    actorRole: string,
+  ): Promise<{ buffer: Buffer; filename: string }> {
+    const detail: any = await this.actionsService.getOnboardingByUserId(userId);
+
+    return this.buildZipFromDetail(detail, {
+      actorId,
+      actorRole,
+      referenceId: userId,
+      openedAt: detail.created_at ?? null,
+      closedAt: detail.updated_at ?? null,
+      observations: null,
+      auditTableName:
+        detail.onboarding_type === 'company'
+          ? 'kyb_applications'
+          : 'kyc_applications',
+      auditRecordId: detail.id ?? userId,
+    });
+  }
+
+  private async buildZipFromDetail(
+    detail: any,
+    ctx: {
+      actorId: string;
+      actorRole: string;
+      referenceId: string;
+      openedAt: string | null;
+      closedAt: string | null;
+      observations: string | null;
+      auditTableName: string;
+      auditRecordId: string;
+    },
+  ): Promise<{ buffer: Buffer; filename: string }> {
     const onboardingType: 'personal' | 'company' =
       detail.onboarding_type === 'company' ? 'company' : 'personal';
     const applicationData: Record<string, any> = detail.application_data ?? {};
@@ -134,20 +192,19 @@ export class OnboardingExportService {
     }
 
     const status = profile?.onboarding_status ?? detail.status ?? 'in_review';
-    const generatedByLabel = `${actorRole} (${actorId.slice(0, 8)})`;
+    const generatedByLabel = `${ctx.actorRole} (${ctx.actorId.slice(0, 8)})`;
 
     const summaryBuffer = await this.pdfService.generateOnboardingSummaryPdf({
-      reviewId,
+      reviewId: ctx.referenceId,
       onboardingType,
       status,
-      openedAt: detail.opened_at ?? null,
-      closedAt: detail.closed_at ?? null,
-      observations: detail.observations ?? null,
+      openedAt: ctx.openedAt,
+      closedAt: ctx.closedAt,
+      observations: ctx.observations,
       bridgeCustomerId: profile?.bridge_customer_id ?? null,
       displayName: clientName,
       profileEmail: profile?.email ?? null,
       applicationData,
-      events: Array.isArray(detail.events) ? detail.events : [],
       documentsSummary,
       generatedByLabel,
     });
@@ -170,11 +227,11 @@ export class OnboardingExportService {
     const { error: auditError } = await this.supabase
       .from('audit_logs')
       .insert({
-        performed_by: actorId,
-        role: actorRole,
+        performed_by: ctx.actorId,
+        role: ctx.actorRole,
         action: 'EXPORT_ONBOARDING_ZIP',
-        table_name: 'compliance_reviews',
-        record_id: reviewId,
+        table_name: ctx.auditTableName,
+        record_id: ctx.auditRecordId,
         new_values: {
           onboarding_type: onboardingType,
           documents_included: documentsSummary.filter((d) => d.included).length,
@@ -190,7 +247,7 @@ export class OnboardingExportService {
     }
 
     const typePrefix = onboardingType === 'company' ? 'KYB' : 'KYC';
-    const filename = `${typePrefix}_${safeClientName}_${reviewId.slice(0, 8)}.zip`;
+    const filename = `${typePrefix}_${safeClientName}_${ctx.referenceId.slice(0, 8)}.zip`;
 
     return { buffer, filename };
   }
