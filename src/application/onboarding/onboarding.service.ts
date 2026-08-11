@@ -648,11 +648,10 @@ export class OnboardingService {
 
   /**
    * Busca las filas de `business_ubos` que representan a la misma persona del
-   * DTO. Clave natural: número de documento. Si no hay coincidencia (el
-   * cliente corrigió un typo en el documento entre reenvíos) se cae a
-   * email + nombre completo: el email solo no basta como clave porque dos
-   * socios distintos pueden declarar el mismo correo de contacto y
-   * fusionarlos borraría un UBO del expediente.
+   * DTO, uniendo dos claves naturales: número de documento, y email + nombre
+   * completo. El email solo no basta como clave porque dos socios distintos
+   * pueden declarar el mismo correo de contacto y fusionarlos borraría un UBO
+   * del expediente; exigir además el nombre evita esa colisión.
    */
   private async findExistingUbos(businessId: string, dto: CreateUboDto) {
     const { data, error } = await this.supabase
@@ -680,17 +679,20 @@ export class OnboardingService {
       created_at: string;
     }[];
 
-    const byIdNumber = idNumber
-      ? rows.filter((u) => norm(u.id_number) === idNumber)
-      : [];
-    if (byIdNumber.length > 0) return byIdNumber;
-
-    if (!email || !fullName) return [];
-    return rows.filter(
-      (u) =>
-        norm(u.email) === email &&
-        `${norm(u.first_name)} ${norm(u.last_name)}`.trim() === fullName,
-    );
+    // Los dos criterios se UNEN en vez de cortar en el primero que acierte:
+    // el cliente puede tipear variantes del mismo documento entre reenvíos
+    // ("6998675", "6998675 QR", "6998675 LP" — caso IMPSOL S.R.L. el
+    // 2026-08-11), y quedarse solo con el match exacto dejaba esas filas
+    // fuera de la consolidación, viajando a Bridge como personas distintas.
+    // El filtro sobre `rows` preserva el orden por created_at, del que
+    // depende `pickUboToKeep` para elegir la fila más antigua.
+    return rows.filter((u) => {
+      if (idNumber && norm(u.id_number) === idNumber) return true;
+      if (!email || !fullName) return false;
+      const sameName =
+        `${norm(u.first_name)} ${norm(u.last_name)}`.trim() === fullName;
+      return norm(u.email) === email && sameName;
+    });
   }
 
   /** Fila superviviente: la ya conocida por Bridge; si ninguna, la más antigua. */
