@@ -893,6 +893,7 @@ export class ComplianceActionsService {
     issues: string[],
     additionalRequirements: string[],
     bridgeStatus: 'incomplete' | 'under_review' = 'incomplete',
+    affectedPersons: Record<string, string> = {},
   ): Promise<void> {
     this.logger.warn(
       `Bridge marcó cuenta como ${bridgeStatus} para user ${userId} — issues: ${issues.join(', ')}`,
@@ -907,47 +908,25 @@ export class ComplianceActionsService {
     if (!profile) return;
 
     const clientName = profile.full_name ?? profile.email ?? userId;
-    const fieldObservations: Record<string, string> = {};
+
+    // Sugerencia de observación por campo para el diálogo "Solicitar
+    // Correcciones": viaja en el metadata del evento, NO se escribe en la
+    // aplicación. El staff decide si la usa o no.
+    const suggestedFieldObservations: Record<string, string> = {};
     if (issues.includes('proof_of_nature_of_business_document')) {
-      fieldObservations.proof_of_nature_of_business =
+      suggestedFieldObservations.proof_of_nature_of_business =
         'Bridge solicita evidencia que demuestre la actividad comercial de la empresa (por ejemplo, factura, contrato, catálogo, folleto o material de marketing).';
     }
 
-    // 1. Actualizar estado de la aplicación a needs_review para que el staff pueda actuar
-    const { data: kycApp } = await this.supabase
-      .from('kyc_applications')
-      .select('id')
-      .eq('user_id', userId)
-      .in('status', ['sent_to_bridge', 'submitted', 'under_review'])
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (kycApp) {
-      await this.supabase
-        .from('kyc_applications')
-        .update({
-          status: 'needs_review',
-          observations: JSON.stringify({ bridge_issues: issues, additional_requirements: additionalRequirements }),
-          field_observations: fieldObservations,
-        })
-        .eq('id', kycApp.id);
-    } else {
-      // kyb_applications no tiene columna user_id — es requester_user_id (bug detectado
-      // 2026-07-29 vía webhook real: este filtro nunca matcheaba, el status se quedaba
-      // pegado en sent_to_bridge y el staff nunca se enteraba de los issues de Bridge).
-      await this.supabase
-        .from('kyb_applications')
-        .update({
-          status: 'needs_review',
-          observations: JSON.stringify({ bridge_issues: issues, additional_requirements: additionalRequirements }),
-          field_observations: fieldObservations,
-        })
-        .eq('requester_user_id', userId)
-        .in('status', ['sent_to_bridge', 'submitted', 'under_review']);
-    }
-
-    // 2. Registrar evento inmutable en el historial del compliance review
+    // 1. Registrar evento inmutable en el historial del compliance review.
+    //
+    // AUDIT 2026-08-11: antes esto además ponía la aplicación en
+    // 'needs_review', que es lo único que reabre el formulario del cliente, y
+    // le mandaba correo + alerta in-app. Los casos IMPSOL y NPK mostraron el
+    // problema: Bridge reporta cosas que resuelve solo (manual_sanctions_review,
+    // manual_government_id_review) y el cliente recibía un aviso de "corrige tu
+    // expediente" que no podía atender. Ahora el webhook solo escala al staff;
+    // reabrir el formulario y avisar al cliente es exclusivo de `requestChanges`.
     const decision = bridgeStatus === 'under_review' ? 'BRIDGE_UNDER_REVIEW' : 'BRIDGE_INCOMPLETE';
     const review = await this.findOpenReviewForUser(userId);
     if (review) {
@@ -960,6 +939,12 @@ export class ComplianceActionsService {
           bridge_issues: issues,
           additional_requirements: additionalRequirements,
           bridge_customer_id: bridgeCustomerId,
+          ...(Object.keys(affectedPersons).length > 0
+            ? { affected_persons: affectedPersons }
+            : {}),
+          ...(Object.keys(suggestedFieldObservations).length > 0
+            ? { suggested_field_observations: suggestedFieldObservations }
+            : {}),
         },
       });
       // El review se mantiene ABIERTO para que el staff tome acción
@@ -987,24 +972,11 @@ export class ComplianceActionsService {
       });
     }
 
-    // 3. Notificar al cliente con mensaje genérico (sin exponer detalles técnicos)
-    await this.supabase.from('notifications').insert({
-      user_id: userId,
-      type: 'alert',
-      title: 'Tu verificación requiere información adicional',
-      message:
-        'Tu verificación está siendo revisada y se necesita información adicional. Nuestro equipo de soporte se pondrá en contacto contigo pronto.',
-    });
+    // Al cliente NO se le avisa desde aquí (ni in-app ni por correo): eso lo
+    // decide el staff con "Solicitar Correcciones" (`requestChanges`), que es
+    // el único punto que reabre su formulario y le explica qué corregir.
 
-    // 3.5 Notificar por email — mensaje genérico (sin exponer issues/additionalRequirements)
-    if (profile.email) {
-      await this.emailService.sendComplianceIncompleteEmail({
-        email: profile.email,
-        name: profile.full_name ?? undefined,
-      });
-    }
-
-    // 4. Audit log — registro permanente de lo que Bridge reportó
+    // 3. Audit log — registro permanente de lo que Bridge reportó
     await this.supabase.from('audit_logs').insert({
       performed_by: userId,
       role: 'system',

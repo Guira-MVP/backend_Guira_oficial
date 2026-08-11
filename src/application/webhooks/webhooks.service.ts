@@ -749,7 +749,7 @@ export class WebhooksService {
         profile.onboarding_status === 'pending_bridge' ||
         profile.onboarding_status === 'kyc_issues'
       ) {
-        const { issueSet, additionalRequirements } =
+        const { issueSet, additionalRequirements, affectedPersons } =
           this.extractEndorsementIssues(eventObject);
 
         // `additional_requirements` está deprecado por Bridge (ver Endorsement
@@ -768,6 +768,7 @@ export class WebhooksService {
             [...issueSet],
             additionalRequirements,
             newStatus,
+            affectedPersons,
           );
         } else if (profile.onboarding_status === 'kyc_issues') {
           await this.reconcileResolvedBridgeIssues(profile, customerId);
@@ -871,16 +872,27 @@ export class WebhooksService {
   /**
    * Extrae los issues bloqueantes y los additional_requirements de los
    * endorsements de un customer.updated (usado para status 'incomplete' y 'under_review').
+   *
+   * `affectedPersons` mapea cada issue con la persona asociada que Bridge
+   * señala, cuando el payload lo indica. Se guarda aparte (no dentro del
+   * issue) para que el staff sepa a QUIÉN corresponde la observación sin
+   * contaminar los códigos, que se comparan entre sí y se traducen por
+   * catálogo.
    */
   private extractEndorsementIssues(
     eventObject: Record<string, unknown> | undefined,
-  ): { issueSet: Set<string>; additionalRequirements: string[] } {
+  ): {
+    issueSet: Set<string>;
+    additionalRequirements: string[];
+    affectedPersons: Record<string, string>;
+  } {
     const endorsements =
       (eventObject?.endorsements as
         | Array<Record<string, unknown>>
         | undefined) ?? [];
 
     const issueSet = new Set<string>();
+    const affectedPersons: Record<string, string> = {};
 
     // Añade un ítem de `missing`/`pending` solo si no es un marcador de
     // proceso interno de Bridge — esos se resuelven solos, sin acción del cliente.
@@ -903,10 +915,29 @@ export class WebhooksService {
           if (typeof issue === 'string') {
             issueSet.add(issue);
           } else if (typeof issue === 'object' && issue !== null) {
+            const issueObj = issue as Record<string, unknown>;
+
+            // Forma itemizada por persona:
+            // { items: ["government_id_verification_failed"], associated_person: "<uuid>" }
+            // Antes caía en el `Object.entries` de abajo y producía basura
+            // ("items: government_id_verification_failed" y el UUID como si
+            // fuera un issue) — rompía el catálogo de traducción y la
+            // comparación de sets (caso IMPSOL, 2026-08-11).
+            if (Array.isArray(issueObj.items)) {
+              const person =
+                typeof issueObj.associated_person === 'string'
+                  ? issueObj.associated_person
+                  : undefined;
+              for (const item of issueObj.items) {
+                if (typeof item !== 'string') continue;
+                issueSet.add(item);
+                if (person) affectedPersons[item] = person;
+              }
+              continue;
+            }
+
             // Bridge usa formato: { "acting_as_intermediary": ["incomplete_sof_field"] }
-            for (const [key, val] of Object.entries(
-              issue as Record<string, unknown>,
-            )) {
+            for (const [key, val] of Object.entries(issueObj)) {
               if (Array.isArray(val)) {
                 val.forEach((v) => issueSet.add(`${key}: ${v}`));
               } else {
@@ -932,10 +963,17 @@ export class WebhooksService {
           if (typeof requirement === 'string') {
             addIfActionable(requirement);
           } else if (requirement && typeof requirement === 'object') {
-            const items = (requirement as Record<string, unknown>).items;
+            const entry = requirement as Record<string, unknown>;
+            const items = entry.items;
+            const person =
+              typeof entry.associated_person === 'string'
+                ? entry.associated_person
+                : undefined;
             if (Array.isArray(items)) {
               for (const item of items) {
-                if (typeof item === 'string') addIfActionable(item);
+                if (typeof item !== 'string') continue;
+                addIfActionable(item);
+                if (person && issueSet.has(item)) affectedPersons[item] = person;
               }
             }
           }
@@ -955,13 +993,18 @@ export class WebhooksService {
       }
     }
 
-    return { issueSet, additionalRequirements };
+    return { issueSet, additionalRequirements, affectedPersons };
   }
 
   /**
-   * Marca el perfil como 'kyc_issues', persiste los issues reportados por Bridge
-   * en la kyc_application y delega al ComplianceActionsService para registrar
-   * el evento en el historial del compliance review y notificar al staff.
+   * Marca el perfil como 'kyc_issues' (señal para el dashboard de staff — el
+   * cliente no la ve) y delega al ComplianceActionsService para registrar el
+   * evento en el historial del compliance review y notificar al staff.
+   *
+   * NO notifica al cliente ni reabre su formulario: un webhook de Bridge solo
+   * escala al staff, que decide con "Solicitar Correcciones" si el cliente
+   * debe corregir algo. Muchos de estos issues (revisiones manuales de Bridge)
+   * se resuelven sin que el cliente tenga nada que hacer.
    *
    * Idempotente: si los mismos issues ya fueron registrados (p.ej. tras un
    * "Re-enviar a Bridge" que produjo la misma respuesta), no duplica el
@@ -973,35 +1016,20 @@ export class WebhooksService {
     issuesList: string[],
     additionalRequirements: string[],
     bridgeStatus: 'incomplete' | 'under_review',
+    affectedPersons: Record<string, string> = {},
   ): Promise<void> {
-    const { data: kycApp } = await this.supabase
-      .from('kyc_applications')
-      .select('observations')
-      .eq('user_id', profile.id)
-      .in('status', [
-        'sent_to_bridge',
-        'submitted',
-        'under_review',
-        'needs_review',
-      ])
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    const previousIssues = this.parsePreviousBridgeIssues(kycApp?.observations);
+    // El set previo se lee del último evento del review, no de
+    // `observations`: ese campo lo usa el staff para su mensaje al cliente
+    // (requestChanges) y mezclarlo con el JSON técnico de Bridge dejaba el
+    // guard inservible por colisión de claves — se re-notificaba al staff en
+    // cada webhook repetido.
+    const previousIssues = await this.findLastReportedBridgeIssues(profile.id);
     if (previousIssues && this.sameIssueSet(previousIssues, issuesList)) {
       this.logger.log(
         `customer.updated: customer ${customerId} → ${bridgeStatus} con los mismos issues ya registrados (${issuesList.join(', ')}), sin duplicar evento/notificación`,
       );
       return;
     }
-
-    const observationsPayload = {
-      bridge_status: bridgeStatus,
-      issues: issuesList,
-      additional_requirements: additionalRequirements,
-      detected_at: new Date().toISOString(),
-    };
 
     this.logger.warn(
       `customer.updated: customer ${customerId} → ${bridgeStatus} con issues bloqueantes: ${issuesList.join(', ')}`,
@@ -1016,20 +1044,9 @@ export class WebhooksService {
     // WS: notificar al cliente y al staff que hay issues en su verificación
     await this.emitProfileStatusAndUserUpdate(profile.id, 'kyc_issues');
 
-    // Guardar los issues en el KYC application
-    await this.supabase
-      .from('kyc_applications')
-      .update({
-        observations: JSON.stringify(observationsPayload),
-        updated_at: new Date().toISOString(),
-      })
-      .eq('user_id', profile.id)
-      .in('status', ['sent_to_bridge', 'submitted', 'under_review']);
-
     // Delegar al ComplianceActionsService:
     // - registra evento en historial del compliance review
     // - notifica a cada miembro del staff (con detalle de issues)
-    // - notifica al cliente con mensaje genérico
     // - inserta audit_log permanente
     await this.complianceActions.handleBridgeIncomplete(
       profile.id,
@@ -1037,6 +1054,7 @@ export class WebhooksService {
       issuesList,
       additionalRequirements,
       bridgeStatus,
+      affectedPersons,
     );
 
     this.logger.warn(
@@ -1045,84 +1063,24 @@ export class WebhooksService {
   }
 
   /**
-   * AUDIT+FIX 2026-07-31: revierte una escalación automática (needs_review /
-   * kyc_issues) cuando un evento posterior de Bridge confirma que los issues
-   * que la dispararon ya no están presentes (ej. un check `*_verification`
-   * que estaba `pending` terminó de procesarse solo). Sin esto, el cliente
-   * quedaba con el formulario reabierto y un correo de "correcciones
-   * necesarias" pendiente de algo que Bridge ya había resuelto por su cuenta.
+   * Devuelve el perfil de 'kyc_issues' a 'pending_bridge' cuando un evento
+   * posterior de Bridge confirma que los issues que dispararon la escalación
+   * ya no están (ej. un check que estaba `pending` terminó de procesarse solo).
    *
-   * Solo actúa si el estado actual fue puesto por ESTE mecanismo automático
-   * (profile.onboarding_status === 'kyc_issues' Y las `observations` tienen
-   * la forma `{bridge_issues:[...]}` que escribe `applyBridgeBlockingIssues`)
-   * — nunca pisa una revisión manual de staff, que guarda `observations` como
-   * texto libre (el `reason` que el staff escribió), no como ese JSON.
+   * AUDIT 2026-08-11: ya no toca el estado de la aplicación. Desde que el
+   * webhook dejó de poner 'needs_review' (ver `handleBridgeIncomplete`), la
+   * aplicación nunca sale de 'sent_to_bridge'/'submitted', así que no hay nada
+   * que revertir ahí — y tocarla podría pisar un 'needs_review' que el staff
+   * puso a propósito con "Solicitar Correcciones". Por eso la condición ahora
+   * es el estado del perfil, no la forma del campo `observations`.
    */
   private async reconcileResolvedBridgeIssues(
     profile: { id: string; onboarding_status: string | null },
     customerId: string,
   ): Promise<void> {
-    const isAutoEscalated = (observations: unknown): boolean => {
-      if (typeof observations !== 'string' || !observations) return false;
-      try {
-        const parsed = JSON.parse(observations) as { bridge_issues?: unknown };
-        return Array.isArray(parsed.bridge_issues);
-      } catch {
-        return false;
-      }
-    };
-
-    const { data: kycApp } = await this.supabase
-      .from('kyc_applications')
-      .select('id, observations')
-      .eq('user_id', profile.id)
-      .eq('status', 'needs_review')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    const { data: kybApp } = await this.supabase
-      .from('kyb_applications')
-      .select('id, observations')
-      .eq('requester_user_id', profile.id)
-      .eq('status', 'needs_review')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    let reverted = false;
-
-    if (kycApp && isAutoEscalated(kycApp.observations)) {
-      await this.supabase
-        .from('kyc_applications')
-        .update({
-          status: 'sent_to_bridge',
-          observations: null,
-          field_observations: {},
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', kycApp.id);
-      reverted = true;
-    }
-
-    if (kybApp && isAutoEscalated(kybApp.observations)) {
-      await this.supabase
-        .from('kyb_applications')
-        .update({
-          status: 'sent_to_bridge',
-          observations: null,
-          field_observations: {},
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', kybApp.id);
-      reverted = true;
-    }
-
-    if (!reverted) {
-      // El estado 'kyc_issues' no vino de este mecanismo (o ya fue tocado
-      // manualmente por staff) — no se toca nada.
+    if (profile.onboarding_status !== 'kyc_issues') {
       this.logger.log(
-        `customer.updated: customer ${customerId} → issues resueltos, pero no se encontró una escalación automática pendiente para user ${profile.id} (sin acción)`,
+        `customer.updated: customer ${customerId} → sin issues, pero el perfil ${profile.id} no está en kyc_issues (${profile.onboarding_status}) — sin acción`,
       );
       return;
     }
@@ -1133,16 +1091,6 @@ export class WebhooksService {
       .eq('id', profile.id);
 
     await this.emitProfileStatusAndUserUpdate(profile.id, 'pending_bridge');
-
-    // Notificación in-app únicamente — sin email, para no generar más ruido
-    // que el correo original que ya se le mandó de más al cliente.
-    await this.supabase.from('notifications').insert({
-      user_id: profile.id,
-      type: 'onboarding',
-      title: 'Verificación en curso',
-      message:
-        'La revisión automática de tu solicitud continuó sin observaciones. No necesitas realizar ninguna acción, seguimos procesando tu verificación.',
-    });
 
     await this.supabase.from('audit_logs').insert({
       performed_by: null,
@@ -1155,18 +1103,36 @@ export class WebhooksService {
     });
 
     this.logger.log(
-      `customer.updated: customer ${customerId} → issues previamente reportados ya no están presentes. Revertido needs_review/kyc_issues automáticamente para user ${profile.id}.`,
+      `customer.updated: customer ${customerId} → issues previamente reportados ya no están presentes. Perfil ${profile.id} devuelto a pending_bridge.`,
     );
   }
 
-  private parsePreviousBridgeIssues(observations: unknown): string[] | null {
-    if (typeof observations !== 'string' || !observations) return null;
-    try {
-      const parsed = JSON.parse(observations) as { issues?: unknown };
-      return Array.isArray(parsed.issues) ? (parsed.issues as string[]) : null;
-    } catch {
-      return null;
-    }
+  /**
+   * Último set de issues que Bridge reportó para este usuario, leído del
+   * historial del compliance review (`metadata.bridge_issues` del evento que
+   * escribe `handleBridgeIncomplete`).
+   *
+   * Se usa el evento en vez de `observations` de la aplicación porque ese
+   * campo pertenece al mensaje que el staff le escribe al cliente, y sirve
+   * igual para KYC y KYB — antes el guard solo miraba `kyc_applications`, así
+   * que en los expedientes KYB nunca había con qué comparar y el staff recibía
+   * una notificación por cada webhook repetido.
+   */
+  private async findLastReportedBridgeIssues(
+    userId: string,
+  ): Promise<string[] | null> {
+    const { data } = await this.supabase
+      .from('compliance_review_events')
+      .select('metadata')
+      .eq('actor_id', userId)
+      .in('decision', ['BRIDGE_UNDER_REVIEW', 'BRIDGE_INCOMPLETE'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const issues = (data?.metadata as { bridge_issues?: unknown } | null)
+      ?.bridge_issues;
+    return Array.isArray(issues) ? (issues as string[]) : null;
   }
 
   private sameIssueSet(a: string[], b: string[]): boolean {

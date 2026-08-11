@@ -131,6 +131,12 @@ export class EmailService {
     return this.sendEmail({ to, subject, html, text });
   }
 
+  /**
+   * Sin usos desde 2026-08-11: los webhooks de Bridge ya no le escriben al
+   * cliente (ver `handleBridgeIncomplete`). Se conserva la plantilla por si
+   * el staff necesita este aviso genérico; para pedir correcciones concretas
+   * el camino es `sendComplianceCorrectionsRequestedEmail`.
+   */
   async sendComplianceIncompleteEmail(to: EmailRecipient): Promise<boolean> {
     const { subject, html, text } = buildComplianceIncompleteEmail({
       name: to.name,
