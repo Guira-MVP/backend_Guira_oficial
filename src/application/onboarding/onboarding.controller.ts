@@ -153,9 +153,13 @@ export class OnboardingController {
   }
 
   @Post('kyb/business/ubos')
-  @ApiOperation({ summary: 'Añadir beneficiario final (UBO) a la empresa' })
-  addUbo(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateUboDto) {
-    return this.onboardingService.addUbo(user.id, dto);
+  @ApiOperation({
+    summary: 'Crear o actualizar un beneficiario final (UBO) de la empresa',
+    description:
+      'Idempotente por persona: reconcilia contra el UBO existente (documento de identidad o email) en vez de crear una fila nueva en cada reenvío del formulario KYB.',
+  })
+  upsertUbo(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateUboDto) {
+    return this.onboardingService.upsertUbo(user.id, dto);
   }
 
   @Delete('kyb/business/ubos/:id')

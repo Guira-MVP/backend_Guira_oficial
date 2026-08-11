@@ -19,7 +19,10 @@ import { OrdersGateway } from '../orders/orders.gateway';
 import { AdminGateway } from '../admin/admin.gateway';
 import * as crypto from 'crypto';
 import type { MobileDocumentTargetDto } from './dto/create-mobile-token.dto';
-import { getRequiredIdentityDocTypes } from './document-requirements';
+import {
+  getRequiredIdentityDocTypes,
+  labelForIdentityDocType,
+} from './document-requirements';
 
 const ALLOWED_MIME_TYPES = [
   'application/pdf',
@@ -576,18 +579,175 @@ export class OnboardingService {
     return { message: 'Director eliminado' };
   }
 
-  /** Añade un UBO (beneficiario final) a la empresa. */
-  async addUbo(userId: string, dto: CreateUboDto) {
+  /**
+   * Crea o actualiza un UBO (beneficiario final) de la empresa.
+   *
+   * Antes esto era un INSERT ciego, y el formulario KYB llama a este endpoint
+   * en CADA envío: cada reintento creaba una fila nueva de la misma persona.
+   * Como los documentos se guardan contra el `subject_id` del UBO y el
+   * formulario los daba por subidos (los ve vía `listDocuments`), las filas
+   * de los intentos anteriores quedaban sin documento de identidad y
+   * `assertIdentityDocumentsComplete` bloqueaba el envío para siempre
+   * ("falta: national_id_front, national_id_back" aunque el cliente sí los
+   * subió) — caso IMPSOL S.R.L. el 2026-08-11, 9 filas duplicadas del mismo
+   * UBO. Ahora se reconcilia por clave natural (documento de identidad, o
+   * email) dentro del negocio, igual que `upsertLegalRepresentative` hace con
+   * el representante legal, para conservar la misma fila y su
+   * `bridge_associated_person_id` entre reenvíos.
+   */
+  async upsertUbo(userId: string, dto: CreateUboDto) {
     const biz = await this.getUserBusiness(userId);
+
+    const existing = await this.findExistingUbos(biz.id, dto);
+    const keeper = this.pickUboToKeep(existing);
+
+    if (!keeper) {
+      const { data, error } = await this.supabase
+        .from('business_ubos')
+        .insert({ ...dto, business_id: biz.id })
+        .select()
+        .single();
+
+      if (error) throwDbError(error);
+      return data;
+    }
+
+    // Duplicados heredados del bug anterior: se consolidan en `keeper` para
+    // que el expediente atascado se destrabe solo en el siguiente envío. Solo
+    // se descartan filas que nunca llegaron a Bridge (sin associated person).
+    const removable = existing
+      .filter((u) => u.id !== keeper.id && !u.bridge_associated_person_id)
+      .map((u) => u.id);
+
+    if (removable.length > 0) {
+      await this.consolidateUboDocuments(userId, keeper.id, removable);
+
+      const { error: deleteError } = await this.supabase
+        .from('business_ubos')
+        .delete()
+        .in('id', removable)
+        .eq('business_id', biz.id);
+      if (deleteError) throwDbError(deleteError);
+
+      this.logger.warn(
+        `UBO ${keeper.id}: consolidadas ${removable.length} fila(s) duplicada(s) del negocio ${biz.id}`,
+      );
+    }
 
     const { data, error } = await this.supabase
       .from('business_ubos')
-      .insert({ ...dto, business_id: biz.id })
+      .update({ ...dto, updated_at: new Date().toISOString() })
+      .eq('id', keeper.id)
+      .eq('business_id', biz.id)
       .select()
       .single();
 
     if (error) throwDbError(error);
     return data;
+  }
+
+  /**
+   * Busca las filas de `business_ubos` que representan a la misma persona del
+   * DTO. Clave natural: número de documento. Si no hay coincidencia (el
+   * cliente corrigió un typo en el documento entre reenvíos) se cae a
+   * email + nombre completo: el email solo no basta como clave porque dos
+   * socios distintos pueden declarar el mismo correo de contacto y
+   * fusionarlos borraría un UBO del expediente.
+   */
+  private async findExistingUbos(businessId: string, dto: CreateUboDto) {
+    const { data, error } = await this.supabase
+      .from('business_ubos')
+      .select(
+        'id, id_number, email, first_name, last_name, bridge_associated_person_id, created_at',
+      )
+      .eq('business_id', businessId)
+      .order('created_at', { ascending: true });
+    if (error) throwDbError(error);
+
+    const norm = (value: unknown) =>
+      typeof value === 'string' ? value.trim().toLowerCase() : '';
+
+    const idNumber = norm(dto.id_number);
+    const email = norm(dto.email);
+    const fullName = `${norm(dto.first_name)} ${norm(dto.last_name)}`.trim();
+    const rows = (data ?? []) as {
+      id: string;
+      id_number: string | null;
+      email: string | null;
+      first_name: string | null;
+      last_name: string | null;
+      bridge_associated_person_id: string | null;
+      created_at: string;
+    }[];
+
+    const byIdNumber = idNumber
+      ? rows.filter((u) => norm(u.id_number) === idNumber)
+      : [];
+    if (byIdNumber.length > 0) return byIdNumber;
+
+    if (!email || !fullName) return [];
+    return rows.filter(
+      (u) =>
+        norm(u.email) === email &&
+        `${norm(u.first_name)} ${norm(u.last_name)}`.trim() === fullName,
+    );
+  }
+
+  /** Fila superviviente: la ya conocida por Bridge; si ninguna, la más antigua. */
+  private pickUboToKeep<T extends { bridge_associated_person_id: string | null }>(
+    ubos: T[],
+  ): T | undefined {
+    return ubos.find((u) => !!u.bridge_associated_person_id) ?? ubos[0];
+  }
+
+  /**
+   * Reasigna al UBO superviviente los documentos activos de sus filas
+   * duplicadas antes de borrarlas, para no perder lo que el cliente ya subió.
+   * Si el superviviente ya tiene un documento activo de ese tipo, el duplicado
+   * se marca `superseded` en vez de duplicarse.
+   */
+  private async consolidateUboDocuments(
+    userId: string,
+    keeperId: string,
+    duplicateIds: string[],
+  ) {
+    const { data: keeperDocs, error: keeperError } = await this.supabase
+      .from('documents')
+      .select('document_type')
+      .eq('user_id', userId)
+      .eq('subject_type', 'ubo')
+      .eq('subject_id', keeperId)
+      .eq('status', 'pending');
+    if (keeperError) throwDbError(keeperError);
+
+    const covered = new Set(
+      (keeperDocs ?? []).map((d) => d.document_type as string),
+    );
+
+    const { data: orphanDocs, error: orphanError } = await this.supabase
+      .from('documents')
+      .select('id, document_type')
+      .eq('user_id', userId)
+      .eq('subject_type', 'ubo')
+      .in('subject_id', duplicateIds)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false });
+    if (orphanError) throwDbError(orphanError);
+
+    for (const doc of orphanDocs ?? []) {
+      const docType = doc.document_type as string;
+      const patch = covered.has(docType)
+        ? { status: 'superseded' }
+        : { subject_id: keeperId };
+
+      const { error } = await this.supabase
+        .from('documents')
+        .update(patch)
+        .eq('id', doc.id);
+      if (error) throwDbError(error);
+
+      covered.add(docType);
+    }
   }
 
   /** Elimina un UBO. */
@@ -760,7 +920,9 @@ export class OnboardingService {
       const missing = requiredTypes.filter((t) => !foundTypes.has(t));
       if (missing.length > 0) {
         throw new BadRequestException(
-          `${subject.name || 'Una persona registrada'} no tiene el documento de identidad completo (falta: ${missing.join(', ')}). Sube el documento antes de enviar a Bridge.`,
+          `${subject.name || 'Una persona registrada'} no tiene el documento de identidad completo (falta: ${missing
+            .map(labelForIdentityDocType)
+            .join(', ')}). Sube el documento antes de enviar a Bridge.`,
         );
       }
     }
