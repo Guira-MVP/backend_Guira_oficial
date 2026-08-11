@@ -670,6 +670,13 @@ export class WebhooksService {
           .eq('id', kycApp.id);
       } else {
         // Try KYB
+        // BUG 2026-08-11: kyb_applications no tiene columna user_id, solo
+        // requester_user_id — el mismo bug ya documentado y corregido en
+        // compliance-actions.service.ts (2026-07-29) pero no replicado aquí.
+        // El filtro con la columna inexistente fallaba en silencio (el error
+        // de Supabase no se capturaba) y la fila nunca se actualizaba: 3
+        // negocios reales quedaron aprobados en profiles.onboarding_status
+        // pero con kyb_applications.status atascado en sent_to_bridge/submitted.
         await this.supabase
           .from('kyb_applications')
           .update({
@@ -677,7 +684,7 @@ export class WebhooksService {
             approved_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           })
-          .eq('user_id', profile.id)
+          .eq('requester_user_id', profile.id)
           .in('status', [
             'sent_to_bridge',
             'submitted',
@@ -1210,6 +1217,8 @@ export class WebhooksService {
 
       // Actualizar la aplicación correcta según tipo de customer
       if (customerType === 'business') {
+        // BUG 2026-08-11: kyb_applications no tiene columna user_id, solo
+        // requester_user_id (mismo caso que en handleCustomerUpdated arriba).
         await this.supabase
           .from('kyb_applications')
           .update({
@@ -1217,7 +1226,7 @@ export class WebhooksService {
             approved_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           })
-          .eq('user_id', userId)
+          .eq('requester_user_id', userId)
           .in('status', [
             'sent_to_bridge',
             'submitted',
