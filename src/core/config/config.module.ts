@@ -1,10 +1,11 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule as NestConfigModule } from '@nestjs/config';
-import * as Joi from 'joi';
 import * as fs from 'fs';
 import * as dotenv from 'dotenv';
 
 import appConfig from './app/app.config';
+import { resolveAppEnv } from './app/app-env';
+import { environmentValidationSchema } from './environment.validation';
 
 // Carga el Secret File de Render en producción ANTES de que NestJS
 // inicialice el ConfigModule. Render monta los Secret Files en
@@ -15,6 +16,10 @@ const RENDER_SECRETS_PATH = '/etc/secrets/.env.secrets';
 if (fs.existsSync(RENDER_SECRETS_PATH)) {
   dotenv.config({ path: RENDER_SECRETS_PATH, override: false });
 }
+
+// APP_ENV identifies the application tier. Populate its documented fallback
+// before Joi runs so production validation remains strict when it is omitted.
+process.env.APP_ENV ??= resolveAppEnv();
 
 @Module({
   imports: [
@@ -28,69 +33,7 @@ if (fs.existsSync(RENDER_SECRETS_PATH)) {
         process.env.NODE_ENV === 'production' ? undefined : '.env.local',
       load: [appConfig],
       expandVariables: true,
-      validationSchema: Joi.object({
-        // App
-        NODE_ENV: Joi.string()
-          .valid('development', 'test', 'production')
-          .default('development'),
-        PORT: Joi.number().default(3000),
-        PATH_SUBDOMAIN: Joi.string().default('api'),
-        URL_FRONTEND: Joi.string().allow('').default(''),
-
-        // Sentry (monitoreo de errores y logs)
-        SENTRY_DSN: Joi.when('NODE_ENV', {
-          is: 'production',
-          then: Joi.string().uri().required(),
-          otherwise: Joi.string().allow('').default(''),
-        }),
-
-        // Supabase
-        SUPABASE_URL: Joi.string().uri().required(),
-        SUPABASE_ANON_KEY: Joi.string().required(),
-        SUPABASE_SERVICE_ROLE_KEY: Joi.string().required(),
-
-        // Bridge API
-        // En producción BRIDGE_API_KEY es OBLIGATORIA — el servidor no arranca sin ella.
-        BRIDGE_API_KEY: Joi.when('NODE_ENV', {
-          is: 'production',
-          then: Joi.string().required(),
-          otherwise: Joi.string().allow('').default(''),
-        }),
-        BRIDGE_API_URL: Joi.string()
-          .uri()
-          .allow('')
-          .default('https://api.bridge.xyz'),
-        // En producción esta key es OBLIGATORIA para verificar firmas de webhooks
-        BRIDGE_WEBHOOK_PUBLIC_KEY: Joi.when('NODE_ENV', {
-          is: 'production',
-          then: Joi.string().required(),
-          otherwise: Joi.string().allow('').default(''),
-        }),
-
-        // Binance P2P (fuente del tipo de cambio paralelo BOB/USD)
-        BINANCE_P2P_API_URL: Joi.string()
-          .uri()
-          .allow('')
-          .default('https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search'),
-
-        // ZeptoMail (Email Transaccional)
-        // En producción ZEPTOMAIL_TOKEN y EMAIL_FROM_ADDRESS son OBLIGATORIAS.
-        ZEPTOMAIL_TOKEN: Joi.when('NODE_ENV', {
-          is: 'production',
-          then: Joi.string().required(),
-          otherwise: Joi.string().allow('').default(''),
-        }),
-        ZEPTOMAIL_API_URL: Joi.string()
-          .uri()
-          .allow('')
-          .default('https://api.zeptomail.com/v1.1/email'),
-        EMAIL_FROM_ADDRESS: Joi.when('NODE_ENV', {
-          is: 'production',
-          then: Joi.string().email().required(),
-          otherwise: Joi.string().allow('').default(''),
-        }),
-        EMAIL_FROM_NAME: Joi.string().allow('').default('Guira'),
-      }),
+      validationSchema: environmentValidationSchema,
     }),
   ],
   exports: [NestConfigModule],

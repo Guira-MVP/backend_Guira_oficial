@@ -4,6 +4,7 @@
 import * as Sentry from '@sentry/nestjs';
 import { nodeProfilingIntegration } from '@sentry/profiling-node';
 import * as dotenv from 'dotenv';
+import { resolveAppEnv } from './core/config/app/app-env';
 
 // Este archivo se ejecuta antes de que CoreConfigModule cargue .env.local,
 // así que necesitamos leer el env file nosotros mismos para que SENTRY_DSN
@@ -12,11 +13,16 @@ if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: '.env.local' });
 }
 
+const appEnv = resolveAppEnv();
+
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
-  environment: process.env.NODE_ENV ?? 'development',
+  environment: appEnv,
 
-  integrations: [Sentry.consoleLoggingIntegration(), nodeProfilingIntegration()],
+  integrations: [
+    Sentry.consoleLoggingIntegration(),
+    nodeProfilingIntegration(),
+  ],
 
   // Captura structured logs (Sentry.logger.*) y console.error/warn como logs
   // dentro de Sentry, para poder monitorear logs además de excepciones.
