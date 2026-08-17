@@ -22,7 +22,6 @@ export enum InterbankFlowType {
   WALLET_TO_WALLET = 'wallet_to_wallet',
   BOLIVIA_TO_WALLET = 'bolivia_to_wallet',
   WORLD_TO_BOLIVIA = 'world_to_bolivia',
-  WORLD_TO_WALLET = 'world_to_wallet',
 }
 
 export class CreateInterbankOrderDto {
@@ -149,13 +148,6 @@ export class CreateInterbankOrderDto {
   @IsOptional()
   @IsString()
   destination_qr_url?: string;
-
-  // ── world_to_wallet: VA existente ──
-  @ApiPropertyOptional()
-  @ValidateIf((o) => o.flow_type === 'world_to_wallet')
-  @IsOptional()
-  @IsUUID()
-  virtual_account_id?: string;
 
   // ── Campos comunes ──
   @ApiPropertyOptional({

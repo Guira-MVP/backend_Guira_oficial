@@ -414,8 +414,8 @@ export function resolveFiatBoPsavMatch<
 //  dirección que Bridge devuelve con features.allow_any_from_address. Bridge
 //  convierte y liquida a la cuenta bancaria del proveedor.
 //
-//  A diferencia de wallet_to_fiat —que no valida nada— aquí SÍ validamos la
-//  combinación red/token: si aceptamos una que Bridge no liquida, Bridge
+//  Aquí SÍ validamos la combinación red/token, a diferencia de otros flujos
+//  on-chain: si aceptamos una que Bridge no liquida, Bridge
 //  devuelve dirección igual y el cliente enviaría fondos reales a una ruta no
 //  procesable, sin return_instructions para recuperarlos.
 //

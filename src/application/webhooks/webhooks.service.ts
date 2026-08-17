@@ -29,6 +29,15 @@ interface WebhookEventContext {
   providerEventId: string | null;
 }
 
+// Códigos de trazabilidad bancaria que Bridge envía en event_object.source
+// de los webhooks virtual_account.activity.* (solo rieles fiat: wire y ACH).
+interface VaTraceCodes {
+  imad: string | null;
+  achTraceNumber: string | null;
+  paymentConcept: string | null;
+  senderBankRoutingNumber: string | null;
+}
+
 @Injectable()
 export class WebhooksService {
   private readonly logger = new Logger(WebhooksService.name);
@@ -1333,6 +1342,70 @@ export class WebhooksService {
   }
 
   // ═══════════════════════════════════════════════
+  //  HELPER: Extrae los codigos de trazabilidad bancaria segun el payment_rail
+  //  Wire -> source.imad + source.wire_message + source.bank_routing_number
+  //  ACH  -> source.trace_number + source.description + source.sender_bank_routing_number
+  //  Crypto y demas rieles no traen ninguno de estos campos: devuelve todo null.
+  //
+  //  El IMAD es la referencia que reconoce el banco corresponsal en trazas y
+  //  disputas; sin esto solo sobrevivia dentro de webhook_events.raw_payload.
+  // ═══════════════════════════════════════════════
+
+  private extractVaTraceCodes(
+    source: Record<string, unknown> | undefined,
+  ): VaTraceCodes {
+    return {
+      imad: (source?.imad as string) ?? null,
+      achTraceNumber: (source?.trace_number as string) ?? null,
+      paymentConcept:
+        (source?.wire_message as string) ??
+        (source?.description as string) ??
+        null,
+      senderBankRoutingNumber:
+        (source?.bank_routing_number as string) ??
+        (source?.sender_bank_routing_number as string) ??
+        null,
+    };
+  }
+
+  // ═══════════════════════════════════════════════
+  //  HELPER: Columnas para los INSERT de bridge_virtual_account_events.
+  //  Devuelve los nulos tal cual: es una fila nueva, no hay nada que pisar.
+  // ═══════════════════════════════════════════════
+
+  private vaTraceColumns(
+    source: Record<string, unknown> | undefined,
+  ): Record<string, string | null> {
+    const codes = this.extractVaTraceCodes(source);
+    return {
+      imad: codes.imad,
+      ach_trace_number: codes.achTraceNumber,
+      payment_concept: codes.paymentConcept,
+      sender_bank_routing_number: codes.senderBankRoutingNumber,
+    };
+  }
+
+  // ═══════════════════════════════════════════════
+  //  HELPER: Patch para los UPDATE de payment_orders, omitiendo los nulos.
+  //
+  //  Bridge reenvia la misma actividad como created/updated con el sub-tipo
+  //  dentro del payload, y no todos los eventos traen `source`. Omitir los nulos
+  //  evita que un evento posterior sin `source` borre el codigo ya capturado,
+  //  sin necesidad de releer la orden antes de escribir.
+  // ═══════════════════════════════════════════════
+
+  private traceCodesToPatch(codes: VaTraceCodes): Record<string, string> {
+    const patch: Record<string, string> = {};
+    if (codes.imad) patch.imad = codes.imad;
+    if (codes.achTraceNumber) patch.ach_trace_number = codes.achTraceNumber;
+    if (codes.paymentConcept) patch.payment_concept = codes.paymentConcept;
+    if (codes.senderBankRoutingNumber) {
+      patch.sender_bank_routing_number = codes.senderBankRoutingNumber;
+    }
+    return patch;
+  }
+
+  // ═══════════════════════════════════════════════
   //  HANDLER: virtual_account.activity.funds_received [FIX C-1, C-2, C-3]
   //  Bridge recibio el deposito fiat — NO acreditamos balance aqui.
   //  La acreditacion ocurre en handleVaPaymentProcessed (estado terminal).
@@ -1356,6 +1429,7 @@ export class WebhooksService {
     const source = data.source as Record<string, unknown> | undefined;
     const senderName = this.extractVaSenderName(source);
     const paymentRail = (source?.payment_rail as string) ?? null;
+    const traceCodes = this.extractVaTraceCodes(source);
     const bridgeEventId = (data.id as string) ?? null;
 
     if (!vaId || isNaN(amount)) {
@@ -1401,6 +1475,7 @@ export class WebhooksService {
       currency,
       sender_name: senderName,
       payment_rail: paymentRail,
+      ...this.vaTraceColumns(source),
       raw_payload: payload,
     });
 
@@ -1423,6 +1498,7 @@ export class WebhooksService {
         senderName,
         payload,
         depositId,
+        traceCodes,
       );
     } else {
       await this.handleInternalDepositPending(
@@ -1434,6 +1510,7 @@ export class WebhooksService {
         senderName,
         bridgeEventId,
         depositId,
+        traceCodes,
       );
     }
   }
@@ -1453,6 +1530,7 @@ export class WebhooksService {
     senderName: string,
     bridgeEventId: string | null,
     depositId: string | null,
+    traceCodes: VaTraceCodes,
   ): Promise<void> {
     const userId = va.user_id as string;
 
@@ -1491,6 +1569,10 @@ export class WebhooksService {
         // sobreescribe con receipt.exchange_rate cuando Bridge confirma.
         exchange_rate_applied: 1.0,
         sender_name: senderName,
+        imad: traceCodes.imad,
+        ach_trace_number: traceCodes.achTraceNumber,
+        payment_concept: traceCodes.paymentConcept,
+        sender_bank_routing_number: traceCodes.senderBankRoutingNumber,
         bridge_event_id: bridgeEventId,
         deposit_id: depositId,
         va_deposit_status: 'funds_received',
@@ -1550,6 +1632,12 @@ export class WebhooksService {
     senderName: string,
     payload: Record<string, unknown>,
     depositId: string | null = null,
+    traceCodes: VaTraceCodes = {
+      imad: null,
+      achTraceNumber: null,
+      paymentConcept: null,
+      senderBankRoutingNumber: null,
+    },
   ): Promise<void> {
     const userId = va.user_id as string;
     const externalAddr =
@@ -1586,6 +1674,10 @@ export class WebhooksService {
         currency: ((va.source_currency as string) ?? currency).toUpperCase(),
         exchange_rate_applied: 1.0,
         sender_name: senderName,
+        imad: traceCodes.imad,
+        ach_trace_number: traceCodes.achTraceNumber,
+        payment_concept: traceCodes.paymentConcept,
+        sender_bank_routing_number: traceCodes.senderBankRoutingNumber,
         bridge_event_id: (payload.id as string) ?? null,
         deposit_id: depositId,
         va_deposit_status: 'payment_processed',
@@ -1673,6 +1765,8 @@ export class WebhooksService {
     >;
     const depositId = (data?.deposit_id as string) ?? null;
     const vaId = data?.virtual_account_id as string;
+    const source = data?.source as Record<string, unknown> | undefined;
+    const traceCodes = this.extractVaTraceCodes(source);
 
     this.logger.log(`VA payment_submitted: depositId=${depositId} va=${vaId}`);
 
@@ -1683,13 +1777,18 @@ export class WebhooksService {
       event_type: 'virtual_account.activity.payment_submitted',
       amount: parseFloat((data?.amount as string) ?? '0'),
       currency: ((data?.currency as string) ?? 'usd').toUpperCase(),
+      payment_rail: (source?.payment_rail as string) ?? null,
+      ...this.vaTraceColumns(source),
       raw_payload: payload,
     });
 
     if (depositId) {
       await this.supabase
         .from('payment_orders')
-        .update({ va_deposit_status: 'payment_submitted' })
+        .update({
+          va_deposit_status: 'payment_submitted',
+          ...this.traceCodesToPatch(traceCodes),
+        })
         .eq('deposit_id', depositId)
         .not(
           'status',
@@ -1716,6 +1815,8 @@ export class WebhooksService {
 
     const depositId = (data.deposit_id as string) ?? null;
     const vaId = data.virtual_account_id as string;
+    const source = data.source as Record<string, unknown> | undefined;
+    const traceCodes = this.extractVaTraceCodes(source);
 
     // Extraer campos del receipt para persistirlos en la order
     const receipt = (data.receipt as Record<string, unknown>) ?? null;
@@ -1754,6 +1855,8 @@ export class WebhooksService {
       event_type: 'virtual_account.activity.payment_processed',
       amount: parseFloat((data.amount as string) ?? '0'),
       currency: ((data.currency as string) ?? 'usd').toUpperCase(),
+      payment_rail: (source?.payment_rail as string) ?? null,
+      ...this.vaTraceColumns(source),
       raw_payload: payload,
     });
 
@@ -1833,6 +1936,7 @@ export class WebhooksService {
         destination_network: destinationNetwork ?? null,
         tx_hash: txHash,
         receipt_url: receiptUrl,
+        ...this.traceCodesToPatch(traceCodes),
       })
       .eq('id', order.id);
 
@@ -1896,6 +2000,7 @@ export class WebhooksService {
       amount,
       currency: ((data?.currency as string) ?? 'usd').toUpperCase(),
       payment_rail: (source?.payment_rail as string) ?? null,
+      ...this.vaTraceColumns(source),
       raw_payload: payload,
     });
 
@@ -2440,6 +2545,9 @@ export class WebhooksService {
               destinationTxHash ??
               context?.providerEventId ??
               null,
+            // Columna dedicada: provider_reference mezcla trace numbers con hashes,
+            // asi que ahi el trace ACH deja de ser distinguible.
+            ...(traceNumber ? { ach_trace_number: traceNumber } : {}),
             bridge_event_id: context?.providerEventId ?? null,
             source_address: sourceAddress,
             source_network: sourceNetwork,

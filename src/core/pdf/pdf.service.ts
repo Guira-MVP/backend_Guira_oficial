@@ -25,22 +25,45 @@ const COLORS = {
   textSecondary: '#6B6E9E',
 };
 
-// Human-readable labels per flow_type
+// ═══════════════════════════════════════════════════════════
+//  Etiquetas por flow_type — nomenclatura de registro contable.
+//
+//  Redactadas para que el comprobante sea legible ante terceros
+//  (aduana, banca corresponsal, auditoría, contabilidad externa)
+//  sin exigir conocimiento del producto: se describe QUÉ se movió
+//  y HACIA DÓNDE, no el nombre comercial del flujo.
+//
+//  Cuatro familias, en este orden:
+//    · Pago Internacional a Proveedor  — salida hacia un tercero
+//    · Recepción de Fondos del Exterior — entrada desde el exterior
+//    · Constitución de Fondos           — el cliente fondea su cuenta
+//    · Retiro de Fondos                 — el cliente retira a un destino propio
+//
+//  Se renderiza en DOS puntos del PDF (misma cadena):
+//    · Subtítulo de cabecera, bajo "COMPROBANTE DE TRANSACCIÓN"
+//    · Panel de monto, celda "TIPO DE SERVICIO"
+//  Al añadir o editar una entrada, verificar que no desborde ninguno
+//  de los dos: la más larga hoy son 62 caracteres.
+// ═══════════════════════════════════════════════════════════
 const FLOW_LABELS: Record<string, string> = {
-  fiat_bo_to_bridge_wallet: 'Deposito BOB - Billetera Guira',
-  crypto_to_bridge_wallet: 'Deposito Crypto - Billetera Guira',
-  // NOTA: fiat_us_to_bridge_wallet está soportado en el PDF (label + destino) pero
-  // aún NO tiene método de creación en payment-orders.service.ts (flujo planificado).
-  fiat_us_to_bridge_wallet: 'Deposito USD - Billetera Guira',
-  bridge_wallet_to_fiat_bo: 'Retiro Guira - Cuenta BOB',
-  bridge_wallet_to_fiat_us: 'Retiro Guira - Cuenta Exterior',
-  bridge_wallet_to_crypto: 'Retiro Guira - Wallet Crypto',
-  wallet_to_world: 'Envio Wallet Externa - Cuenta Exterior',
-  bolivia_to_world: 'Bolivia - Exterior',
-  bolivia_to_wallet: 'Bolivia - Wallet Crypto',
-  wallet_to_wallet: 'Wallet - Wallet (Crypto)',
-  world_to_bolivia: 'Exterior a Bolivia',
-  va_deposit: 'Deposito Cuenta Virtual',
+  // ── Pago Internacional a Proveedor ──
+  bolivia_to_world: 'Pago Internacional a Proveedor — Transferencia Bancaria',
+  bolivia_to_wallet: 'Pago Internacional a Proveedor — Liquidación en Activos Virtuales',
+  wallet_to_wallet: 'Pago Internacional a Proveedor — Transferencia entre Activos Virtuales',
+  wallet_to_world: 'Pago Internacional a Proveedor — Liquidación desde Billetera Externa',
+
+  // ── Recepción de Fondos del Exterior ──
+  world_to_bolivia: 'Recepción de Fondos del Exterior — Abono en Cuenta Nacional',
+
+  // ── Constitución de Fondos ──
+  fiat_bo_to_bridge_wallet: 'Constitución de Fondos — Depósito en Bolivianos',
+  crypto_to_bridge_wallet: 'Constitución de Fondos — Depósito en Activos Virtuales',
+  va_deposit: 'Constitución de Fondos — Depósito vía Cuenta Bancaria Asignada',
+
+  // ── Retiro de Fondos ──
+  bridge_wallet_to_fiat_bo: 'Retiro de Fondos — Abono en Cuenta Bancaria Nacional',
+  bridge_wallet_to_fiat_us: 'Retiro de Fondos — Abono en Cuenta Bancaria del Exterior',
+  bridge_wallet_to_crypto: 'Retiro de Fondos — Envío a Billetera de Activos Virtuales',
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -493,7 +516,7 @@ export class PdfService {
     }
 
     // ── On-ramps: fiat/crypto → bridge_wallet ─────────────
-    else if (['fiat_bo_to_bridge_wallet', 'crypto_to_bridge_wallet', 'fiat_us_to_bridge_wallet'].includes(ft)) {
+    else if (['fiat_bo_to_bridge_wallet', 'crypto_to_bridge_wallet'].includes(ft)) {
       rows.push(
         this.linkRow('Billetera Destino', this.toDisplay(clientWallet?.address), this.buildExplorerUrl(clientWallet?.address, clientWallet?.network, 'address')),
         this.row('Red Destino', this.toDisplay(clientWallet?.network)),
@@ -599,7 +622,7 @@ export class PdfService {
     if ([
       'crypto_to_bridge_wallet', 'bridge_wallet_to_crypto',
       'wallet_to_wallet', 'bolivia_to_wallet',
-      'fiat_bo_to_bridge_wallet', 'fiat_us_to_bridge_wallet',
+      'fiat_bo_to_bridge_wallet',
       // va_deposit: el stablecoin acreditado es la moneda destino (p.ej. USDC)
       'va_deposit',
     ].includes(order.flow_type)) {
@@ -695,6 +718,16 @@ export class PdfService {
       // Bridge Deposit ID — va_deposit
       if (order.deposit_id) {
         traceRows.push(this.row('ID Deposito Guira', this.toDisplay(order.deposit_id)));
+      }
+
+      // Fedwire IMAD — the reference the correspondent bank uses in traces and disputes
+      if (order.imad) {
+        traceRows.push(this.row('IMAD (Fedwire)', this.toDisplay(order.imad)));
+      }
+
+      // ACH trace number — inbound deposits and outbound ACH payouts
+      if (order.ach_trace_number) {
+        traceRows.push(this.row('N° de Traza ACH', this.toDisplay(order.ach_trace_number)));
       }
 
       // Destination blockchain tx hash — proof of delivery
@@ -953,7 +986,11 @@ export class PdfService {
                         { text: 'TIPO DE SERVICIO', style: 'amountLabel' },
                         { text: flowLabel, style: 'amountType' },
                       ],
-                      width: 'auto',
+                      // Ancho fijo (no 'auto'): las etiquetas de FLOW_LABELS llegan a
+                      // 62 caracteres y con 'auto' comprimirían la columna del monto.
+                      // Con 190pt el texto envuelve a 2-3 líneas y el monto conserva
+                      // su espacio.
+                      width: 190,
                       alignment: 'right' as const,
                     },
                   ],
