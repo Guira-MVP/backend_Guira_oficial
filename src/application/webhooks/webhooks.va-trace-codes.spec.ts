@@ -113,4 +113,68 @@ describe('WebhooksService — códigos de trazabilidad VA', () => {
       });
     });
   });
+
+  // ── Dirección SALIENTE: event_object.destination de los webhooks transfer.* ──
+  //
+  // Bridge solo incluye `imad` cuando state === 'payment_processed'. En los
+  // estados anteriores el objeto destination llega sin él, y el patch tiene que
+  // salir vacío para no borrar lo ya capturado.
+  describe('transferTraceCodesToPatch', () => {
+    // destination de un transfer.updated.status_transitioned en payment_processed
+    const WIRE_DEST_PROCESSED = {
+      currency: 'usd',
+      external_account_id: '00000000-0000-0000-0000-000000000000',
+      imad: '20260101BBBBBBBB000002',
+      payment_rail: 'wire',
+      wire_message: 'Guira ABC12345',
+    };
+
+    // mismo transfer en payment_submitted: aún sin IMAD
+    const WIRE_DEST_SUBMITTED = {
+      currency: 'usd',
+      external_account_id: '00000000-0000-0000-0000-000000000000',
+      payment_rail: 'wire',
+      wire_message: 'Guira ABC12345',
+    };
+
+    it('toma el IMAD del wire saliente en payment_processed', () => {
+      expect(svc.transferTraceCodesToPatch(WIRE_DEST_PROCESSED)).toEqual({
+        imad: '20260101BBBBBBBB000002',
+      });
+    });
+
+    it('no toma el wire_message: en un wire saliente lo genera Guira, no un tercero', () => {
+      const patch = svc.transferTraceCodesToPatch(WIRE_DEST_PROCESSED);
+      expect(patch).not.toHaveProperty('payment_concept');
+      expect(patch).not.toHaveProperty('sender_bank_routing_number');
+    });
+
+    it('devuelve patch vacío antes de payment_processed, para no borrar el IMAD', () => {
+      expect(svc.transferTraceCodesToPatch(WIRE_DEST_SUBMITTED)).toEqual({});
+    });
+
+    it('toma el trace number en un destino ACH saliente', () => {
+      expect(
+        svc.transferTraceCodesToPatch({
+          payment_rail: 'ach',
+          currency: 'usd',
+          trace_number: '000000000000001',
+        }),
+      ).toEqual({ ach_trace_number: '000000000000001' });
+    });
+
+    it('devuelve patch vacío en destinos crypto', () => {
+      expect(
+        svc.transferTraceCodesToPatch({
+          payment_rail: 'solana',
+          currency: 'usdc',
+          to_address: '00000000000000000000000000000000',
+        }),
+      ).toEqual({});
+    });
+
+    it('no revienta si el transfer llega sin destination', () => {
+      expect(svc.transferTraceCodesToPatch(undefined)).toEqual({});
+    });
+  });
 });

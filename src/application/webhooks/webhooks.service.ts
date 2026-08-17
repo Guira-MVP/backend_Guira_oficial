@@ -29,9 +29,11 @@ interface WebhookEventContext {
   providerEventId: string | null;
 }
 
-// Códigos de trazabilidad bancaria que Bridge envía en event_object.source
-// de los webhooks virtual_account.activity.* (solo rieles fiat: wire y ACH).
-interface VaTraceCodes {
+// Códigos de trazabilidad bancaria de un movimiento fiat (wire o ACH).
+// Bridge los envía por dos rutas distintas según la dirección del dinero:
+//   · entrante → event_object.source de los webhooks virtual_account.activity.*
+//   · saliente → event_object.destination de transfer.updated.status_transitioned
+interface BankTraceCodes {
   imad: string | null;
   achTraceNumber: string | null;
   paymentConcept: string | null;
@@ -1353,7 +1355,7 @@ export class WebhooksService {
 
   private extractVaTraceCodes(
     source: Record<string, unknown> | undefined,
-  ): VaTraceCodes {
+  ): BankTraceCodes {
     return {
       imad: (source?.imad as string) ?? null,
       achTraceNumber: (source?.trace_number as string) ?? null,
@@ -1387,14 +1389,16 @@ export class WebhooksService {
 
   // ═══════════════════════════════════════════════
   //  HELPER: Patch para los UPDATE de payment_orders, omitiendo los nulos.
+  //  Sirve a las dos direcciones (ver BankTraceCodes).
   //
-  //  Bridge reenvia la misma actividad como created/updated con el sub-tipo
-  //  dentro del payload, y no todos los eventos traen `source`. Omitir los nulos
-  //  evita que un evento posterior sin `source` borre el codigo ya capturado,
-  //  sin necesidad de releer la orden antes de escribir.
+  //  Bridge manda varios eventos por el mismo movimiento y no todos traen los
+  //  codigos: la actividad de una VA se reenvia como created/updated con el
+  //  sub-tipo dentro del payload, y en un transfer el IMAD solo aparece al llegar
+  //  a payment_processed. Omitir los nulos evita que un evento posterior borre el
+  //  codigo ya capturado, sin releer la orden antes de escribir.
   // ═══════════════════════════════════════════════
 
-  private traceCodesToPatch(codes: VaTraceCodes): Record<string, string> {
+  private traceCodesToPatch(codes: BankTraceCodes): Record<string, string> {
     const patch: Record<string, string> = {};
     if (codes.imad) patch.imad = codes.imad;
     if (codes.achTraceNumber) patch.ach_trace_number = codes.achTraceNumber;
@@ -1403,6 +1407,31 @@ export class WebhooksService {
       patch.sender_bank_routing_number = codes.senderBankRoutingNumber;
     }
     return patch;
+  }
+
+  // ═══════════════════════════════════════════════
+  //  HELPER: Codigos bancarios de un movimiento SALIENTE, desde
+  //  event_object.destination de los webhooks transfer.*.
+  //
+  //  Bridge solo envia `imad` cuando state === 'payment_processed': hasta que la
+  //  Fed no ejecuta el wire no hay IMAD que asignar. Es el comprobante que el
+  //  cliente lleva a su banco para reclamar un wire que envio.
+  //
+  //  No se toma `destination.wire_message`: en un wire saliente ese texto lo
+  //  genera Guira (`Guira ${orderToken}`, ver payment-orders.service.ts), no un
+  //  tercero, asi que no es `payment_concept`. El routing bancario tampoco
+  //  aplica: el destino es la cuenta externa del proveedor, no un banco emisor.
+  // ═══════════════════════════════════════════════
+
+  private transferTraceCodesToPatch(
+    destination: Record<string, unknown> | undefined,
+  ): Record<string, string> {
+    return this.traceCodesToPatch({
+      imad: (destination?.imad as string) ?? null,
+      achTraceNumber: (destination?.trace_number as string) ?? null,
+      paymentConcept: null,
+      senderBankRoutingNumber: null,
+    });
   }
 
   // ═══════════════════════════════════════════════
@@ -1530,7 +1559,7 @@ export class WebhooksService {
     senderName: string,
     bridgeEventId: string | null,
     depositId: string | null,
-    traceCodes: VaTraceCodes,
+    traceCodes: BankTraceCodes,
   ): Promise<void> {
     const userId = va.user_id as string;
 
@@ -1632,7 +1661,7 @@ export class WebhooksService {
     senderName: string,
     payload: Record<string, unknown>,
     depositId: string | null = null,
-    traceCodes: VaTraceCodes = {
+    traceCodes: BankTraceCodes = {
       imad: null,
       achTraceNumber: null,
       paymentConcept: null,
@@ -2545,9 +2574,11 @@ export class WebhooksService {
               destinationTxHash ??
               context?.providerEventId ??
               null,
-            // Columna dedicada: provider_reference mezcla trace numbers con hashes,
-            // asi que ahi el trace ACH deja de ser distinguible.
-            ...(traceNumber ? { ach_trace_number: traceNumber } : {}),
+            // Columnas dedicadas (imad, ach_trace_number): provider_reference mezcla
+            // trace numbers con hashes, asi que ahi el codigo bancario deja de ser
+            // distinguible. El patch omite los ausentes a proposito, para que un
+            // transfer.updated posterior no borre el codigo ya capturado.
+            ...this.transferTraceCodesToPatch(destination),
             bridge_event_id: context?.providerEventId ?? null,
             source_address: sourceAddress,
             source_network: sourceNetwork,
