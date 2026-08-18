@@ -16,6 +16,7 @@ const COLORS = {
   white: '#FFFFFF',
   surface: '#F4F6FF',     // light background
   muted: '#6B6E9E',       // muted foreground
+  mutedOnNavy: '#8A8DC0', // etiquetas discretas sobre la banda navy del header
   border: '#D5D8EE',      // light border
   borderLight: '#ECEFFE', // very subtle divider
   success: '#1DB87A',
@@ -25,22 +26,48 @@ const COLORS = {
   textSecondary: '#6B6E9E',
 };
 
-// Human-readable labels per flow_type
+// ═══════════════════════════════════════════════════════════
+//  Etiquetas por flow_type — nomenclatura de registro contable.
+//
+//  Redactadas para que el comprobante sea legible ante terceros
+//  (aduana, banca corresponsal, auditoría, contabilidad externa)
+//  sin exigir conocimiento del producto: se describe QUÉ se movió
+//  y HACIA DÓNDE, no el nombre comercial del flujo.
+//
+//  Cuatro familias, en este orden:
+//    · Pago Internacional a Proveedor  — salida hacia un tercero
+//    · Recepción de Fondos del Exterior — entrada desde el exterior
+//    · Constitución de Fondos           — el cliente fondea su cuenta
+//    · Retiro de Fondos                 — el cliente retira a un destino propio
+//
+//  Se renderiza en UN solo punto del PDF: el subtítulo de cabecera,
+//  bajo "COMPROBANTE DE TRANSACCIÓN" y precedido por la micro-etiqueta
+//  "TIPO DE SERVICIO" (que le da el anclaje semántico ante terceros).
+//  Antes se repetía en el panel de monto; se eliminó de ahí porque la
+//  repetición pesaba visualmente más que la propia cifra y obligaba a
+//  encajar cada etiqueta en dos contenedores distintos.
+//  La más larga hoy son 62 caracteres y la cabecera las admite sin
+//  desbordar; al añadir entradas mucho más largas, revisar el header.
+// ═══════════════════════════════════════════════════════════
 const FLOW_LABELS: Record<string, string> = {
-  fiat_bo_to_bridge_wallet: 'Deposito BOB - Billetera Guira',
-  crypto_to_bridge_wallet: 'Deposito Crypto - Billetera Guira',
-  // NOTA: fiat_us_to_bridge_wallet está soportado en el PDF (label + destino) pero
-  // aún NO tiene método de creación en payment-orders.service.ts (flujo planificado).
-  fiat_us_to_bridge_wallet: 'Deposito USD - Billetera Guira',
-  bridge_wallet_to_fiat_bo: 'Retiro Guira - Cuenta BOB',
-  bridge_wallet_to_fiat_us: 'Retiro Guira - Cuenta Exterior',
-  bridge_wallet_to_crypto: 'Retiro Guira - Wallet Crypto',
-  wallet_to_world: 'Envio Wallet Externa - Cuenta Exterior',
-  bolivia_to_world: 'Bolivia - Exterior',
-  bolivia_to_wallet: 'Bolivia - Wallet Crypto',
-  wallet_to_wallet: 'Wallet - Wallet (Crypto)',
-  world_to_bolivia: 'Exterior a Bolivia',
-  va_deposit: 'Deposito Cuenta Virtual',
+  // ── Pago Internacional a Proveedor ──
+  bolivia_to_world: 'Pago Internacional a Proveedor — Transferencia Bancaria',
+  bolivia_to_wallet: 'Pago Internacional a Proveedor — Liquidación en Activos Virtuales',
+  wallet_to_wallet: 'Pago Internacional a Proveedor — Transferencia entre Activos Virtuales',
+  wallet_to_world: 'Pago Internacional a Proveedor — Liquidación desde Billetera Externa',
+
+  // ── Recepción de Fondos del Exterior ──
+  world_to_bolivia: 'Recepción de Fondos del Exterior — Abono en Cuenta Nacional',
+
+  // ── Constitución de Fondos ──
+  fiat_bo_to_bridge_wallet: 'Constitución de Fondos — Depósito en Bolivianos',
+  crypto_to_bridge_wallet: 'Constitución de Fondos — Depósito en Activos Virtuales',
+  va_deposit: 'Constitución de Fondos — Depósito vía Cuenta Bancaria Asignada',
+
+  // ── Retiro de Fondos ──
+  bridge_wallet_to_fiat_bo: 'Retiro de Fondos — Abono en Cuenta Bancaria Nacional',
+  bridge_wallet_to_fiat_us: 'Retiro de Fondos — Abono en Cuenta Bancaria del Exterior',
+  bridge_wallet_to_crypto: 'Retiro de Fondos — Envío a Billetera de Activos Virtuales',
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -57,6 +84,28 @@ const STATUS_LABELS: Record<string, string> = {
   APPROVED: 'Aprobado',
   SWEPT_EXTERNAL: 'Liquidado Externo',
   REFUNDED: 'Reembolsado',
+};
+
+// ═══════════════════════════════════════════════════════════
+//  Identificación del emisor para el aviso legal.
+//
+//  Un comprobante que no nombra a quién lo emite no tiene ante
+//  quién reclamar: es lo primero que revisa un oficial de
+//  cumplimiento o una banca corresponsal. Rellenar con los datos
+//  registrales reales.
+//
+//  Los campos vacíos se omiten del PDF en vez de imprimirse en
+//  blanco, para que un despliegue sin configurar no degrade el
+//  documento. Con legalName vacío la cláusula del emisor
+//  desaparece por completo.
+// ═══════════════════════════════════════════════════════════
+const LEGAL_ENTITY = {
+  legalName: '',        // TODO: razón social registrada
+  taxId: '',            // TODO: NIT
+  registration: '',     // TODO: matrícula de comercio u otro registro
+  domicile: '',         // TODO: domicilio legal (ciudad, país)
+  supportEmail: 'soporte@guiracorp.com',
+  website: 'www.guiracorp.com',
 };
 
 @Injectable()
@@ -256,14 +305,19 @@ export class PdfService {
 
   // ─── Origin details (per service) ─────────────────────
 
-  private buildOriginRows(order: any, clientWallet: any): any[][] {
-    const ft = order.flow_type;
-    // fiat_bo_to_bridge_wallet: source_currency stores the stablecoin, not the BOB origin.
-    // Nota: amount_origin / fee_total / origin_currency NO existen como columnas en
-    // payment_orders. Las columnas reales son amount, fee_amount y source_currency/currency.
-    const originCcy = ft === 'fiat_bo_to_bridge_wallet'
+  // fiat_bo_to_bridge_wallet: source_currency stores the stablecoin, not the BOB origin.
+  // Nota: amount_origin / fee_total / origin_currency NO existen como columnas en
+  // payment_orders. Las columnas reales son amount, fee_amount y source_currency/currency.
+  // Se usa en dos sitios (panel de monto y tabla de detalle), de ahí el helper.
+  private resolveOriginCurrency(order: any): string {
+    return order.flow_type === 'fiat_bo_to_bridge_wallet'
       ? (order.currency ?? '').toUpperCase()
       : (order.source_currency ?? order.currency ?? '').toUpperCase();
+  }
+
+  private buildOriginRows(order: any, clientWallet: any): any[][] {
+    const ft = order.flow_type;
+    const originCcy = this.resolveOriginCurrency(order);
 
     // Tipo de cambio: los flujos 1:1 (stablecoin) muestran una etiqueta explícita.
     // Estos flujos guardan exchange_rate_applied = 1.0, por lo que el chequeo de
@@ -493,7 +547,7 @@ export class PdfService {
     }
 
     // ── On-ramps: fiat/crypto → bridge_wallet ─────────────
-    else if (['fiat_bo_to_bridge_wallet', 'crypto_to_bridge_wallet', 'fiat_us_to_bridge_wallet'].includes(ft)) {
+    else if (['fiat_bo_to_bridge_wallet', 'crypto_to_bridge_wallet'].includes(ft)) {
       rows.push(
         this.linkRow('Billetera Destino', this.toDisplay(clientWallet?.address), this.buildExplorerUrl(clientWallet?.address, clientWallet?.network, 'address')),
         this.row('Red Destino', this.toDisplay(clientWallet?.network)),
@@ -599,7 +653,7 @@ export class PdfService {
     if ([
       'crypto_to_bridge_wallet', 'bridge_wallet_to_crypto',
       'wallet_to_wallet', 'bolivia_to_wallet',
-      'fiat_bo_to_bridge_wallet', 'fiat_us_to_bridge_wallet',
+      'fiat_bo_to_bridge_wallet',
       // va_deposit: el stablecoin acreditado es la moneda destino (p.ej. USDC)
       'va_deposit',
     ].includes(order.flow_type)) {
@@ -610,6 +664,99 @@ export class PdfService {
       return (order.currency ?? order.source_currency ?? 'N/D').toUpperCase();
     }
     return 'N/D';
+  }
+
+  // ─── Aviso legal ──────────────────────────────────────
+
+  /**
+   * Cláusulas del aviso legal, numeradas.
+   *
+   * Numeradas y separadas a propósito: permite que un tercero cite
+   * "cláusula 4" en una consulta o un expediente, cosa que un párrafo
+   * corrido no permite. Cada cláusula cubre una pregunta concreta que
+   * suele aparecer al presentar el comprobante ante un banco, aduana o
+   * auditoría.
+   */
+  private buildLegalClauses(): string[] {
+    const clauses: string[] = [];
+
+    // 1. Emisor — se omite si no hay razón social configurada.
+    if (LEGAL_ENTITY.legalName) {
+      const ids = [
+        LEGAL_ENTITY.taxId ? `NIT ${LEGAL_ENTITY.taxId}` : null,
+        LEGAL_ENTITY.registration ? `Matrícula ${LEGAL_ENTITY.registration}` : null,
+        LEGAL_ENTITY.domicile || null,
+      ].filter(Boolean).join(', ');
+      clauses.push(
+        `Emisor. Este comprobante es emitido por ${LEGAL_ENTITY.legalName}` +
+        (ids ? ` (${ids})` : '') +
+        ', responsable del procesamiento de la operación aquí detallada.',
+      );
+    }
+
+    clauses.push(
+      // 2. Qué ES el documento. El aviso anterior solo decía lo que no era.
+      'Naturaleza. Constituye constancia de la ejecución de una orden de pago instruida por el ordenante. ' +
+      'Se genera automáticamente a partir de los registros del sistema y refleja el estado de la operación a la fecha de emisión.',
+
+      // 3. Validez sin firma manuscrita: la objeción más habitual ante un PDF.
+      'Validez. Documento generado por medios electrónicos. Es válido y oponible sin firma manuscrita ni sello, ' +
+      'conforme a la normativa vigente sobre documentos electrónicos.',
+
+      // 4. Alcance fiscal.
+      'Alcance fiscal. No constituye factura, nota fiscal ni comprobante tributario, y no sustituye la documentación ' +
+      'fiscal o contable que corresponda emitir a las partes.',
+
+      // 5. Delimitación del servicio: evita que se lea como actividad financiera regulada.
+      'Servicio. La operación corresponde a un servicio de procesamiento y transferencia de fondos por cuenta y orden del cliente. ' +
+      'No implica captación de recursos del público, intermediación financiera, asesoramiento en inversiones ni garantía de rendimiento.',
+
+      // 6. Explica por qué las dos cifras del panel no coinciden, antes de que lo pregunten.
+      'Montos. El tipo de cambio y las comisiones consignados son los aplicados al momento de la ejecución. La diferencia entre ' +
+      'el monto ordenado y el monto acreditado corresponde a dichos conceptos. Fechas y horas se expresan en hora oficial de Bolivia (UTC-4).',
+
+      // 7. Lo que una banca corresponsal busca explícitamente.
+      'Cumplimiento. La operación fue sometida a los procedimientos de debida diligencia del cliente y de prevención de legitimación ' +
+      'de ganancias ilícitas y financiamiento del terrorismo aplicables al emisor.',
+
+      // 8. Confidencialidad + cómo validar que el PDF es auténtico.
+      'Confidencialidad y verificación. Contiene datos personales y financieros; su uso queda restringido al titular y a las entidades ' +
+      `legalmente facultadas para requerirlo. La autenticidad puede verificarse citando el N° de operación ante ${LEGAL_ENTITY.supportEmail}.`,
+    );
+
+    return clauses;
+  }
+
+  private buildLegalNotice(): any {
+    const clauses = this.buildLegalClauses();
+    return {
+      table: {
+        widths: ['*'],
+        body: [[
+          {
+            stack: [
+              { text: 'AVISO LEGAL', style: 'legalHeading' },
+              ...clauses.map((c, i) => ({
+                text: `${i + 1}. ${c}`,
+                style: 'disclaimer',
+                alignment: 'justify' as const,
+                margin: [0, i === 0 ? 0 : 3, 0, 0] as [number, number, number, number],
+              })),
+            ],
+            fillColor: COLORS.surface,
+            margin: [12, 10, 12, 10],
+          },
+        ]],
+      },
+      layout: {
+        hLineWidth: () => 0.5,
+        vLineWidth: () => 0.5,
+        hLineColor: () => COLORS.border,
+        vLineColor: () => COLORS.border,
+      },
+      // El aviso pierde autoridad partido a la mitad entre dos páginas.
+      unbreakable: true,
+    };
   }
 
   // ─── Table layout helper ──────────────────────────────
@@ -663,6 +810,17 @@ export class PdfService {
       const amountDestText = isFlexiblePending
         ? 'Por definir'
         : `${this.fmtAmount(amountDest)} ${(order.destination_currency ?? order.currency ?? '').toUpperCase()}`;
+      // Monto ordenado: lo que el ordenante instruyó mover, contrapartida del
+      // monto acreditado. Ambas cifras NO cuadran entre sí a propósito — la
+      // diferencia es la comisión más el tipo de cambio, desglosados en la tabla
+      // de detalle. De ahí "ordenado" y no "debitado": el vocabulario contable
+      // haría esperar un asiento balanceado que aquí no aplica.
+      // Sube al panel de monto para que la caja resuma la operación económica
+      // completa sin obligar a bajar a la tabla de detalle.
+      const originCcy = this.resolveOriginCurrency(order);
+      const amountOriginText = order.amount == null
+        ? 'N/D'
+        : `${this.fmtAmount(order.amount)} ${originCcy}`.trim();
       const statusUpper = this.toDisplay(order.status).toUpperCase();
       const statusLabel = STATUS_LABELS[statusUpper] ?? statusUpper;
       const flowLabel = FLOW_LABELS[ft] ?? ft.toUpperCase();
@@ -695,6 +853,16 @@ export class PdfService {
       // Bridge Deposit ID — va_deposit
       if (order.deposit_id) {
         traceRows.push(this.row('ID Deposito Guira', this.toDisplay(order.deposit_id)));
+      }
+
+      // Fedwire IMAD — the reference the correspondent bank uses in traces and disputes
+      if (order.imad) {
+        traceRows.push(this.row('IMAD (Fedwire)', this.toDisplay(order.imad)));
+      }
+
+      // ACH trace number — inbound deposits and outbound ACH payouts
+      if (order.ach_trace_number) {
+        traceRows.push(this.row('N° de Traza ACH', this.toDisplay(order.ach_trace_number)));
       }
 
       // Destination blockchain tx hash — proof of delivery
@@ -799,7 +967,7 @@ export class PdfService {
               body: [
                 sectionHeader('CLIENTE Y BENEFICIARIO', 4),
                 [
-                  { text: 'CLIENTE', style: 'subHeader', colSpan: 2 }, {},
+                  { text: 'ORDENANTE / CLIENTE', style: 'subHeader', colSpan: 2 }, {},
                   { text: 'BENEFICIARIO', style: 'subHeader', colSpan: 2 }, {},
                 ],
                 ...this.mergeColumns(clientRows, beneficiarySummaryRows),
@@ -872,11 +1040,21 @@ export class PdfService {
               body: [[
                 {
                   columns: [
-                    { ...logo, margin: [0, 2, 0, 0] },
+                    {
+                      stack: [
+                        { ...logo, margin: [0, 2, 0, 0] },
+                        { text: 'Plataforma de Operaciones Interbancarias', style: 'headerTagline', margin: [0, 6, 0, 0] },
+                      ],
+                      width: 'auto',
+                    },
                     {
                       stack: [
                         { text: 'COMPROBANTE DE TRANSACCIÓN', style: 'headerTitle' },
-                        { text: flowLabel, style: 'headerSubtitle', margin: [0, 3, 0, 0] },
+                        // La micro-etiqueta es lo que permite a un tercero (banca
+                        // corresponsal, auditoría) leer la línea siguiente como el
+                        // tipo de operación y no como un lema comercial.
+                        { text: 'TIPO DE SERVICIO', style: 'headerLabel', margin: [0, 7, 0, 0] },
+                        { text: flowLabel, style: 'headerSubtitle', margin: [0, 2, 0, 0] },
                       ],
                       alignment: 'right' as const,
                     },
@@ -950,9 +1128,12 @@ export class PdfService {
                     },
                     {
                       stack: [
-                        { text: 'TIPO DE SERVICIO', style: 'amountLabel' },
-                        { text: flowLabel, style: 'amountType' },
+                        { text: 'MONTO ORDENADO', style: 'amountLabel' },
+                        { text: amountOriginText, style: 'amountOrigin' },
                       ],
+                      // 'auto' basta: ambas caras son cifras cortas de una línea,
+                      // a diferencia de la etiqueta de flujo que ocupaba este hueco
+                      // y exigía un ancho fijo de 190pt.
                       width: 'auto',
                       alignment: 'right' as const,
                     },
@@ -984,14 +1165,7 @@ export class PdfService {
           },
 
           // ═══ LEGAL DISCLAIMER ═══
-          {
-            text: [
-              { text: 'Aviso Legal: ', bold: true },
-              'Transacción ejecutada mediante infraestructura certificada a través de Guira. Registro operativo oficial. No sustituye documentación fiscal ni contable. soporte@guiracorp.com',
-            ],
-            style: 'disclaimer',
-            alignment: 'justify' as const,
-          },
+          this.buildLegalNotice(),
         ],
 
         // ═══ FOOTER ═══
@@ -1019,6 +1193,8 @@ export class PdfService {
           brandFallback: { fontSize: 20, bold: true, color: COLORS.white },
           headerTitle: { fontSize: 14, bold: true, color: COLORS.white, characterSpacing: 1.2 },
           headerSubtitle: { fontSize: 9, color: COLORS.accent, characterSpacing: 0.3 },
+          headerLabel: { fontSize: 6.5, bold: true, color: COLORS.mutedOnNavy, characterSpacing: 0.9 },
+          headerTagline: { fontSize: 7, color: COLORS.mutedOnNavy, characterSpacing: 0.4 },
 
           // Meta cells
           metaLabel: { fontSize: 7.5, bold: true, color: COLORS.muted, characterSpacing: 0.8, margin: [0, 0, 0, 3] },
@@ -1028,7 +1204,9 @@ export class PdfService {
           // Amount panel
           amountLabel: { fontSize: 7.5, bold: true, color: COLORS.muted, characterSpacing: 0.8, margin: [0, 0, 0, 4] },
           amountValue: { fontSize: 20, bold: true, color: COLORS.navy },
-          amountType: { fontSize: 9, color: COLORS.primary, bold: true, margin: [0, 4, 0, 0] },
+          // Deliberadamente menor que amountValue: el monto acreditado manda,
+          // el origen es contexto.
+          amountOrigin: { fontSize: 13, bold: true, color: COLORS.textSecondary },
 
           // Section tables
           sectionHeader: { fontSize: 9, bold: true, color: COLORS.white, fillColor: COLORS.navy, characterSpacing: 1 },
@@ -1041,6 +1219,7 @@ export class PdfService {
           tValue: { fontSize: 9, color: COLORS.text, bold: true },
 
           // Legal / Footer
+          legalHeading: { fontSize: 7, bold: true, color: COLORS.navy, characterSpacing: 0.8, margin: [0, 0, 0, 5] },
           disclaimer: { fontSize: 7, color: COLORS.muted, lineHeight: 1.4, margin: [0, 0, 0, 0] },
           footerBrand: { fontSize: 7.5, bold: true, color: COLORS.navy },
           footerContact: { fontSize: 7, color: COLORS.muted, margin: [0, 1, 0, 0] },

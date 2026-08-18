@@ -13,8 +13,7 @@
  * El override de staff (tabla customer_flow_overrides) tiene prioridad sobre el
  * default por país y aplica también a clientes bolivianos.
  *
- * Fuera de alcance (NO gobernados aquí, permanecen como están): world_to_wallet,
- * wallet_to_fiat y la creación de Virtual Accounts.
+ * Fuera de alcance (NO gobernado aquí): la creación de Virtual Accounts.
  */
 
 /** Códigos de Bolivia aceptados (alpha-3 preferido; alpha-2 por compatibilidad). */

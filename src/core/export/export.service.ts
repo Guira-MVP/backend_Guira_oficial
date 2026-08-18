@@ -37,6 +37,23 @@ interface PaymentOrder {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+/**
+ * Divisa real del monto que entrega el cliente (`amount`).
+ *
+ * fiat_bo_to_bridge_wallet guarda en `source_currency` el stablecoin que el PSAV
+ * emite hacia Bridge, no la divisa del cliente: el origen real es `currency` = BOB.
+ * En el resto de flujos `source_currency` coincide con `currency` o es null.
+ *
+ * Mismo criterio que PdfService.resolveOriginCurrency.
+ */
+function resolveOriginCurrency(order: PaymentOrder): string {
+  const origin =
+    order.flow_type === 'fiat_bo_to_bridge_wallet'
+      ? order.currency
+      : (order.source_currency ?? order.currency);
+  return (origin ?? '').toUpperCase();
+}
+
 function formatDate(isoStr: string): string {
   // Hora de Bolivia (UTC-4). El valor se guarda en UTC; aquí solo se presenta.
   return formatBoliviaDateTime(isoStr, {
@@ -82,11 +99,8 @@ const FLOW_LABELS: Record<string, string> = {
   bolivia_to_world: 'Bolivia al exterior',
   bolivia_to_wallet: 'Bolivia a cripto',
   world_to_bolivia: 'Exterior a Bolivia',
-  world_to_wallet: 'Exterior a cripto',
   wallet_to_wallet: 'Cripto a cripto',
-  wallet_to_fiat: 'Cripto a banco',
   fiat_bo_to_bridge_wallet: 'Bolivia a Guira',
-  fiat_us_to_bridge_wallet: 'Exterior a Guira',
   crypto_to_bridge_wallet: 'Cripto a Guira',
   bridge_wallet_to_fiat_bo: 'Guira a Bolivia',
   bridge_wallet_to_crypto: 'Guira a cripto',
@@ -114,7 +128,7 @@ function buildRows(orders: PaymentOrder[], suppliersMap: Map<string, string>, no
     flujo: FLOW_LABELS[o.flow_type ?? ''] ?? o.flow_type ?? 'N/D',
     estado: STATUS_LABELS[o.status] ?? o.status,
     proveedor: o.supplier_id ? (suppliersMap.get(o.supplier_id) ?? 'N/D') : fallback,
-    moneda_origen: (o.source_currency ?? o.currency ?? '').toUpperCase(),
+    moneda_origen: resolveOriginCurrency(o),
     monto_origen: o.amount ?? 0,
     moneda_destino: (o.destination_currency ?? '').toUpperCase(),
     monto_destino: o.amount_destination ?? o.net_amount ?? 0,
