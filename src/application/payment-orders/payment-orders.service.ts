@@ -1234,12 +1234,17 @@ export class PaymentOrdersService {
   ): Promise<void> {
     const normalizedCurrency = destinationCurrency.toUpperCase();
 
+    // La divisa se compara sin distinguir mayúsculas: el DTO la persiste en
+    // minúsculas ('usd') pero los expedientes anteriores al @Transform quedaron
+    // en mayúsculas ('USD'). Un .eq() contra cualquiera de las dos formas deja
+    // pasar duplicados de la otra — el bloqueo real lo acabaría haciendo el
+    // índice idx_po_btw_active_per_currency, con un error genérico e inútil.
     const { data: conflicting } = await this.supabase
       .from('payment_orders')
       .select('id, destination_currency, status, created_at')
       .eq('user_id', userId)
       .eq('flow_type', 'bolivia_to_world')
-      .eq('destination_currency', normalizedCurrency)
+      .ilike('destination_currency', normalizedCurrency)
       .in('status', ['waiting_deposit', 'deposit_received', 'processing'])
       .limit(1)
       .maybeSingle();
