@@ -559,12 +559,28 @@ export class PaymentOrdersService {
       destinationCurrency,
     );
 
-    // Obtener el número completo del JSON bank_details en la tabla 'suppliers'
-    const { data: supplier } = await this.supabase
+    // Resolver el proveedor por supplier_id — es la única clave unívoca. Los pares
+    // ACH+Wire comparten una misma external account (Bridge no distingue el riel a
+    // nivel de EA), así que buscar por bridge_external_account_id devuelve 2 filas y
+    // resuelve el riel equivocado. Solo se cae al lookup por EA si no llegó supplier_id.
+    const supplierQuery = this.supabase
       .from('suppliers')
       .select('bank_details, bridge_liquidation_address_id, payment_rail')
-      .eq('bridge_external_account_id', dto.external_account_id)
-      .single();
+      .eq('user_id', userId);
+
+    const { data: supplier } = dto.supplier_id
+      ? await supplierQuery.eq('id', dto.supplier_id).maybeSingle()
+      : await supplierQuery
+          .eq('bridge_external_account_id', dto.external_account_id)
+          .order('created_at', { ascending: true })
+          .limit(1)
+          .maybeSingle();
+
+    if (!supplier) {
+      throw new NotFoundException(
+        'No se encontró el proveedor asociado a la cuenta de destino seleccionada.',
+      );
+    }
 
     // Obtener tipo de cambio para la divisa destino real (BOB_EUR, BOB_USD, BOB_MXN…).
     // USDC/USDT se anclan a USD. Fallback a BOB_USD si el par aún no está configurado.
