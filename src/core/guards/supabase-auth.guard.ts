@@ -30,8 +30,13 @@ export interface AuthenticatedUser {
   id: string;
   /** Email del usuario */
   email: string;
-  /** Perfil del usuario cargado desde la tabla profiles */
+  /**
+   * Perfil del usuario. Todo sale de `profiles` EXCEPTO `role`, que se
+   * resuelve contra `private.staff_members`. La forma se mantiene para no
+   * romper los consumidores existentes de `user.profile.role`.
+   */
   profile: {
+    /** Resuelto desde private.staff_members; 'client' si no es personal interno. */
     role: 'client' | 'staff' | 'admin' | 'super_admin';
     onboarding_status: string;
     is_active: boolean;
@@ -130,12 +135,19 @@ export class SupabaseAuthGuard implements CanActivate {
       );
     }
 
-    // 5. Adjuntar user enriquecido al request
+    // 5. Resolver el rol desde private.staff_members, NO desde profiles.
+    //    profiles.role dejó de ser la fuente de verdad: era escribible por
+    //    el propio cliente con la anon key, lo que permitía auto-promoverse
+    //    a super_admin. Ahora el rol vive en una tabla que PostgREST no
+    //    expone, accesible solo con service_role vía este RPC.
+    const staffRole = await this.resolveStaffRole(supabaseUser.id);
+
+    // 6. Adjuntar user enriquecido al request
     const authenticatedUser: AuthenticatedUser = {
       id: supabaseUser.id,
       email: supabaseUser.email ?? '',
       profile: {
-        role: profile.role ?? 'client',
+        role: staffRole ?? 'client',
         onboarding_status: profile.onboarding_status ?? 'pending',
         is_active: profile.is_active ?? true,
         is_frozen: profile.is_frozen ?? false,
@@ -147,5 +159,36 @@ export class SupabaseAuthGuard implements CanActivate {
 
     request.user = authenticatedUser;
     return true;
+  }
+
+  /**
+   * Devuelve el rol de staff del usuario, o null si no es personal interno.
+   *
+   * private.staff_members no es accesible con .from() porque PostgREST no
+   * expone el schema `private` — esa es precisamente la propiedad que cierra
+   * el vector de escalación. Se accede mediante public.staff_get(), una
+   * función SECURITY DEFINER con EXECUTE concedido solo a service_role.
+   *
+   * Ante cualquier error se devuelve null (degradar a cliente), nunca se
+   * concede acceso por defecto.
+   */
+  private async resolveStaffRole(
+    userId: string,
+  ): Promise<AuthenticatedUser['profile']['role'] | null> {
+    const { data, error } = await this.supabase.rpc('staff_get', {
+      p_user_id: userId,
+    });
+
+    if (error) {
+      this.logger.error(
+        `No se pudo resolver el rol de staff para ${userId}: [${error.code}] ${error.message}`,
+      );
+      return null;
+    }
+
+    const member = Array.isArray(data) ? data[0] : data;
+    if (!member || !member.is_active) return null;
+
+    return member.role as AuthenticatedUser['profile']['role'];
   }
 }
