@@ -9,6 +9,7 @@ import {
   Query,
   UploadedFile,
   UseInterceptors,
+  UseGuards,
   ParseUUIDPipe,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -28,10 +29,15 @@ import { CreateMobileTokenDto } from './dto/create-mobile-token.dto';
 import { CurrentUser } from '../../core/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../core/guards/supabase-auth.guard';
 import { Public } from '../../core/guards/supabase-auth.guard';
+import { NotStaffGuard } from '../../core/guards/not-staff.guard';
 
 @ApiTags('Onboarding')
 @ApiBearerAuth('supabase-jwt')
 @Controller('onboarding')
+// El personal interno no se da de alta en Bridge: las cuentas del panel son
+// identidades corporativas, no de operación. Las rutas marcadas con @Public()
+// (tokens móviles) no pasan por aquí porque no hay usuario que evaluar.
+@UseGuards(NotStaffGuard)
 export class OnboardingController {
   constructor(private readonly onboardingService: OnboardingService) {}
 
