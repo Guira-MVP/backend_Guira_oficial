@@ -213,7 +213,11 @@ export class AuthService {
   /**
    * Retorna el perfil completo del usuario autenticado.
    */
-  async getMe(userId: string): Promise<MeResponseDto> {
+  /**
+   * @param resolvedRole Rol resuelto por SupabaseAuthGuard contra
+   *   private.staff_members. profiles.role ya no es fuente de verdad.
+   */
+  async getMe(userId: string, resolvedRole?: string): Promise<MeResponseDto> {
     const { data, error } = await this.supabase
       .from('profiles')
       .select(
@@ -238,7 +242,11 @@ export class AuthService {
       this.logger.warn(`No se pudo consultar factores MFA para ${userId}`);
     }
 
-    return { ...(data as MeResponseDto), mfa_enabled };
+    return {
+      ...(data as MeResponseDto),
+      ...(resolvedRole ? { role: resolvedRole } : {}),
+      mfa_enabled,
+    };
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -418,6 +426,19 @@ export class AuthService {
         'No se pudo restablecer la contraseña. Intente nuevamente.',
       );
     }
+
+    // Si es personal recién invitado, este es el momento en que acepta la
+    // invitación: acaba de establecer su primera contraseña. Best-effort — un
+    // fallo aquí solo afecta a la etiqueta del listado, no al acceso.
+    await this.supabase
+      .rpc('staff_mark_activated', { p_id: userId })
+      .then(({ error: rpcError }) => {
+        if (rpcError) {
+          this.logger.warn(
+            `No se pudo marcar la activación de ${userId}: ${rpcError.message}`,
+          );
+        }
+      });
 
     await this.logAuthEvent({
       event_type: 'password_reset_success',

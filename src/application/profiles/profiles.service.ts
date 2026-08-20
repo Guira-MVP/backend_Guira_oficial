@@ -36,7 +36,17 @@ export class ProfilesService {
   /**
    * Retorna el perfil completo del usuario autenticado.
    */
-  async findOne(userId: string): Promise<ProfileResponseDto> {
+  /**
+   * @param resolvedRole Rol ya resuelto por SupabaseAuthGuard contra
+   *   private.staff_members. Se pasa explícitamente porque profiles.role dejó
+   *   de ser fuente de verdad: quedó congelado en 'client' para todo el mundo,
+   *   así que devolverlo tal cual haría que el panel viera a su propio
+   *   personal como clientes.
+   */
+  async findOne(
+    userId: string,
+    resolvedRole?: string,
+  ): Promise<ProfileResponseDto> {
     const { data, error } = await this.supabase
       .from('profiles')
       .select('*')
@@ -44,7 +54,11 @@ export class ProfilesService {
       .single();
 
     if (error || !data) throw new NotFoundException('Perfil no encontrado');
-    return data as ProfileResponseDto;
+
+    return {
+      ...(data as ProfileResponseDto),
+      ...(resolvedRole ? { role: resolvedRole } : {}),
+    } as ProfileResponseDto;
   }
 
   /**
@@ -426,86 +440,168 @@ export class ProfilesService {
   }
 
   /**
-   * Cambia el rol de un usuario.
-   * Reglas:
-   *  - Nadie puede cambiar su propio rol.
-   *  - Solo super_admin puede asignar roles admin y super_admin.
-   *  - admin puede asignar solo client y staff.
-   * Registra la acción en audit_logs.
+   * Archiva o elimina la cuenta de un cliente.
+   *
+   * Portado desde la Edge Function `admin-delete-user`, que se retira: su
+   * comprobación de permisos leía profiles.role, columna que dejó de ser
+   * fuente de verdad del rol, y además vivía fuera de RolesGuard y de
+   * audit_logs.
+   *
+   *  - `archive`: banea la cuenta en Supabase Auth y marca is_active=false.
+   *    Es reversible con unarchiveAccount().
+   *  - `delete`: borrado definitivo, permitido SOLO si no hay historial de
+   *    transferencias ni órdenes. Con historial se exige archivar, para no
+   *    dejar movimientos huérfanos de titular.
    */
-  async updateRole(
+  async archiveAccount(
     targetId: string,
-    newRole: string,
+    action: 'archive' | 'delete',
     reason: string,
     actor: { id: string; profile: { role: string } },
-  ): Promise<ProfileResponseDto> {
-    // 1. No auto-modificación
-    if (actor.id === targetId) {
-      throw new BadRequestException('No puedes cambiar tu propio rol');
-    }
-
-    // 2. Solo super_admin puede asignar admin o super_admin
-    if (
-      (newRole === 'super_admin' || newRole === 'admin') &&
-      actor.profile.role !== 'super_admin'
-    ) {
+  ): Promise<{ action: 'archived' | 'deleted' }> {
+    if (targetId === actor.id) {
       throw new BadRequestException(
-        'Solo un super_admin puede asignar el rol admin o super_admin',
+        'No puedes archivar ni eliminar tu propia cuenta',
       );
     }
 
-    // 3. Obtener perfil actual para auditoría
-    const current = await this.findById(targetId);
-    const previousRole = current.role;
+    const [transfers, orders] = await Promise.all([
+      this.supabase
+        .from('bridge_transfers')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', targetId),
+      this.supabase
+        .from('payment_orders')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', targetId),
+    ]);
 
-    if (previousRole === newRole) {
-      throw new BadRequestException(`El usuario ya tiene el rol "${newRole}"`);
+    if (transfers.error || orders.error) {
+      throw new BadRequestException(
+        'No se pudo verificar el historial del usuario',
+      );
     }
 
-    // 4. Actualizar rol
-    const { data, error } = await this.supabase
+    const hasHistory = (transfers.count ?? 0) > 0 || (orders.count ?? 0) > 0;
+
+    if (action === 'delete') {
+      if (hasHistory) {
+        throw new BadRequestException(
+          'Los usuarios con historial de transacciones deben archivarse, no eliminarse',
+        );
+      }
+
+      // La auditoría se escribe ANTES del borrado: profiles.id tiene FK con
+      // ON DELETE CASCADE contra auth.users, así que después ya no habría
+      // registro que referenciar.
+      await this.supabase.from('audit_logs').insert({
+        performed_by: actor.id,
+        role: actor.profile.role,
+        action: 'ACCOUNT_DELETED',
+        table_name: 'profiles',
+        record_id: targetId,
+        reason,
+        source: 'admin_panel',
+      });
+
+      const { error } = await this.supabase.auth.admin.deleteUser(targetId);
+      if (error) {
+        throw new BadRequestException('No se pudo eliminar el usuario');
+      }
+
+      this.logger.log(`Cuenta ${targetId} eliminada por ${actor.id}`);
+      return { action: 'deleted' };
+    }
+
+    // 100 años: Supabase no admite un baneo indefinido explícito.
+    const { error: banError } = await this.supabase.auth.admin.updateUserById(
+      targetId,
+      { ban_duration: '876000h' },
+    );
+    if (banError) {
+      throw new BadRequestException('No se pudo archivar el usuario');
+    }
+
+    const { error: profileError } = await this.supabase
       .from('profiles')
-      .update({
-        role: newRole,
-        updated_at: new Date().toISOString(),
-      })
+      .update({ is_active: false, updated_at: new Date().toISOString() })
       .eq('id', targetId)
-      .select()
+      .select('id')
       .single();
 
-    if (error || !data) {
-      throw new NotFoundException(`Usuario ${targetId} no encontrado`);
+    if (profileError) {
+      // Sin el perfil marcado, la cuenta quedaría baneada pero apareciendo
+      // como activa en el panel. Se revierte el baneo.
+      await this.supabase.auth.admin.updateUserById(targetId, {
+        ban_duration: '0h',
+      });
+      throw new BadRequestException('No se pudo archivar el perfil');
     }
 
-    // 5. Registrar en audit_logs
     await this.supabase.from('audit_logs').insert({
       performed_by: actor.id,
       role: actor.profile.role,
-      action: 'ROLE_CHANGE',
+      action: 'ACCOUNT_ARCHIVED',
       table_name: 'profiles',
       record_id: targetId,
-      previous_values: { role: previousRole },
-      new_values: { role: newRole },
+      new_values: { is_active: false, banned: true },
       reason,
       source: 'admin_panel',
     });
 
-    // WS: notificar al staff que el rol fue cambiado
-    this.adminGateway.emitUserUpdated({
-      id: data.id,
-      role: data.role,
-      is_active: data.is_active,
-      is_frozen: data.is_frozen,
-      frozen_reason: data.frozen_reason ?? null,
-      onboarding_status: data.onboarding_status,
-      bridge_customer_id: data.bridge_customer_id ?? null,
-      updated_at: data.updated_at ?? new Date().toISOString(),
-    });
+    this.logger.log(`Cuenta ${targetId} archivada por ${actor.id}`);
+    return { action: 'archived' };
+  }
 
-    this.logger.log(
-      `Rol de ${targetId} cambiado de "${previousRole}" a "${newRole}" por ${actor.id}`,
+  /**
+   * Revierte un archivado: levanta el baneo y reactiva el perfil.
+   * Portado desde la Edge Function `admin-unarchive-user`.
+   */
+  async unarchiveAccount(
+    targetId: string,
+    reason: string,
+    actor: { id: string; profile: { role: string } },
+  ): Promise<{ action: 'unarchived' }> {
+    const { error: profileError } = await this.supabase
+      .from('profiles')
+      .update({ is_active: true, updated_at: new Date().toISOString() })
+      .eq('id', targetId)
+      .select('id')
+      .single();
+
+    if (profileError) {
+      throw new NotFoundException(`Usuario ${targetId} no encontrado`);
+    }
+
+    const { error: authError } = await this.supabase.auth.admin.updateUserById(
+      targetId,
+      { ban_duration: '0h' },
     );
 
-    return data as ProfileResponseDto;
+    if (authError) {
+      // Si no se puede levantar el baneo, el perfil no debe quedar como
+      // activo: la persona seguiría sin poder entrar.
+      await this.supabase
+        .from('profiles')
+        .update({ is_active: false })
+        .eq('id', targetId);
+      throw new BadRequestException(
+        'No se pudo restaurar el acceso del usuario',
+      );
+    }
+
+    await this.supabase.from('audit_logs').insert({
+      performed_by: actor.id,
+      role: actor.profile.role,
+      action: 'ACCOUNT_UNARCHIVED',
+      table_name: 'profiles',
+      record_id: targetId,
+      new_values: { is_active: true, banned: false },
+      reason,
+      source: 'admin_panel',
+    });
+
+    this.logger.log(`Cuenta ${targetId} desarchivada por ${actor.id}`);
+    return { action: 'unarchived' };
   }
 }

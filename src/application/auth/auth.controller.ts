@@ -69,7 +69,7 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Perfil del usuario' })
   @ApiResponse({ status: 401, description: 'Token inválido o expirado' })
   async getMe(@CurrentUser() user: AuthenticatedUser) {
-    return this.authService.getMe(user.id);
+    return this.authService.getMe(user.id, user.profile.role);
   }
 
   // ─────────────────────────────────────────────────────────────
