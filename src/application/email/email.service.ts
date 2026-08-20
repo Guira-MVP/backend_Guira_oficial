@@ -14,7 +14,6 @@ import {
   buildPaymentOrderCompletedEmail,
   buildPaymentOrderFailedEmail,
 } from './email-templates/payment-order.templates';
-import { buildStaffInviteEmail } from './email-templates/staff-invite.templates';
 
 export interface EmailRecipient {
   email: string;
@@ -180,30 +179,6 @@ export class EmailService {
     details: PaymentOrderEmailDetails,
   ): Promise<boolean> {
     const { subject, html, text } = buildPaymentOrderFailedEmail({
-      name: to.name,
-      ...details,
-    });
-    return this.sendEmail({ to, subject, html, text });
-  }
-
-  // ── Alta de personal interno ──────────────────────────────────────
-
-  /**
-   * Envía la invitación de acceso al panel a un miembro del personal.
-   *
-   * A diferencia del resto de correos de esta clase, aquí SÍ importa el
-   * valor de retorno: si el envío falla, quien invita debe enterarse para
-   * poder reenviar. La persona no tiene otra forma de entrar.
-   */
-  async sendStaffInviteEmail(
-    to: EmailRecipient,
-    details: {
-      inviteUrl: string;
-      roleLabel: string;
-      invitedByName?: string | null;
-    },
-  ): Promise<boolean> {
-    const { subject, html, text } = buildStaffInviteEmail({
       name: to.name,
       ...details,
     });

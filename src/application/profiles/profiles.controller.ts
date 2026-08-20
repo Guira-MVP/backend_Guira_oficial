@@ -2,13 +2,10 @@ import {
   Controller,
   Get,
   Patch,
-  Post,
   Body,
   Param,
   Query,
   UseGuards,
-  HttpCode,
-  HttpStatus,
   ParseUUIDPipe,
   DefaultValuePipe,
   ParseIntPipe,
@@ -24,10 +21,7 @@ import {
 import { ProfilesService } from './profiles.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { FreezeAccountDto, ActivateAccountDto } from './dto/freeze-account.dto';
-import {
-  ArchiveAccountDto,
-  UnarchiveAccountDto,
-} from './dto/archive-account.dto';
+import { UpdateRoleDto } from './dto/update-role.dto';
 import { CurrentUser } from '../../core/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../core/guards/supabase-auth.guard';
 import { RolesGuard } from '../../core/guards/roles.guard';
@@ -47,7 +41,7 @@ export class ProfilesController {
   @ApiOperation({ summary: 'Obtener perfil del usuario autenticado' })
   @ApiResponse({ status: 200, description: 'Perfil completo del usuario' })
   getMe(@CurrentUser() user: AuthenticatedUser) {
-    return this.profilesService.findOne(user.id, user.profile.role);
+    return this.profilesService.findOne(user.id);
   }
 
   @Patch('me')
@@ -166,38 +160,16 @@ export class AdminProfilesController {
     return this.profilesService.toggleActive(id, dto.is_active, actor.id, actor.profile.role);
   }
 
-  // PATCH :id/role se eliminó: el rol dejó de vivir en profiles. El alta y la
-  // gestión del personal interno están en POST /admin/staff/invite y
-  // PATCH /admin/staff/:id/role (StaffAdminController).
-
-  @Post(':id/archive')
+  @Patch(':id/role')
   @Roles('admin', 'super_admin')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Archivar o eliminar la cuenta de un cliente',
-    description:
-      'Archivar banea la cuenta y la marca inactiva (reversible). Eliminar solo se admite si no hay historial de transacciones.',
-  })
-  @ApiResponse({ status: 200, description: 'Cuenta archivada o eliminada' })
+  @ApiOperation({ summary: 'Cambiar el rol de un usuario' })
+  @ApiResponse({ status: 200, description: 'Rol actualizado' })
   @ApiResponse({ status: 400, description: 'Operación no permitida' })
-  archiveAccount(
+  updateRole(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @Body() dto: ArchiveAccountDto,
+    @Body() dto: UpdateRoleDto,
     @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.profilesService.archiveAccount(id, dto.action, dto.reason, actor);
-  }
-
-  @Post(':id/unarchive')
-  @Roles('admin', 'super_admin')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Revertir el archivado de una cuenta' })
-  @ApiResponse({ status: 200, description: 'Cuenta restaurada' })
-  unarchiveAccount(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Body() dto: UnarchiveAccountDto,
-    @CurrentUser() actor: AuthenticatedUser,
-  ) {
-    return this.profilesService.unarchiveAccount(id, dto.reason, actor);
+    return this.profilesService.updateRole(id, dto.role, dto.reason, actor);
   }
 }
