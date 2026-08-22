@@ -3446,6 +3446,25 @@ export class PaymentOrdersService {
   }
 
   /**
+   * Detalle de una orden SIN scoping por usuario. Uso exclusivo de rutas
+   * protegidas por RolesGuard (staff/admin) — p. ej. para generar el mismo
+   * comprobante PDF que descarga el cliente.
+   */
+  async getOrderByIdForStaff(orderId: string) {
+    const { data, error } = await this.supabase
+      .from('payment_orders')
+      .select('*')
+      .eq('id', orderId)
+      .single();
+
+    if (error || !data) {
+      throw new NotFoundException('Orden no encontrada');
+    }
+
+    return data;
+  }
+
+  /**
    * El usuario actualiza campos editables de su orden.
    * Solo permite campos seguros (supporting_document_url, notes)
    * y solo en estados tempranos (created, waiting_deposit).

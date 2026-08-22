@@ -33,12 +33,10 @@ import { PaymentOrdersService } from './payment-orders.service';
 import { OrderReviewService } from './order-review.service';
 import { ExchangeRatesService } from '../exchange-rates/exchange-rates.service';
 import { PsavService } from '../psav/psav.service';
-import { PdfService } from '../../core/pdf/pdf.service';
+import { OrderPdfService } from './order-pdf.service';
 import { SuppliersService } from '../suppliers/suppliers.service';
 import { ExportService } from '../../core/export/export.service';
 import { ProfilesService } from '../profiles/profiles.service';
-import { WalletsService } from '../wallets/wallets.service';
-import { ClientBankAccountsService } from '../client-bank-accounts/client-bank-accounts.service';
 import { CreateInterbankOrderDto } from './dto/create-interbank-order.dto';
 import { CreateWalletRampOrderDto } from './dto/create-wallet-ramp-order.dto';
 import { ConfirmDepositDto } from './dto/confirm-deposit.dto';
@@ -74,13 +72,11 @@ export class PaymentOrdersController {
     private readonly paymentOrdersService: PaymentOrdersService,
     private readonly exchangeRatesService: ExchangeRatesService,
     private readonly psavService: PsavService,
-    private readonly pdfService: PdfService,
+    private readonly orderPdfService: OrderPdfService,
     private readonly suppliersService: SuppliersService,
     private readonly exportService: ExportService,
     private readonly profilesService: ProfilesService,
-    private readonly walletsService: WalletsService,
     private readonly orderReviewService: OrderReviewService,
-    private readonly clientBankAccountsService: ClientBankAccountsService,
   ) {}
 
   // ── Crear órdenes ──
@@ -402,60 +398,7 @@ export class PaymentOrdersController {
     @CurrentUser() user: AuthenticatedUser,
     @Res({ passthrough: true }) res: any,
   ) {
-    const order = await this.paymentOrdersService.getOrderById(user.id, id);
-    let supplier = null;
-    if (order.supplier_id) {
-      try {
-        supplier = await this.suppliersService.findOne(
-          order.supplier_id,
-          user.id,
-        );
-      } catch (e) {
-        // Ignorar si no se encuentra
-      }
-    }
-
-    const profile = await this.profilesService.findOne(order.user_id);
-    const [phone, identity] = await Promise.all([
-      this.profilesService.getClientPhone(order.user_id),
-      this.profilesService.getClientIdentityForPdf(order.user_id),
-    ]);
-    const client = {
-      id: profile.id,
-      full_name: profile.full_name ?? null,
-      email: profile.email,
-      phone,
-      identity_label: identity?.identity_label ?? null,
-      identity_value: identity?.identity_value ?? null,
-      country: identity?.country ?? null,
-      is_company: identity?.is_company ?? false,
-    };
-
-    let clientWallet = null;
-    if (order.wallet_id) {
-      try {
-        clientWallet = await this.walletsService.findOne(
-          order.wallet_id,
-          order.user_id,
-        );
-      } catch (e) {
-        // Ignorar si no se encuentra
-      }
-    }
-
-    // Cuenta bancaria BOB del cliente — para flujos de retiro a Bolivia y world_to_bolivia
-    const needsBankAccount = ['bridge_wallet_to_fiat_bo', 'world_to_bolivia'].includes(order.flow_type);
-    const clientBankAccount = needsBankAccount
-      ? await this.clientBankAccountsService.findPrimary(order.user_id)
-      : null;
-
-    const buffer = await this.pdfService.generatePaymentPdf(
-      order,
-      supplier,
-      client,
-      clientWallet,
-      clientBankAccount,
-    );
+    const buffer = await this.orderPdfService.buildOrderPdf(id, user.id);
 
     res.set({
       'Content-Type': 'application/pdf',
@@ -545,6 +488,7 @@ export class AdminPaymentOrdersController {
     private readonly exchangeRatesService: ExchangeRatesService,
     private readonly psavService: PsavService,
     private readonly orderReviewService: OrderReviewService,
+    private readonly orderPdfService: OrderPdfService,
   ) {}
 
   // ── Listados ──
@@ -610,6 +554,27 @@ export class AdminPaymentOrdersController {
   @ApiOperation({ summary: 'Meses disponibles con transacciones interbank' })
   getGlobalFlowMonths() {
     return this.paymentOrdersService.getGlobalFlowMonths();
+  }
+
+  @Get(':id/pdf')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({
+    summary:
+      'Descargar el comprobante Guira en PDF de cualquier orden (el mismo que descarga el cliente)',
+  })
+  async getOrderPdf(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Res({ passthrough: true }) res: any,
+  ) {
+    const buffer = await this.orderPdfService.buildOrderPdf(id, null);
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="payment-order-${id.slice(0, 8)}.pdf"`,
+      'Content-Length': buffer.length,
+    });
+
+    return new StreamableFile(buffer);
   }
 
   // ── Acciones de estado ──
