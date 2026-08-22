@@ -21,6 +21,26 @@ interface BridgeExchangeRateResponse {
   sell_rate: string;
 }
 
+/** Estado de un par tal como lo necesita updateRateInternal. */
+interface RateSnapshotEntry {
+  base_rate: number;
+  spread_percent: number;
+  effective_rate: number;
+  bridge_buy_rate: number | null;
+  bridge_sell_rate: number | null;
+}
+
+/**
+ * Foto de exchange_rates_config para un ciclo del cron, indexada por par.
+ *
+ * Sustituye los 19 SELECT de una fila que hacía cada ciclo (uno por par en
+ * updateRateInternal, más dos en syncBridgeCrossRates) por una sola lectura.
+ * Se mantiene viva durante el ciclo: cada escritura refresca su entrada, de
+ * modo que quien lea después ve el valor recién guardado igual que cuando se
+ * releía de la base de datos.
+ */
+type RatesSnapshot = Map<string, RateSnapshotEntry>;
+
 @Injectable()
 export class ExchangeRatesService {
   private readonly logger = new Logger(ExchangeRatesService.name);
@@ -59,6 +79,32 @@ export class ExchangeRatesService {
     const isAnchorPair = pair === 'BOB_USD' || pair === 'USD_BOB';
     const factor = isAnchorPair ? 100 : 1_000_000;
     return Math.trunc(value * factor) / factor;
+  }
+
+  /**
+   * Lee los 17 pares de una vez y normaliza los campos numéricos.
+   *
+   * getAllRates() devuelve bridge_buy_rate/bridge_sell_rate crudos de la fila
+   * (string), mientras que getRate() los parsea. Se normalizan aquí para que
+   * el snapshot y el fallback a getRate sean intercambiables.
+   */
+  private async buildRatesSnapshot(): Promise<RatesSnapshot> {
+    const rows = await this.getAllRates();
+    const toNumber = (v: unknown): number | null =>
+      v != null ? parseFloat(String(v)) : null;
+
+    return new Map(
+      rows.map((row) => [
+        String(row.pair).toUpperCase(),
+        {
+          base_rate: row.base_rate,
+          spread_percent: row.spread_percent,
+          effective_rate: row.effective_rate,
+          bridge_buy_rate: toNumber(row.bridge_buy_rate),
+          bridge_sell_rate: toNumber(row.bridge_sell_rate),
+        },
+      ]),
+    );
   }
 
   /** Construye el payload para la notificación WS sin consultar DB nuevamente. */
@@ -130,9 +176,15 @@ export class ExchangeRatesService {
       // 2. De USD a BOB (User da USD, recibe BOB)
       const usdToBobRate = sellRateBobPerUsd;
 
+      // Una sola lectura de la tabla para todo el ciclo, y un único frame WS
+      // al final en lugar de 17 escalonados. Se construye después de Binance
+      // para no gastar la consulta si el proveedor falla.
+      const snapshot = await this.buildRatesSnapshot();
+      const batch: RateUpdatedPayload[] = [];
+
       // Actualizamos los 2 pares canónicos en la base de datos
-      await this.updateRateInternal('BOB_USD', bobToUsdRate, actorId);
-      await this.updateRateInternal('USD_BOB', usdToBobRate, actorId);
+      await this.updateRateInternal('BOB_USD', bobToUsdRate, actorId, undefined, snapshot, batch);
+      await this.updateRateInternal('USD_BOB', usdToBobRate, actorId, undefined, snapshot, batch);
 
       this.logger.log(
         'Sincronización de tasas de cambio completada exitosamente.',
@@ -141,12 +193,16 @@ export class ExchangeRatesService {
       // Los cruzados se sincronizan en su propio bloque para que un fallo de Bridge
       // no enmascare el éxito del par ancla BOB/USD que ya quedó guardado.
       try {
-        await this.syncBridgeCrossRates(actorId);
+        await this.syncBridgeCrossRates(actorId, snapshot, batch);
       } catch (crossErr) {
         this.logger.warn(
           `Tasas BOB/USD actualizadas, pero falló la sincronización de cruzados: ${(crossErr as Error).message}`,
         );
       }
+
+      // Fuera del try de los cruzados: si Bridge falla, se emite igualmente
+      // lo que sí se actualizó.
+      this.gateway.emitRatesBatch(batch);
 
       return {
         message: 'Tasas sincronizadas correctamente',
@@ -176,11 +232,17 @@ export class ExchangeRatesService {
    * Los valores crudos de Bridge (buy_rate, sell_rate) se guardan en la DB
    * para trazabilidad. Si Bridge falla en una divisa concreta se loguea y continúa.
    */
-  async syncBridgeCrossRates(actorId = 'system_cron') {
-    const [bobUsdData, usdBobData] = await Promise.all([
-      this.getRate('BOB_USD'),
-      this.getRate('USD_BOB'),
-    ]);
+  async syncBridgeCrossRates(
+    actorId = 'system_cron',
+    snapshot?: RatesSnapshot,
+    batch?: RateUpdatedPayload[],
+  ) {
+    // Los pares ancla ya se actualizaron en este mismo ciclo; el snapshot los
+    // tiene al día, así que no hace falta releerlos de la base de datos.
+    const bobUsdData =
+      snapshot?.get('BOB_USD') ?? (await this.getRate('BOB_USD'));
+    const usdBobData =
+      snapshot?.get('USD_BOB') ?? (await this.getRate('USD_BOB'));
     const bobUsdBase = bobUsdData.base_rate;
     const usdBobBase = usdBobData.base_rate;
 
@@ -208,10 +270,10 @@ export class ExchangeRatesService {
         const xBobRate = this.truncateToCalcPrecision(usdBobBase / buyRate);
 
         const bridgeRates = { buy_rate: buyRate, sell_rate: sellRate };
-        await this.updateRateInternal(`BOB_${upper}`, bobXRate, actorId, bridgeRates);
-        await this.updateRateInternal(`${upper}_BOB`, xBobRate, actorId, bridgeRates);
+        await this.updateRateInternal(`BOB_${upper}`, bobXRate, actorId, bridgeRates, snapshot, batch);
+        await this.updateRateInternal(`${upper}_BOB`, xBobRate, actorId, bridgeRates, snapshot, batch);
         // USD_X: cliente da USDC (≈USD), recibe X → Bridge vende X → sell_rate
-        await this.updateRateInternal(`USD_${upper}`, this.truncateToCalcPrecision(sellRate), actorId, bridgeRates);
+        await this.updateRateInternal(`USD_${upper}`, this.truncateToCalcPrecision(sellRate), actorId, bridgeRates, snapshot, batch);
       } catch (e) {
         this.logger.warn(
           `No se pudo sincronizar par BOB/${currency.toUpperCase()} desde Bridge: ${(e as Error).message}`,
@@ -225,15 +287,22 @@ export class ExchangeRatesService {
   /**
    * Método interno helper para updates estandarizados sin parámetros de spread.
    * bridgeRates solo se pasa para pares cruzados (EUR, BRL, etc.); es null para BOB_USD/USD_BOB.
+   *
+   * snapshot y batch son opcionales: cuando vienen (ciclo del cron) se lee del
+   * snapshot y se acumula la emisión; cuando no (ruta manual del admin) se
+   * consulta la base de datos y se emite al momento, como siempre.
    */
   private async updateRateInternal(
     pair: string,
     rate: number,
     actorId: string,
     bridgeRates?: { buy_rate: number; sell_rate: number },
+    snapshot?: RatesSnapshot,
+    batch?: RateUpdatedPayload[],
   ) {
     try {
-      const old = await this.getRate(pair);
+      const key = pair.toUpperCase();
+      const old = snapshot?.get(key) ?? (await this.getRate(pair));
 
       const updatePayload: Record<string, unknown> = {
         rate,
@@ -246,21 +315,58 @@ export class ExchangeRatesService {
         updatePayload.bridge_sell_rate = bridgeRates.sell_rate;
       }
 
-      await this.supabase
+      const { error: updateError } = await this.supabase
         .from('exchange_rates_config')
         .update(updatePayload)
-        .eq('pair', pair.toUpperCase());
+        .eq('pair', key);
+
+      // Supabase devuelve el fallo en `error` en vez de lanzarlo. Sin esta
+      // comprobación se emitía por WS una tasa que nunca llegó a guardarse.
+      if (updateError) {
+        this.logger.error(
+          `No se pudo actualizar el par ${key}: ${updateError.message}`,
+        );
+        Sentry.captureException(updateError, {
+          extra: { operation: 'exchangeRates.updateRateInternal', pair: key, rate },
+        });
+        return;
+      }
+
+      const payload = this.buildRateUpdatedPayload(
+        pair,
+        rate,
+        old.spread_percent,
+        bridgeRates?.buy_rate ?? old.bridge_buy_rate ?? null,
+        bridgeRates?.sell_rate ?? old.bridge_sell_rate ?? null,
+      );
+
+      // El snapshot pasa a reflejar lo que acaba de quedar en base de datos.
+      // syncBridgeCrossRates lee de aquí los pares ancla para calcular los
+      // cruzados: sin este refresco usaría los del ciclo anterior.
+      snapshot?.set(key, {
+        base_rate: rate,
+        spread_percent: old.spread_percent,
+        effective_rate: payload.effective_rate,
+        bridge_buy_rate: payload.bridge_buy_rate,
+        bridge_sell_rate: payload.bridge_sell_rate,
+      });
+
+      // Diagnóstico para calibrar un futuro umbral de materialidad: mide
+      // cuánto se mueve de verdad cada par entre ciclos.
+      if (old.effective_rate) {
+        const deltaBps =
+          Math.abs(
+            (payload.effective_rate - old.effective_rate) / old.effective_rate,
+          ) * 10_000;
+        this.logger.debug(`[delta] ${key}: ${deltaBps.toFixed(3)}bps`);
+      }
 
       // Emitir con datos locales — sin consulta extra que pueda fallar tras el UPDATE
-      this.gateway.emitRateUpdated(
-        this.buildRateUpdatedPayload(
-          pair,
-          rate,
-          old.spread_percent,
-          bridgeRates?.buy_rate ?? old.bridge_buy_rate ?? null,
-          bridgeRates?.sell_rate ?? old.bridge_sell_rate ?? null,
-        ),
-      );
+      if (batch) {
+        batch.push(payload);
+      } else {
+        this.gateway.emitRateUpdated(payload);
+      }
 
       // Los syncs automáticos (system_cron) no se escriben en audit_logs —
       // generaban ~37k filas de ruido. El historial de cada par vive en

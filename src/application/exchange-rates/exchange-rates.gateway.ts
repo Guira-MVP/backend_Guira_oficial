@@ -7,6 +7,7 @@ import {
 } from '@nestjs/websockets';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { createClient } from '@supabase/supabase-js';
 import { Server, Socket } from 'socket.io';
 
@@ -30,6 +31,10 @@ export class ExchangeRatesGateway
   server: Server;
 
   private readonly logger = new Logger(ExchangeRatesGateway.name);
+
+  /** Sockets abiertos en el namespace. Contador propio en lugar de leer el
+   * interno de Socket.IO, que cambia entre versiones. */
+  private activeConnections = 0;
 
   constructor(private readonly configService: ConfigService) {}
 
@@ -67,18 +72,53 @@ export class ExchangeRatesGateway
 
   handleConnection(client: Socket) {
     const userId = client.data?.user?.id;
+    this.activeConnections++;
     this.logger.log(
       `Cliente conectado al WS exchange-rates: ${client.id}` +
-        (userId ? ` (user: ${userId})` : ''),
+        (userId ? ` (user: ${userId})` : '') +
+        ` [activas: ${this.activeConnections}]`,
     );
   }
 
   handleDisconnect(client: Socket) {
-    this.logger.log(`Cliente desconectado del WS exchange-rates: ${client.id}`);
+    this.activeConnections = Math.max(0, this.activeConnections - 1);
+    this.logger.log(
+      `Cliente desconectado del WS exchange-rates: ${client.id}` +
+        ` [activas: ${this.activeConnections}]`,
+    );
   }
 
+  /**
+   * Emite una sola tasa. Se conserva para la ruta manual del admin, donde solo
+   * cambia un par y no tiene sentido agrupar.
+   */
   emitRateUpdated(payload: RateUpdatedPayload) {
     this.server.emit('rate_updated', payload);
     this.logger.log(`WS emitido: rate_updated para ${payload.pair}`);
+  }
+
+  /**
+   * Emite todas las tasas de un ciclo del cron en un único frame.
+   *
+   * El cron actualiza 17 pares por ciclo; emitirlos uno a uno generaba 17
+   * frames escalonados a lo largo de ~2,5 s, cada uno con su propio overhead
+   * de protocolo, y 17 renders en el cliente. Un solo evento cubre lo mismo.
+   */
+  emitRatesBatch(payloads: RateUpdatedPayload[]) {
+    if (payloads.length === 0) return;
+    this.server.emit('rates_updated', payloads);
+    this.logger.log(`WS emitido: rates_updated (${payloads.length} pares)`);
+  }
+
+  /**
+   * Sonda de diagnóstico: sin ella no hay forma de saber cuántos sockets
+   * quedan abiertos fuera de horario, que es lo que determina si conviene
+   * segmentar los broadcasts por par.
+   */
+  @Cron(CronExpression.EVERY_10_MINUTES)
+  logConnectionCount() {
+    this.logger.log(
+      `WS exchange-rates: ${this.activeConnections} conexiones activas`,
+    );
   }
 }
