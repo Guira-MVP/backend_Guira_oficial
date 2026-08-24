@@ -3,6 +3,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
 import { ConfigService } from '@nestjs/config';
+import { NotFoundException } from '@nestjs/common';
 import { SUPABASE_CLIENT } from './core/supabase/supabase.module';
 
 describe('AppController', () => {
@@ -17,6 +18,7 @@ describe('AppController', () => {
   const mockConfigService = {
     get: jest.fn().mockImplementation((key) => {
       if (key === 'app.bridgeApiKey') return 'sk_test_123';
+      if (key === 'app.appEnv') return 'staging';
       return null;
     }),
   };
@@ -37,6 +39,20 @@ describe('AppController', () => {
   describe('root', () => {
     it('should return "Hello World!"', () => {
       expect(appController.getHello()).toBe('Hello World!');
+    });
+  });
+
+  describe('debug-sentry', () => {
+    it('requires a token in staging', () => {
+      expect(() => appController.getDebugSentry()).toThrow(NotFoundException);
+    });
+
+    it('requires a token in production', () => {
+      mockConfigService.get.mockImplementationOnce((key: string) =>
+        key === 'app.appEnv' ? 'production' : null,
+      );
+
+      expect(() => appController.getDebugSentry()).toThrow(NotFoundException);
     });
   });
 });

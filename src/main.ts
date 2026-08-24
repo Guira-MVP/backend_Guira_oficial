@@ -17,6 +17,11 @@ import type { ServerOptions } from 'socket.io';
 import helmet from 'helmet';
 import { Server } from 'socket.io';
 import { SentryAwareLogger } from './core/logging/sentry-aware.logger';
+import {
+  isSwaggerEnabledAppEnv,
+  resolveCorsOrigins,
+  resolveAppEnv,
+} from './core/config/app/app-env';
 
 class CorsIoAdapter extends IoAdapter {
   private readonly app: INestApplication;
@@ -53,6 +58,7 @@ class CorsIoAdapter extends IoAdapter {
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
+  const appEnv = resolveAppEnv();
 
   // IMPORTANTE: Habilitamos rawBody para poder verificar firmas RSA/SHA256
   // de Bridge Webhooks sin interferir con FileInterceptor (Multer) o uploads.
@@ -73,24 +79,8 @@ async function bootstrap() {
   const prefix = process.env.PATH_SUBDOMAIN || 'api';
   app.setGlobalPrefix(prefix);
 
-  // CORS: acepta orígenes definidos en URL_FRONTEND (comma-separated)
-  const allowedOrigins = (process.env.URL_FRONTEND ?? '')
-    .split(',')
-    .map((o) => o.trim().replace(/\/$/, ''))
-    .filter((o) => o.length > 0);
-
-  // Localhost solo en entornos no-productivos
-  if (process.env.NODE_ENV !== 'production') {
-    if (!allowedOrigins.includes('http://localhost:3000')) {
-      allowedOrigins.push('http://localhost:3000');
-    }
-    if (!allowedOrigins.includes('http://localhost:5173')) {
-      allowedOrigins.push('http://localhost:5173');
-    }
-    if (!allowedOrigins.includes('http://localhost:8081')) {
-      allowedOrigins.push('http://localhost:8081');
-    }
-  }
+  // CORS: URL_FRONTEND (comma-separated) plus localhost only in dev/test.
+  const allowedOrigins = resolveCorsOrigins(appEnv, process.env.URL_FRONTEND);
 
   logger.log(`CORS allowed origins: ${allowedOrigins.join(', ')}`);
 
@@ -138,7 +128,7 @@ async function bootstrap() {
 
   // Swagger — solo disponible en desarrollo y staging (no en producción)
   // En producción, /api/docs y /api/swagger/json devuelven 404.
-  if (process.env.NODE_ENV !== 'production') {
+  if (isSwaggerEnabledAppEnv(appEnv)) {
     const swaggerConfig = new DocumentBuilder()
       .setTitle('Guira API')
       .setDescription('API de la plataforma financiera Guira')
@@ -169,7 +159,8 @@ async function bootstrap() {
   app.enableShutdownHooks();
 
   await app.listen(port, '0.0.0.0');
-  logger.log(`Guira API running on port ${port} with prefix /${prefix} (0.0.0.0)`);
+  logger.log(
+    `Guira API running on port ${port} with prefix /${prefix} (${appEnv})`,
+  );
 }
 bootstrap();
-

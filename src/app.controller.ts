@@ -1,4 +1,10 @@
-import { Controller, Get, Inject, NotFoundException, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Inject,
+  NotFoundException,
+  Query,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { ConfigService } from '@nestjs/config';
@@ -7,6 +13,11 @@ import { timingSafeEqual } from 'crypto';
 import { AppService } from './app.service';
 import { SUPABASE_CLIENT } from './core/supabase/supabase.module';
 import { Public } from './core/guards/supabase-auth.guard';
+import {
+  AppEnv,
+  isProtectedAppEnv,
+  resolveAppEnv,
+} from './core/config/app/app-env';
 
 function isValidDebugToken(provided: string | undefined): boolean {
   const expected = process.env.DEBUG_SENTRY_TOKEN;
@@ -59,12 +70,15 @@ export class AppController {
   @Public()
   @ApiOperation({
     summary:
-      'Prueba la integración de Sentry (en producción requiere ?token=DEBUG_SENTRY_TOKEN)',
+      'Prueba la integración de Sentry (en staging y producción requiere ?token=DEBUG_SENTRY_TOKEN)',
   })
   getDebugSentry(@Query('token') token?: string) {
-    // En producción, solo responde si el token coincide con DEBUG_SENTRY_TOKEN —
+    const appEnv = this.config.get<AppEnv>('app.appEnv') ?? resolveAppEnv();
+
+    // En staging y producción, solo responde si el token coincide con
+    // DEBUG_SENTRY_TOKEN —
     // así evitamos exponer un endpoint público que siempre lanza un error.
-    if (process.env.NODE_ENV === 'production' && !isValidDebugToken(token)) {
+    if (isProtectedAppEnv(appEnv) && !isValidDebugToken(token)) {
       throw new NotFoundException();
     }
 

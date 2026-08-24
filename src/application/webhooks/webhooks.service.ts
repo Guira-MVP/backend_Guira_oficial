@@ -12,6 +12,11 @@ import { OrdersGateway } from '../orders/orders.gateway';
 import { AdminGateway } from '../admin/admin.gateway';
 import { EmailService } from '../email/email.service';
 import { PaymentOrdersService } from '../payment-orders/payment-orders.service';
+import {
+  AppEnv,
+  resolveAppEnv,
+  shouldRejectUnverifiedWebhook,
+} from '../../core/config/app/app-env';
 
 interface SinkEventDto {
   provider: string;
@@ -275,9 +280,11 @@ export class WebhooksService {
       const signatureVerified = event.signature_verified as boolean;
 
       if (!signatureVerified) {
-        if (this.config.get('app.nodeEnv') === 'production') {
+        const appEnv = this.config.get<AppEnv>('app.appEnv') ?? resolveAppEnv();
+
+        if (shouldRejectUnverifiedWebhook(appEnv)) {
           this.logger.warn(
-            `❌ Firma inválida en evento ${id} — ignorado en producción`,
+            `❌ Firma inválida en evento ${id} — ignorado en ${appEnv}`,
           );
           // Audit trail de firma inválida para detectar ataques de webhook injection
           void this.supabase.from('audit_logs').insert({
@@ -301,7 +308,7 @@ export class WebhooksService {
         // En no-producción se permite continuar para facilitar el testing,
         // pero se registra explícitamente para no pasar desapercibido.
         this.logger.warn(
-          `⚠️  Firma NO verificada en evento ${id} — procesando solo porque NODE_ENV=${this.config.get('app.nodeEnv')}`,
+          `⚠️  Firma NO verificada en evento ${id} — procesando solo porque APP_ENV=${appEnv}`,
         );
       }
 
@@ -991,7 +998,8 @@ export class WebhooksService {
               for (const item of items) {
                 if (typeof item !== 'string') continue;
                 addIfActionable(item);
-                if (person && issueSet.has(item)) affectedPersons[item] = person;
+                if (person && issueSet.has(item))
+                  affectedPersons[item] = person;
               }
             }
           }
@@ -2508,21 +2516,26 @@ export class WebhooksService {
         // Asentar ledger (debit confirmed on-chain) y liberar reserva en una sola
         // transacción atómica — evita la ventana donde available_amount sería negativo.
         const totalReserved = parseFloat(paymentOrder.amount ?? '0');
-        const { error: settleBoError } = await this.supabase.rpc('settle_and_release_reserved', {
-          p_user_id: paymentOrder.user_id,
-          p_currency: (
-            paymentOrder.source_currency ??
-            paymentOrder.currency ??
-            'USDC'
-          ).toUpperCase(),
-          p_amount: totalReserved,
-          p_reference_id: paymentOrder.id,
-        });
+        const { error: settleBoError } = await this.supabase.rpc(
+          'settle_and_release_reserved',
+          {
+            p_user_id: paymentOrder.user_id,
+            p_currency: (
+              paymentOrder.source_currency ??
+              paymentOrder.currency ??
+              'USDC'
+            ).toUpperCase(),
+            p_amount: totalReserved,
+            p_reference_id: paymentOrder.id,
+          },
+        );
         if (settleBoError) {
           this.logger.error(
             `❌ settle_and_release_reserved falló para order ${paymentOrder.id}: ${settleBoError.message}`,
           );
-          throw new Error(`settle_and_release_reserved failed: ${settleBoError.message}`);
+          throw new Error(
+            `settle_and_release_reserved failed: ${settleBoError.message}`,
+          );
         }
 
         // Notificar staff que el PSAV recibió el crypto
@@ -2595,12 +2608,12 @@ export class WebhooksService {
             // Ambos flujos congelan una tasa estimada al crear la orden; sin esto
             // el comprobante PDF quedaría con esa estimación para siempre.
             ...(receiptExchangeRate != null &&
-              ['bridge_wallet_to_fiat_us', 'wallet_to_world'].includes(
-                paymentOrder.flow_type,
-              ) &&
-              (paymentOrder.destination_currency ?? '').toUpperCase() !== 'USD'
-                ? { exchange_rate_applied: receiptExchangeRate }
-                : {}),
+            ['bridge_wallet_to_fiat_us', 'wallet_to_world'].includes(
+              paymentOrder.flow_type,
+            ) &&
+            (paymentOrder.destination_currency ?? '').toUpperCase() !== 'USD'
+              ? { exchange_rate_applied: receiptExchangeRate }
+              : {}),
             // Guardar metadata histórica si fue on-ramp flexible (amount original 0)
             ...(initialAmount === 0 && receipt?.initial_amount
               ? { amount: parseFloat(receipt.initial_amount as string) }
@@ -2677,7 +2690,9 @@ export class WebhooksService {
           this.logger.error(
             `❌ Error al asentar ledger entries (credit) para order ${paymentOrder.id}: ${settleCreditError.message}`,
           );
-          throw new Error(`Ledger settle (credit) failed for order ${paymentOrder.id}: ${settleCreditError.message}`);
+          throw new Error(
+            `Ledger settle (credit) failed for order ${paymentOrder.id}: ${settleCreditError.message}`,
+          );
         }
 
         const { data: settledDebitEntries, error: settleDebitError } =
@@ -2694,7 +2709,9 @@ export class WebhooksService {
           this.logger.error(
             `❌ Error al asentar ledger entries (debit) para order ${paymentOrder.id}: ${settleDebitError.message}`,
           );
-          throw new Error(`Ledger settle (debit) failed for order ${paymentOrder.id}: ${settleDebitError.message}`);
+          throw new Error(
+            `Ledger settle (debit) failed for order ${paymentOrder.id}: ${settleDebitError.message}`,
+          );
         }
 
         const settledCount =
@@ -2778,8 +2795,14 @@ export class WebhooksService {
         // fiat_bo_to_bridge_wallet: fondeo de wallet. bolivia_to_world: solo cuando se
         // completó vía Bridge Transfer (comisión mixta/fija) — el camino LA/drain
         // (comisión porcentual) ya lo dispara aparte en completeDrainOrder().
-        if (['fiat_bo_to_bridge_wallet', 'bolivia_to_world'].includes(paymentOrder.flow_type ?? '')) {
-          void this.paymentOrdersService.storePsavReceiptOnCompletion(paymentOrder.id);
+        if (
+          ['fiat_bo_to_bridge_wallet', 'bolivia_to_world'].includes(
+            paymentOrder.flow_type ?? '',
+          )
+        ) {
+          void this.paymentOrdersService.storePsavReceiptOnCompletion(
+            paymentOrder.id,
+          );
         }
 
         this.logger.log(
@@ -2803,7 +2826,9 @@ export class WebhooksService {
         this.logger.error(
           `❌ Error al asentar ledger via bridge_transfer_id ${transfer.id}: ${settleTrError.message}`,
         );
-        throw new Error(`Ledger settle (transfer path) failed: ${settleTrError.message}`);
+        throw new Error(
+          `Ledger settle (transfer path) failed: ${settleTrError.message}`,
+        );
       }
 
       // 4. INSERT certificate — idempotente: verificar que no exista ya uno para este transfer.
@@ -2987,8 +3012,7 @@ export class WebhooksService {
     // liberación por source_currency de más abajo (no están en offRampWalletFlows).
     const noReservationFlows = ['wallet_to_world'];
     const isNoReservationFlow =
-      failedOrder != null &&
-      noReservationFlows.includes(failedOrder.flow_type);
+      failedOrder != null && noReservationFlows.includes(failedOrder.flow_type);
 
     // 4. Liberar saldo reservado (solo para flujos que no tienen liberación propia)
     if (transfer && !isOffRampWalletFlow && !isNoReservationFlow) {
@@ -3326,9 +3350,10 @@ export class WebhooksService {
         // agnóstico a la divisa destino (USD, EUR, MXN...). Fallback: amount/rate.
         const tolerance = 0.05;
         const matched = (matchedOrder ?? []).find((o) => {
-          const instructions = o.bridge_source_deposit_instructions as
-            | Record<string, unknown>
-            | null;
+          const instructions = o.bridge_source_deposit_instructions as Record<
+            string,
+            unknown
+          > | null;
           const expectedUsdc = parseFloat(
             (instructions?.amount_to_deposit as string) ?? '0',
           );
@@ -3525,9 +3550,11 @@ export class WebhooksService {
 
             const tolerance = 0.05;
             const matched = (lateMatch ?? []).find((o) => {
-              const instructions = o.bridge_source_deposit_instructions as
-                | Record<string, unknown>
-                | null;
+              const instructions =
+                o.bridge_source_deposit_instructions as Record<
+                  string,
+                  unknown
+                > | null;
               const expectedUsdc = parseFloat(
                 (instructions?.amount_to_deposit as string) ?? '0',
               );
@@ -3652,9 +3679,7 @@ export class WebhooksService {
         completed_at: new Date().toISOString(),
         bridge_drain_id: drainId,
         ...(depositTxHash ? { source_tx_hash: depositTxHash } : {}),
-        ...(finalAmount
-          ? { amount_destination: parseFloat(finalAmount) }
-          : {}),
+        ...(finalAmount ? { amount_destination: parseFloat(finalAmount) } : {}),
         ...(receiptUrl ? { bridge_receipt_url: receiptUrl } : {}),
       })
       .eq('id', order.id);

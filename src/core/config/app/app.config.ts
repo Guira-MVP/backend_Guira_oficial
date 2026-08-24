@@ -1,10 +1,12 @@
 import { registerAs } from '@nestjs/config';
+import { AppEnv, resolveAppEnv } from './app-env';
 
 const toInt = (v: string | undefined, def: number) =>
   v !== undefined && v !== '' ? parseInt(v, 10) : def;
 
 export interface AppConfig {
-  nodeEnv: 'development' | 'test' | 'production' | string;
+  appEnv: AppEnv;
+  nodeEnv: string;
   port: number;
   pathSubdomain: string;
   urlFrontend: string;
@@ -24,7 +26,8 @@ export interface AppConfig {
 export default registerAs(
   'app',
   (): AppConfig => ({
-    nodeEnv: (process.env.NODE_ENV as AppConfig['nodeEnv']) ?? 'development',
+    appEnv: resolveAppEnv(),
+    nodeEnv: process.env.NODE_ENV ?? 'development',
     port: toInt(process.env.PORT, 3001),
     pathSubdomain: process.env.PATH_SUBDOMAIN ?? 'api',
     urlFrontend: process.env.URL_FRONTEND ?? '',
