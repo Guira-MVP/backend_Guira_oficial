@@ -2,6 +2,10 @@
 --  Semilla: comunicado "Nuevos rieles en camino"
 --  Anuncia los próximos corredores de Perú, Argentina, China y Canadá.
 --  Idempotente: no duplica si ya existe un anuncio con el mismo título.
+--
+--  Entra como BORRADOR (is_active = FALSE): nadie lo ve hasta que alguien de
+--  admin lo publique desde /admin/anuncios. Así el despliegue no dispara un
+--  modal a todos los clientes sin que se haya revisado antes.
 -- ═══════════════════════════════════════════════════════════════
 
 INSERT INTO announcements (title, badge, body, items, is_active)
@@ -15,7 +19,7 @@ SELECT
     { "flag": "CN", "label": "China",     "description": "Pagos a proveedores en yuanes" },
     { "flag": "CA", "label": "Canadá",    "description": "Envíos y cobros en dólares canadienses" }
   ]'::jsonb,
-  TRUE
+  FALSE
 WHERE NOT EXISTS (
   SELECT 1 FROM announcements WHERE title = 'Nuevos rieles en camino'
 );
