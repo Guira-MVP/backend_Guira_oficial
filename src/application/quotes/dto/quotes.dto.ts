@@ -172,4 +172,12 @@ export class CreateQuoteDto {
   @ValidateNested({ each: true })
   @Type(() => ComparisonFlowRowDto)
   comparison_flows?: ComparisonFlowRowDto[];
+
+  @ApiPropertyOptional({
+    default: false,
+    description: 'El spread es un dato interno; por defecto NO se imprime en el PDF que recibe el cliente.',
+  })
+  @IsBoolean()
+  @IsOptional()
+  show_spread_in_pdf?: boolean;
 }
