@@ -43,6 +43,21 @@ export class QuotesController {
     });
   }
 
+  @Get('grouped')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({ summary: 'Historial agrupado por cliente (mismo teléfono, varios servicios cotizados)' })
+  listGrouped(
+    @Query('phone') phone?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.quotesService.listGrouped({
+      phone,
+      page: page ? parseInt(page, 10) : undefined,
+      limit: limit ? parseInt(limit, 10) : undefined,
+    });
+  }
+
   @Get(':id')
   @Roles('staff', 'admin', 'super_admin')
   @ApiOperation({ summary: 'Detalle de una cotización' })
