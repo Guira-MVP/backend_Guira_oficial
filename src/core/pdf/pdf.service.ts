@@ -2063,4 +2063,291 @@ export class PdfService {
       throw error;
     }
   }
+
+  // ═══════════════════════════════════════════════════════
+  //  COTIZACIÓN DE STAFF — ticket comercial para prospectos
+  // ═══════════════════════════════════════════════════════
+
+  /**
+   * Genera el ticket de cotización que el staff descarga y envía manualmente
+   * al prospecto. `quote` es la fila de `quote_history` tal cual quedó
+   * guardada: la comisión/spread son un override negociado y congelado para
+   * ESTA cotización (no se recalculan aquí), y `comparison_flows` es el
+   * snapshot de alternativas ya calculado por el frontend al momento de
+   * generarla (ver features/staff/lib/build-quote-comparison.ts en el
+   * frontend) — este método solo lo renderiza.
+   *
+   * Deliberadamente NO imprime `quote.notes`: es una nota interna del staff
+   * (ej. "cliente dijo que moverá $50k/mes"), no contenido para el cliente.
+   */
+  async generateQuotePdf(quote: any): Promise<Buffer> {
+    try {
+      const logo = this.loadLogo();
+
+      const sectionHeader = (title: string, cols: number) => {
+        const cells: any[] = [{ text: title, style: 'sectionHeader', colSpan: cols }];
+        for (let i = 1; i < cols; i++) cells.push({});
+        return cells;
+      };
+
+      const borderedLayout = {
+        hLineWidth: () => 0.6,
+        vLineWidth: (i: number, node: any) => (i === 0 || i === node.table.widths.length ? 0.6 : 0),
+        hLineColor: () => COLORS.border,
+        vLineColor: () => COLORS.border,
+        paddingLeft: () => 10,
+        paddingRight: () => 10,
+        paddingTop: () => 6,
+        paddingBottom: () => 6,
+      };
+
+      const originCcy = (quote.origin_currency ?? '').toUpperCase();
+      const destCcy = (quote.destination_currency ?? '').toUpperCase();
+      const folio = String(quote.id ?? '').slice(0, 8).toUpperCase();
+      const issuedAt = quote.created_at ?? new Date().toISOString();
+      const validUntil = new Date(new Date(issuedAt).getTime() + 24 * 60 * 60 * 1000).toISOString();
+
+      const exchangeRateDisplay = quote.exchange_rate != null
+        ? `${Number(quote.exchange_rate).toFixed(4)}  (${originCcy}/${destCcy})`
+        : 'N/D';
+
+      const detailRows = this.filterNd([
+        this.row('Monto a enviar', `${this.fmtAmount(quote.amount_origin)} ${originCcy}`),
+        this.row('Tipo de cambio aplicado', exchangeRateDisplay),
+        this.row('Comisión', `${Number(quote.commission_percent).toFixed(2)}% (${this.fmtAmount(quote.commission_amount)} ${originCcy})`),
+        this.row('Spread cambiario', `${Number(quote.spread_percent).toFixed(2)}%`),
+        this.row('Monto neto convertido', `${this.fmtAmount(quote.net_amount)} ${originCcy}`),
+      ]);
+
+      const clientRows = this.filterNd([
+        this.row('Teléfono', this.toDisplay(quote.client_phone)),
+        this.row('Nombre', this.toDisplay(quote.client_name)),
+        this.row('Empresa', this.toDisplay(quote.client_company)),
+        this.row('Atendido por', this.toDisplay(quote.created_by_name)),
+      ]);
+
+      const comparisonFlows: any[] = Array.isArray(quote.comparison_flows) ? quote.comparison_flows : [];
+      const alternatives = comparisonFlows.filter((f) => f?.kind === 'destination_alternative');
+      const fundingBenefits = comparisonFlows.filter((f) => f?.kind === 'funding_benefit');
+
+      const content: any[] = [
+        // ═══ HEADER BAND ═══
+        {
+          table: {
+            widths: ['*'],
+            body: [[
+              {
+                columns: [
+                  { ...logo, margin: [0, 2, 0, 0] },
+                  {
+                    stack: [
+                      { text: 'COTIZACIÓN DE ENVÍO', style: 'headerTitle' },
+                      { text: this.toDisplay(quote.flow_label), style: 'headerSubtitle', margin: [0, 3, 0, 0] },
+                    ],
+                    alignment: 'right' as const,
+                  },
+                ],
+                fillColor: COLORS.navy,
+                margin: [20, 16, 20, 16],
+              },
+            ]],
+          },
+          layout: 'noBorders',
+          margin: [0, 0, 0, 0],
+        },
+        { canvas: [{ type: 'rect', x: 0, y: 0, w: 523, h: 3, color: COLORS.accent }], margin: [0, 0, 0, 14] },
+
+        // ═══ META ROW ═══
+        {
+          table: {
+            widths: ['34%', '33%', '33%'],
+            body: [[
+              { stack: [{ text: 'FOLIO', style: 'metaLabel' }, { text: folio, style: 'metaId' }], margin: [8, 6, 8, 6] },
+              { stack: [{ text: 'FECHA DE EMISIÓN', style: 'metaLabel' }, { text: this.fmtDate(issuedAt), style: 'metaValue', fontSize: 8 }], margin: [8, 6, 8, 6] },
+              { stack: [{ text: 'VÁLIDA HASTA', style: 'metaLabel' }, { text: this.fmtDate(validUntil), style: 'metaValue', fontSize: 8 }], margin: [8, 6, 8, 6], alignment: 'right' as const },
+            ]],
+          },
+          layout: {
+            hLineWidth: () => 0.5,
+            vLineWidth: (i: number, node: any) => (i === 0 || i === node.table.widths.length ? 0.5 : 0.3),
+            hLineColor: () => COLORS.border,
+            vLineColor: () => COLORS.border,
+          },
+          margin: [0, 0, 0, 14],
+        },
+
+        // ═══ AMOUNT PANEL ═══
+        {
+          table: {
+            widths: ['*'],
+            body: [[
+              {
+                columns: [
+                  {
+                    stack: [
+                      { text: 'RECIBE EL DESTINATARIO', style: 'amountLabel' },
+                      { text: `${this.fmtAmount(quote.receives_amount)} ${destCcy}`, style: 'amountValue' },
+                    ],
+                    width: '*',
+                  },
+                  {
+                    stack: [
+                      { text: 'ENVÍAS', style: 'amountLabel' },
+                      { text: `${this.fmtAmount(quote.amount_origin)} ${originCcy}`, style: 'amountOrigin' },
+                    ],
+                    width: 'auto',
+                    alignment: 'right' as const,
+                  },
+                ],
+                fillColor: COLORS.surface,
+                margin: [16, 12, 16, 12],
+              },
+            ]],
+          },
+          layout: {
+            hLineWidth: () => 0.6,
+            vLineWidth: () => 0.6,
+            hLineColor: () => COLORS.border,
+            vLineColor: () => COLORS.border,
+          },
+          margin: [0, 0, 0, 16],
+        },
+
+        // ═══ DETALLE DE LA COTIZACIÓN ═══
+        {
+          table: { headerRows: 1, widths: ['30%', '70%'], body: [sectionHeader('DETALLE DE LA COTIZACIÓN', 2), ...detailRows] },
+          layout: borderedLayout,
+          margin: [0, 0, 0, 14],
+        },
+
+        // ═══ DATOS DEL CLIENTE ═══
+        {
+          table: { headerRows: 1, widths: ['30%', '70%'], body: [sectionHeader('DATOS DEL CLIENTE', 2), ...clientRows] },
+          layout: borderedLayout,
+          margin: [0, 0, 0, 14],
+        },
+
+        // ═══ OTRAS OPCIONES DE ENVÍO ═══
+        ...(alternatives.length > 0 ? [{
+          table: {
+            headerRows: 1,
+            widths: ['40%', '25%', '35%'] as const,
+            body: [
+              [{ text: 'OTRAS OPCIONES DE ENVÍO', style: 'sectionHeader', colSpan: 3 }, {}, {}],
+              [
+                { text: 'Destino', style: 'tLabel', bold: true },
+                { text: 'Comisión', style: 'tLabel', bold: true },
+                { text: 'Recibirías', style: 'tLabel', bold: true },
+              ],
+              ...alternatives.map((alt) => ([
+                {
+                  text: alt.is_primary ? `${this.toDisplay(alt.label)}  ★` : this.toDisplay(alt.label),
+                  style: 'tValue',
+                  color: alt.is_primary ? COLORS.primary : COLORS.text,
+                },
+                { text: `${Number(alt.commission_percent ?? 0).toFixed(2)}%`, style: 'tValue' },
+                { text: `${this.fmtAmount(alt.receives_amount)} ${this.toDisplay(alt.destination_currency)}`, style: 'tValue' },
+              ])),
+            ],
+          },
+          layout: borderedLayout,
+          margin: [0, 0, 0, 14] as [number, number, number, number],
+        }] : []),
+
+        // ═══ FONDEA TU BILLETERA GUIRA SIN COMISIÓN ═══
+        ...(fundingBenefits.length > 0 ? [{
+          table: {
+            widths: ['*'],
+            body: [[
+              {
+                stack: [
+                  { text: 'FONDEA TU BILLETERA GUIRA SIN COMISIÓN', style: 'sectionHeader', margin: [0, 0, 0, 8] },
+                  ...fundingBenefits.map((fb) => ({
+                    text: `${this.toDisplay(fb.label)} — ${Number(fb.commission_percent ?? 0).toFixed(2)}% de comisión`,
+                    style: 'tValue',
+                    margin: [0, 2, 0, 2] as [number, number, number, number],
+                  })),
+                  {
+                    text: 'Abre tu cuenta en Guira y opera directamente desde tu billetera digital.',
+                    style: 'disclaimer',
+                    margin: [0, 6, 0, 0],
+                  },
+                ],
+                fillColor: COLORS.surface,
+                margin: [16, 12, 16, 12],
+              },
+            ]],
+          },
+          layout: {
+            hLineWidth: () => 0.6,
+            vLineWidth: () => 0.6,
+            hLineColor: () => COLORS.border,
+            vLineColor: () => COLORS.border,
+          },
+          margin: [0, 0, 0, 16] as [number, number, number, number],
+        }] : []),
+
+        { canvas: [{ type: 'rect', x: 0, y: 0, w: 523, h: 2, color: COLORS.accent }], margin: [0, 0, 0, 12] },
+
+        {
+          text: [
+            { text: 'Aviso: ', bold: true },
+            'Esta cotización es informativa y no vinculante. El tipo de cambio y la comisión pueden variar según condiciones de mercado y la validación de cumplimiento vigente al momento de crear la orden real. Válida por 24 horas desde su emisión.',
+          ],
+          style: 'disclaimer',
+          alignment: 'justify' as const,
+        },
+      ];
+
+      const docDefinition: TDocumentDefinitions = {
+        pageSize: 'A4',
+        pageMargins: [36, 36, 36, 60],
+        defaultStyle: { font: 'Helvetica', fontSize: 9, color: COLORS.text },
+        content,
+
+        footer: (currentPage, pageCount) => ({
+          columns: [
+            {
+              stack: [
+                { text: 'Guira — Plataforma de Operaciones Interbancarias', style: 'footerBrand' },
+                { text: 'www.guiracorp.com  |  soporte@guiracorp.com', style: 'footerContact' },
+              ],
+              alignment: 'left' as const,
+            },
+            {
+              text: `Página ${currentPage} de ${pageCount}`,
+              style: 'footerPage',
+              alignment: 'right' as const,
+            },
+          ],
+          margin: [36, 0, 36, 0],
+        }),
+
+        styles: {
+          brandFallback: { fontSize: 20, bold: true, color: COLORS.white },
+          headerTitle: { fontSize: 14, bold: true, color: COLORS.white, characterSpacing: 1.2 },
+          headerSubtitle: { fontSize: 9, color: COLORS.accent, characterSpacing: 0.3 },
+          metaLabel: { fontSize: 7.5, bold: true, color: COLORS.muted, characterSpacing: 0.8, margin: [0, 0, 0, 3] },
+          metaId: { fontSize: 7.5, color: COLORS.text, characterSpacing: 0.2 },
+          metaValue: { fontSize: 9.5, color: COLORS.text },
+          amountLabel: { fontSize: 7.5, bold: true, color: COLORS.muted, characterSpacing: 0.8, margin: [0, 0, 0, 4] },
+          amountValue: { fontSize: 20, bold: true, color: COLORS.navy },
+          amountOrigin: { fontSize: 13, bold: true, color: COLORS.textSecondary },
+          sectionHeader: { fontSize: 9, bold: true, color: COLORS.white, fillColor: COLORS.navy, characterSpacing: 1 },
+          tLabel: { fontSize: 8.5, color: COLORS.muted },
+          tValue: { fontSize: 9, color: COLORS.text, bold: true },
+          disclaimer: { fontSize: 7, color: COLORS.muted, lineHeight: 1.4 },
+          footerBrand: { fontSize: 7.5, bold: true, color: COLORS.navy },
+          footerContact: { fontSize: 7, color: COLORS.muted, margin: [0, 1, 0, 0] },
+          footerPage: { fontSize: 7.5, color: COLORS.muted },
+        },
+      };
+
+      const pdf = this.printer.createPdf(docDefinition);
+      return await pdf.getBuffer();
+    } catch (error) {
+      this.logger.error('Error generando PDF de cotización', error);
+      throw error;
+    }
+  }
 }
