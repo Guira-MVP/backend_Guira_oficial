@@ -175,9 +175,9 @@ export class CreateQuoteDto {
 
   @ApiPropertyOptional({
     default: false,
-    description: 'El spread es un dato interno; por defecto NO se imprime en el PDF que recibe el cliente.',
+    description: 'El spread es un dato interno; por defecto NO se revela al cliente en el ticket.',
   })
   @IsBoolean()
   @IsOptional()
-  show_spread_in_pdf?: boolean;
+  show_spread_to_client?: boolean;
 }

@@ -5,8 +5,6 @@ import {
   Body,
   Param,
   Query,
-  Res,
-  StreamableFile,
   UseGuards,
   ParseUUIDPipe,
 } from '@nestjs/common';
@@ -14,7 +12,6 @@ import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import type { AuthenticatedUser } from '../../core/guards/supabase-auth.guard';
 
 import { QuotesService } from './quotes.service';
-import { PdfService } from '../../core/pdf/pdf.service';
 import { CurrentUser } from '../../core/decorators/current-user.decorator';
 import { RolesGuard } from '../../core/guards/roles.guard';
 import { Roles } from '../../core/decorators/roles.decorator';
@@ -25,10 +22,7 @@ import { CreateQuoteDto } from './dto/quotes.dto';
 @UseGuards(RolesGuard)
 @Controller('admin/quotes')
 export class QuotesController {
-  constructor(
-    private readonly quotesService: QuotesService,
-    private readonly pdfService: PdfService,
-  ) {}
+  constructor(private readonly quotesService: QuotesService) {}
 
   @Get()
   @Roles('staff', 'admin', 'super_admin')
@@ -66,24 +60,5 @@ export class QuotesController {
       user.profile.full_name ?? user.email,
       user.profile.role,
     );
-  }
-
-  @Get(':id/pdf')
-  @Roles('staff', 'admin', 'super_admin')
-  @ApiOperation({ summary: 'Descargar el ticket de cotización en PDF' })
-  async getQuotePdf(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Res({ passthrough: true }) res: any,
-  ) {
-    const quote = await this.quotesService.getById(id);
-    const buffer = await this.pdfService.generateQuotePdf(quote);
-
-    res.set({
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename="cotizacion-${id.slice(0, 8)}.pdf"`,
-      'Content-Length': buffer.length,
-    });
-
-    return new StreamableFile(buffer);
   }
 }
