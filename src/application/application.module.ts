@@ -20,6 +20,7 @@ import { ClientBankAccountsModule } from './client-bank-accounts/client-bank-acc
 import { OrdersModule } from './orders/orders.module';
 import { AnnouncementsModule } from './announcements/announcements.module';
 import { StaffAdminModule } from './staff-admin/staff-admin.module';
+import { QuotesModule } from './quotes/quotes.module';
 
 /**
  * ApplicationModule agrupa todos los módulos de negocio de Guira.
@@ -48,6 +49,7 @@ import { StaffAdminModule } from './staff-admin/staff-admin.module';
     OrdersModule,
     AnnouncementsModule,
     StaffAdminModule,
+    QuotesModule,
   ],
 })
 export class ApplicationModule {}
