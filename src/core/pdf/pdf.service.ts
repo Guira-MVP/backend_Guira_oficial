@@ -2107,15 +2107,28 @@ export class PdfService {
       const issuedAt = quote.created_at ?? new Date().toISOString();
       const validUntil = new Date(new Date(issuedAt).getTime() + 24 * 60 * 60 * 1000).toISOString();
 
-      const exchangeRateDisplay = quote.exchange_rate != null
-        ? `${Number(quote.exchange_rate).toFixed(4)}  (${originCcy}/${destCcy})`
-        : 'N/D';
+      // Formato "1 USD = 12.03 BOB" — la misma convención "número grande, sin
+      // invertir" que ya usa el cliente (topbar Compra/Venta), en vez del
+      // multiplicador origin→dest crudo (ej. 0.0831), que confunde a quienes
+      // no están acostumbrados a pensar la conversión así.
+      const exchangeRateDisplay = (() => {
+        const raw = Number(quote.exchange_rate);
+        if (!Number.isFinite(raw) || raw <= 0) return 'N/D';
+        const precision = ['EUR', 'GBP'].includes(destCcy) ? 3 : 2;
+        return raw < 1
+          ? `1 ${destCcy} = ${(1 / raw).toFixed(precision)} ${originCcy}`
+          : `1 ${originCcy} = ${raw.toFixed(precision)} ${destCcy}`;
+      })();
 
       const detailRows = this.filterNd([
         this.row('Monto a enviar', `${this.fmtAmount(quote.amount_origin)} ${originCcy}`),
         this.row('Tipo de cambio aplicado', exchangeRateDisplay),
         this.row('Comisión', `${Number(quote.commission_percent).toFixed(2)}% (${this.fmtAmount(quote.commission_amount)} ${originCcy})`),
-        this.row('Spread cambiario', `${Number(quote.spread_percent).toFixed(2)}%`),
+        // El spread es un dato interno: solo se imprime si el staff lo activó
+        // explícitamente para este ticket (show_spread_in_pdf, default false).
+        ...(quote.show_spread_in_pdf
+          ? [this.row('Spread cambiario', `${Number(quote.spread_percent).toFixed(2)}%`)]
+          : []),
         this.row('Monto neto convertido', `${this.fmtAmount(quote.net_amount)} ${originCcy}`),
       ]);
 
