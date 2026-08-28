@@ -70,14 +70,34 @@ export class RateLimitGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
-    const identifier = this.getIdentifier(request);
     const action = this.getAction(request);
     const config = await this.getConfig();
 
+    // Además de la IP, para forgot-password y reset-password sumamos un
+    // identificador ligado a la cuenta objetivo (email o userId). Solo por
+    // IP, un atacante distribuido en varias IPs podía spamear una misma
+    // cuenta sin límite — ver auditoría OWASP del flujo de recuperación.
+    for (const { identifier, identifierType } of this.getIdentifiers(
+      request,
+      action,
+    )) {
+      await this.checkAndTrack(identifier, identifierType, action, config);
+    }
+
+    return true;
+  }
+
+  private async checkAndTrack(
+    identifier: string,
+    identifierType: string,
+    action: string,
+    config: typeof RATE_LIMIT_DEFAULTS,
+  ): Promise<void> {
     const { data: existing } = await this.supabase
       .from('auth_rate_limits')
       .select('*')
       .eq('identifier', identifier)
+      .eq('identifier_type', identifierType)
       .eq('action', action)
       .single();
 
@@ -114,7 +134,7 @@ export class RateLimitGuard implements CanActivate {
           })
           .eq('id', existing.id);
 
-        return true;
+        return;
       }
 
       const newCount = (existing.attempt_count ?? 0) + 1;
@@ -129,7 +149,7 @@ export class RateLimitGuard implements CanActivate {
         ).toISOString();
 
         this.logger.warn(
-          `Rate limit excedido para ${identifier} en acción ${action}`,
+          `Rate limit excedido para ${identifier} (${identifierType}) en acción ${action}`,
         );
       }
 
@@ -151,23 +171,62 @@ export class RateLimitGuard implements CanActivate {
     } else {
       await this.supabase.from('auth_rate_limits').insert({
         identifier,
-        identifier_type: 'ip',
+        identifier_type: identifierType,
         action,
         attempt_count: 1,
         first_attempt_at: new Date().toISOString(),
         last_attempt_at: new Date().toISOString(),
       });
     }
-
-    return true;
   }
 
-  private getIdentifier(request: Record<string, unknown>): string {
+  /**
+   * Identificadores a chequear/incrementar para esta petición. Siempre
+   * incluye la IP; para acciones ligadas a una cuenta se suma el email
+   * (forgot-password, tomado del body) o el userId ya autenticado por
+   * SupabaseAuthGuard (reset-password, que corre antes que este guard de ruta).
+   */
+  private getIdentifiers(
+    request: Record<string, unknown>,
+    action: string,
+  ): Array<{ identifier: string; identifierType: string }> {
+    const identifiers: Array<{ identifier: string; identifierType: string }> =
+      [{ identifier: this.getIp(request), identifierType: 'ip' }];
+
+    if (action === 'forgot_password') {
+      const email = this.getBodyEmail(request);
+      if (email) identifiers.push({ identifier: email, identifierType: 'email' });
+    }
+
+    if (action === 'reset_password') {
+      const userId = this.getAuthenticatedUserId(request);
+      if (userId) identifiers.push({ identifier: userId, identifierType: 'user' });
+    }
+
+    return identifiers;
+  }
+
+  private getIp(request: Record<string, unknown>): string {
     // ALTO-01: Con 'trust proxy' habilitado en main.ts, request.ip es la IP
     // real del cliente derivada de forma segura por Express. No se lee
     // X-Forwarded-For directamente porque el cliente podría spoofearlo para
     // evadir el rate limit usando una IP distinta en cada intento.
     return (request.ip as string) ?? 'unknown';
+  }
+
+  private getBodyEmail(request: Record<string, unknown>): string | undefined {
+    const body = request.body as Record<string, unknown> | undefined;
+    const email = body?.email;
+    return typeof email === 'string' && email.length > 0
+      ? email.trim().toLowerCase()
+      : undefined;
+  }
+
+  private getAuthenticatedUserId(
+    request: Record<string, unknown>,
+  ): string | undefined {
+    const user = request.user as { id?: string } | undefined;
+    return user?.id;
   }
 
   private getAction(request: Record<string, unknown>): string {

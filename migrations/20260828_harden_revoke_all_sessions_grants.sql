@@ -1,0 +1,23 @@
+-- ============================================================
+-- Migration: harden_revoke_all_sessions_grants
+-- Purpose: Correctivo para entornos donde ya se aplico la version
+--          inicial de 20260828_add_revoke_all_sessions_rpc.sql, que
+--          solo revocaba sobre PUBLIC.
+--
+--          Supabase concede EXECUTE de forma EXPLICITA a anon y
+--          authenticated mediante ALTER DEFAULT PRIVILEGES. Esas
+--          concesiones NO se eliminan con REVOKE ... FROM PUBLIC, asi
+--          que la funcion quedaba expuesta en
+--          /rest/v1/rpc/revoke_all_sessions: cualquier llamador anonimo
+--          o autenticado podia cerrar las sesiones de cualquier usuario
+--          pasando su user_id.
+--
+--          Deja la funcion con los mismos permisos que sus hermanas
+--          (revoke_other_sessions, revoke_user_session, get_user_sessions):
+--          solo postgres y service_role.
+--
+--          Idempotente: revocar un permiso ya revocado no falla.
+-- Date: 2026-08-28
+-- ============================================================
+
+REVOKE EXECUTE ON FUNCTION public.revoke_all_sessions(uuid) FROM anon, authenticated;
