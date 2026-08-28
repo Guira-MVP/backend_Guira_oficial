@@ -150,7 +150,8 @@ export class AuthController {
     @Req() req: Request,
   ) {
     const context = this.authService.extractRequestContext(req);
-    return this.authService.resetPassword(user.id, dto, context);
+    const authMethod = this.authService.extractAuthMethod(req);
+    return this.authService.resetPassword(user.id, dto, context, authMethod);
   }
 
   // ─────────────────────────────────────────────────────────────

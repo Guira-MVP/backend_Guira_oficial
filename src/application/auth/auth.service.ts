@@ -2,6 +2,7 @@ import {
   Injectable,
   Inject,
   UnauthorizedException,
+  ForbiddenException,
   NotFoundException,
   Logger,
   InternalServerErrorException,
@@ -144,6 +145,32 @@ export class AuthService {
       return typeof payload['session_id'] === 'string'
         ? payload['session_id']
         : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Extrae el último método de autenticación (`amr`) del JWT Bearer.
+   * Usado para distinguir una sesión nacida de un enlace de recuperación
+   * (`recovery`, generado tanto para self-service como para invitaciones de
+   * personal — ver `StaffAdminService.generatePasswordLink`) de una sesión
+   * normal de login, sin depender del token (que ya fue verificado por el guard).
+   */
+  extractAuthMethod(request: {
+    headers?: Record<string, string | string[] | undefined>;
+  }): string | undefined {
+    try {
+      const auth = request.headers?.['authorization'];
+      const token = typeof auth === 'string' ? auth.split(' ')[1] : undefined;
+      if (!token) return undefined;
+      const payload = JSON.parse(
+        Buffer.from(token.split('.')[1], 'base64url').toString('utf8'),
+      ) as Record<string, unknown>;
+      const amr = Array.isArray(payload['amr'])
+        ? (payload['amr'] as Array<{ method?: string }>)
+        : [];
+      return amr.length > 0 ? amr[amr.length - 1]?.method : undefined;
     } catch {
       return undefined;
     }
@@ -395,7 +422,27 @@ export class AuthService {
     userId: string,
     dto: ResetPasswordDto,
     context?: { ip_address: string; user_agent: string },
+    authMethod?: string,
   ): Promise<{ message: string }> {
+    // Exigimos que el token venga específicamente de un enlace de recuperación
+    // (`amr` último método = 'recovery'). Sin este chequeo, cualquier sesión
+    // normal ya autenticada (p. ej. un access_token robado por XSS o filtrado
+    // en logs) podría cambiar la contraseña sin conocer la actual, porque este
+    // endpoint no pide `current_password`.
+    if (authMethod !== 'recovery') {
+      await this.logAuthEvent({
+        event_type: 'password_reset_failed',
+        user_id: userId,
+        ip_address: context?.ip_address,
+        user_agent: context?.user_agent,
+        metadata: { reason: 'session_not_recovery', auth_method: authMethod ?? 'unknown' },
+      });
+
+      throw new ForbiddenException(
+        'Esta operación requiere un enlace de recuperación válido.',
+      );
+    }
+
     // Usamos updateUser usando la sesión de supabase
     // Dado que estamos en el backend con Guards personalizados, la forma más segura
     // es usar el API admin para actualizar el usuario directamente, ya que el middleware
@@ -424,6 +471,26 @@ export class AuthService {
 
       throw new InternalServerErrorException(
         'No se pudo restablecer la contraseña. Intente nuevamente.',
+      );
+    }
+
+    // Revocamos el resto de sesiones/refresh tokens del usuario (incluida la
+    // de recovery que autenticó esta petición). Un reset de contraseña suele
+    // responder a una cuenta comprometida: si no se revoca, la sesión del
+    // atacante en otro dispositivo seguiría viva después del cambio.
+    // Nota: `admin.signOut()` de GoTrue espera un JWT como primer argumento,
+    // no un userId, así que no sirve para esto (ver el mismo problema, ya
+    // preexistente, en `logout()` más abajo). Usamos en su lugar la RPC que
+    // borra directamente de `auth.sessions`, igual que `revoke_other_sessions`.
+    // Best-effort: un fallo aquí no debe impedir que el usuario, que sí
+    // acaba de demostrar control de su correo, quede con la contraseña ya actualizada.
+    const { error: revokeError } = await this.supabase.rpc(
+      'revoke_all_sessions',
+      { p_user_id: userId },
+    );
+    if (revokeError) {
+      this.logger.warn(
+        `No se pudieron revocar las sesiones de ${userId} tras el reset: ${revokeError.message}`,
       );
     }
 
