@@ -424,12 +424,19 @@ export class AuthService {
     context?: { ip_address: string; user_agent: string },
     authMethod?: string,
   ): Promise<{ message: string }> {
-    // Exigimos que el token venga específicamente de un enlace de recuperación
-    // (`amr` último método = 'recovery'). Sin este chequeo, cualquier sesión
-    // normal ya autenticada (p. ej. un access_token robado por XSS o filtrado
-    // en logs) podría cambiar la contraseña sin conocer la actual, porque este
-    // endpoint no pide `current_password`.
-    if (authMethod !== 'recovery') {
+    // Exigimos que el token venga de un enlace de un solo uso enviado por
+    // correo (recuperar contraseña o invitación de personal). Sin este
+    // chequeo, cualquier sesión normal ya autenticada (p. ej. un access_token
+    // robado por XSS o filtrado en logs) podría cambiar la contraseña sin
+    // conocer la actual, porque este endpoint no pide `current_password`.
+    //
+    // Supabase marca estas sesiones con `amr` = "otp", NO "recovery"
+    // — confirmado decodificando un token real emitido por
+    // `resetPasswordForEmail`. Se acepta también "recovery" por si una
+    // versión futura de GoTrue cambia la etiqueta. Un login con contraseña
+    // trae "password" y uno con Google trae "oauth", que es justo lo que
+    // este check debe rechazar.
+    if (authMethod !== 'otp' && authMethod !== 'recovery') {
       await this.logAuthEvent({
         event_type: 'password_reset_failed',
         user_id: userId,
