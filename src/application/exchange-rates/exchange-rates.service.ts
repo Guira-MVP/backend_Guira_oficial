@@ -304,32 +304,56 @@ export class ExchangeRatesService {
       const key = pair.toUpperCase();
       const old = snapshot?.get(key) ?? (await this.getRate(pair));
 
-      const updatePayload: Record<string, unknown> = {
-        rate,
-        updated_by: actorId.startsWith('system') ? null : actorId,
-        updated_at: new Date().toISOString(),
-      };
+      // El cron corre cada minuto sobre 17 pares, pero la mayoría de los
+      // ciclos no mueven ninguno: medido en producción, casi todos los pares
+      // repiten el valor del ciclo anterior. Escribir igualmente suponía
+      // ~24.000 UPDATE diarios que dejaban la fila byte a byte idéntica.
+      //
+      // La comparación es de igualdad exacta a propósito: ambos valores salen
+      // de truncateToCalcPrecision con la misma precisión, así que un cambio
+      // real siempre difiere en el último dígito representable. No hace falta
+      // tolerancia, y una tolerancia se tragaría movimientos legítimos.
+      const rateUnchanged = old.base_rate === rate;
+      const bridgeUnchanged =
+        !bridgeRates ||
+        (old.bridge_buy_rate === bridgeRates.buy_rate &&
+          old.bridge_sell_rate === bridgeRates.sell_rate);
 
-      if (bridgeRates) {
-        updatePayload.bridge_buy_rate  = bridgeRates.buy_rate;
-        updatePayload.bridge_sell_rate = bridgeRates.sell_rate;
-      }
+      // Efecto secundario buscado: updated_at pasa a marcar "cuándo cambió de
+      // verdad esta tasa" en lugar de "cuándo corrió el cron por última vez",
+      // que es lo que hacía útil esa columna como historial.
+      if (!rateUnchanged || !bridgeUnchanged) {
+        const updatePayload: Record<string, unknown> = {
+          rate,
+          updated_by: actorId.startsWith('system') ? null : actorId,
+          updated_at: new Date().toISOString(),
+        };
 
-      const { error: updateError } = await this.supabase
-        .from('exchange_rates_config')
-        .update(updatePayload)
-        .eq('pair', key);
+        if (bridgeRates) {
+          updatePayload.bridge_buy_rate  = bridgeRates.buy_rate;
+          updatePayload.bridge_sell_rate = bridgeRates.sell_rate;
+        }
 
-      // Supabase devuelve el fallo en `error` en vez de lanzarlo. Sin esta
-      // comprobación se emitía por WS una tasa que nunca llegó a guardarse.
-      if (updateError) {
-        this.logger.error(
-          `No se pudo actualizar el par ${key}: ${updateError.message}`,
-        );
-        Sentry.captureException(updateError, {
-          extra: { operation: 'exchangeRates.updateRateInternal', pair: key, rate },
-        });
-        return;
+        const { error: updateError } = await this.supabase
+          .from('exchange_rates_config')
+          .update(updatePayload)
+          .eq('pair', key);
+
+        // Supabase devuelve el fallo en `error` en vez de lanzarlo. Sin esta
+        // comprobación se emitía por WS una tasa que nunca llegó a guardarse.
+        if (updateError) {
+          this.logger.error(
+            `No se pudo actualizar el par ${key}: ${updateError.message}`,
+          );
+          Sentry.captureException(updateError, {
+            extra: {
+              operation: 'exchangeRates.updateRateInternal',
+              pair: key,
+              rate,
+            },
+          });
+          return;
+        }
       }
 
       const payload = this.buildRateUpdatedPayload(
@@ -350,16 +374,6 @@ export class ExchangeRatesService {
         bridge_buy_rate: payload.bridge_buy_rate,
         bridge_sell_rate: payload.bridge_sell_rate,
       });
-
-      // Diagnóstico para calibrar un futuro umbral de materialidad: mide
-      // cuánto se mueve de verdad cada par entre ciclos.
-      if (old.effective_rate) {
-        const deltaBps =
-          Math.abs(
-            (payload.effective_rate - old.effective_rate) / old.effective_rate,
-          ) * 10_000;
-        this.logger.debug(`[delta] ${key}: ${deltaBps.toFixed(3)}bps`);
-      }
 
       // Emitir con datos locales — sin consulta extra que pueda fallar tras el UPDATE
       if (batch) {
