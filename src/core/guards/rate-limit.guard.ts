@@ -207,10 +207,16 @@ export class RateLimitGuard implements CanActivate {
   }
 
   private getIp(request: Record<string, unknown>): string {
-    // ALTO-01: Con 'trust proxy' habilitado en main.ts, request.ip es la IP
-    // real del cliente derivada de forma segura por Express. No se lee
-    // X-Forwarded-For directamente porque el cliente podría spoofearlo para
-    // evadir el rate limit usando una IP distinta en cada intento.
+    // ALTO-01: request.ip es la IP real del cliente, derivada por Express a
+    // partir de la lista de proxies de confianza configurada en main.ts (LB de
+    // Render + rangos de Cloudflare). No se lee X-Forwarded-For directamente
+    // porque el cliente podría spoofearlo para evadir el rate limit usando una
+    // IP distinta en cada intento.
+    //
+    // Ojo si se toca `trust proxy`: hasta 2026-08 estaba puesto a 1 hop, lo que
+    // con Cloudflare delante hacía que este identificador fuese la IP del edge
+    // y no la del usuario — es decir, todos los clientes compartiendo el mismo
+    // cubo de rate limit.
     return (request.ip as string) ?? 'unknown';
   }
 

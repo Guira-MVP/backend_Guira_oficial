@@ -22,6 +22,7 @@ import {
   resolveCorsOrigins,
   resolveAppEnv,
 } from './core/config/app/app-env';
+import { CLOUDFLARE_CIDRS } from './core/config/cloudflare-ips';
 
 class CorsIoAdapter extends IoAdapter {
   private readonly app: INestApplication;
@@ -68,12 +69,43 @@ async function bootstrap() {
   // servicio también se reporten a Sentry (ver sentry-aware.logger.ts).
   app.useLogger(new SentryAwareLogger());
 
-  // ALTO-01: Confiar en 1 hop de proxy (el load balancer de Render).
-  // Con esto, Express deriva request.ip de forma segura a partir del
-  // X-Forwarded-For inyectado por Render, ignorando cualquier valor que el
-  // cliente intente spoofear. Imprescindible para que el rate limiting y el
-  // logging de auditoría usen la IP real e inmanipulable.
-  app.getHttpAdapter().getInstance().set('trust proxy', 1);
+  // ALTO-01: Proxies de confianza declarados como lista de CIDRs, no como un
+  // contador de saltos.
+  //
+  // Antes esto era `set('trust proxy', 1)`, que asumía un único proxy delante
+  // (el load balancer de Render). Al poner Cloudflare por delante pasaron a
+  // ser dos saltos — cliente -> Cloudflare -> Render -> Express — y Express
+  // empezó a resolver request.ip como la IP del edge de Cloudflare en vez de
+  // la del usuario. Efecto medido en producción: desde julio de 2026, el 100%
+  // de los eventos de auth_audit_log quedaron registrados con IP de
+  // Cloudflare, y el rate limiting por IP agrupaba a todos los usuarios en un
+  // puñado de IPs de borde compartidas.
+  //
+  // Con una lista de subredes, proxy-addr recorre X-Forwarded-For de derecha a
+  // izquierda y se queda con la primera dirección NO confiable — que es
+  // justamente la del cliente. Además el valor deja de ser falsificable: una
+  // IP inyectada por el cliente nunca cae dentro de los rangos de confianza,
+  // así que se detiene ahí.
+  //
+  //   Vía Cloudflare:  XFF = <falsa>, <cliente>, <edge_CF>  -> request.ip = <cliente>
+  //   Directo a Render: XFF = <falsa>, <atacante>           -> request.ip = <atacante>
+  //   Staging (sin CF): XFF = <cliente>                     -> request.ip = <cliente>
+  //
+  // La misma configuración vale para los dos entornos, así que no hace falta
+  // ramificar por APP_ENV: en staging simplemente no llega tráfico desde los
+  // rangos de Cloudflare. `trust proxy: 2` habría arreglado producción pero
+  // sería falsificable y rompería staging.
+  //
+  // loopback/linklocal/uniquelocal cubren el proxy interno de Render.
+  app
+    .getHttpAdapter()
+    .getInstance()
+    .set('trust proxy', [
+      'loopback',
+      'linklocal',
+      'uniquelocal',
+      ...CLOUDFLARE_CIDRS,
+    ]);
 
   // Prefijo global de la API
   const prefix = process.env.PATH_SUBDOMAIN || 'api';
