@@ -117,10 +117,10 @@ export class AuthService {
     ip?: string;
   }): { ip_address: string; user_agent: string } {
     const headers = request.headers ?? {};
-    // ALTO-01: Con 'trust proxy' habilitado en main.ts, request.ip ya es la IP
-    // real del cliente (Express la deriva de forma segura del X-Forwarded-For
-    // de Render). No se parsea el header manualmente para evitar registrar IPs
-    // spoofeadas en la auditoría de autenticación.
+    // ALTO-01: request.ip ya es la IP real del cliente — Express la deriva del
+    // X-Forwarded-For usando la lista de proxies de confianza de main.ts (LB de
+    // Render + rangos de Cloudflare). No se parsea el header manualmente para
+    // evitar registrar IPs spoofeadas en la auditoría de autenticación.
     const ip_address = request.ip ?? 'unknown';
     const ua = headers['user-agent'];
     const user_agent = (typeof ua === 'string' ? ua : ua?.[0]) ?? 'unknown';
