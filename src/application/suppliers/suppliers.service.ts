@@ -666,11 +666,13 @@ export class SuppliersService {
       cci: dto.cci,
       swift_bic: dto.swift_bic,
       address_line: dto.address_line,
+      address_line_2: dto.address_line_2,
       district: dto.district,
       province: dto.province,
       department: dto.department,
       postal_code: dto.postal_code,
       country: dto.address_country,
+      idc: dto.idc,
       provider: MANUAL_RAIL_PROVIDERS[dto.payment_rail],
     };
   }
@@ -895,6 +897,8 @@ export class SuppliersService {
         bankFieldsToMerge.swift_bic = dto.swift_bic;
       if (dto.address_line !== undefined)
         bankFieldsToMerge.address_line = dto.address_line;
+      if (dto.address_line_2 !== undefined)
+        bankFieldsToMerge.address_line_2 = dto.address_line_2;
       if (dto.district !== undefined) bankFieldsToMerge.district = dto.district;
       if (dto.province !== undefined) bankFieldsToMerge.province = dto.province;
       if (dto.department !== undefined)
@@ -903,6 +907,7 @@ export class SuppliersService {
         bankFieldsToMerge.postal_code = dto.postal_code;
       if (dto.address_country !== undefined)
         bankFieldsToMerge.country = dto.address_country;
+      if (dto.idc !== undefined) bankFieldsToMerge.idc = dto.idc;
     }
 
     if (Object.keys(bankFieldsToMerge).length > 0) {

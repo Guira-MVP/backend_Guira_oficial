@@ -338,6 +338,15 @@ export class CreateSupplierDto {
   @MaxLength(255)
   address_line?: string;
 
+  @ApiPropertyOptional({
+    example: 'Piso 8',
+    description: 'Segunda línea de dirección — piso, oficina, referencia (rails manuales)',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  address_line_2?: string;
+
   @ApiPropertyOptional({ example: '15046', description: 'Código postal (rails manuales)' })
   @IsOptional()
   @IsString()
@@ -367,6 +376,16 @@ export class CreateSupplierDto {
   @IsString()
   @MaxLength(100)
   department?: string;
+
+  @ApiPropertyOptional({
+    example: '09484497',
+    description:
+      'Identificador adicional que algunos remitentes piden en lugar del RUC (rails manuales, Perú).',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  idc?: string;
 
   // ── Crypto Wallet ──
   @ApiPropertyOptional()
@@ -604,6 +623,12 @@ export class UpdateSupplierDto {
   @MaxLength(255)
   address_line?: string;
 
+  @ApiPropertyOptional({ description: 'Segunda línea de dirección — piso, oficina, referencia (rails manuales)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  address_line_2?: string;
+
   @ApiPropertyOptional({ description: 'Código postal (rails manuales)' })
   @IsOptional()
   @IsString()
@@ -633,6 +658,14 @@ export class UpdateSupplierDto {
   @IsString()
   @MaxLength(100)
   department?: string;
+
+  @ApiPropertyOptional({
+    description: 'Identificador adicional que algunos remitentes piden en lugar del RUC (rails manuales, Perú).',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  idc?: string;
 
   // Crypto
   @ApiPropertyOptional()
