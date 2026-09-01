@@ -646,46 +646,32 @@ export class SuppliersService {
   /**
    * bank_details de un proveedor con rail manual (sin Bridge).
    *
-   * La dirección se guarda dos veces a propósito: en las claves genéricas
-   * (street_line_1/city/state/country) para cumplir el constraint
-   * `suppliers_address_minimum_fields` y para que cualquier lector genérico de
-   * direcciones siga funcionando, y además con nombre propio peruano
-   * (district/province/department) para no perder la semántica cuando llegue la
-   * documentación de Pythas y haya que remapear estos datos.
+   * Todos los campos son opcionales por diseño: el rail de Perú se registró antes
+   * de tener la documentación de Pythas, así que se guarda lo que el usuario
+   * tenga a mano y luego se ajustará.
+   *
+   * La dirección se guarda PLANA, sin la clave `address`, por dos motivos:
+   * (1) el constraint `suppliers_address_minimum_fields` exige street_line_1,
+   * city y country dentro de `address`, incompatible con campos opcionales, y
+   * (2) `address` es el formato de Bridge (state máx 3 caracteres), que no admite
+   * nombres de provincia peruanos como "Lima" o "Arequipa".
    */
   private buildManualRailBankDetails(
     dto: CreateSupplierDto,
   ): Record<string, unknown> {
-    const address = dto.address
-      ? {
-          street_line_1: dto.address.street_line_1,
-          street_line_2: dto.address.street_line_2,
-          city: dto.address.city ?? dto.district,
-          state: dto.address.state ?? dto.province,
-          postal_code: dto.address.postal_code,
-          country: dto.address.country,
-          district: dto.district,
-          province: dto.province,
-          department: dto.department,
-        }
-      : undefined;
-
-    if (address) {
-      Object.keys(address).forEach(
-        (k) =>
-          address[k as keyof typeof address] === undefined &&
-          delete address[k as keyof typeof address],
-      );
-    }
-
     return {
       bank_name: dto.bank_name,
       account_number: dto.account_number,
       checking_or_savings: dto.checking_or_savings,
       cci: dto.cci,
       swift_bic: dto.swift_bic,
+      address_line: dto.address_line,
+      district: dto.district,
+      province: dto.province,
+      department: dto.department,
+      postal_code: dto.postal_code,
+      country: dto.address_country,
       provider: MANUAL_RAIL_PROVIDERS[dto.payment_rail],
-      address,
     };
   }
 
@@ -907,19 +893,16 @@ export class SuppliersService {
       if (dto.cci !== undefined) bankFieldsToMerge.cci = dto.cci;
       if (dto.swift_bic !== undefined)
         bankFieldsToMerge.swift_bic = dto.swift_bic;
-      if (dto.address !== undefined) {
-        const currentAddress =
-          ((existing.bank_details as Record<string, unknown>)?.address as
-            | Record<string, unknown>
-            | undefined) ?? {};
-        bankFieldsToMerge.address = {
-          ...currentAddress,
-          ...dto.address,
-          ...(dto.district !== undefined ? { district: dto.district, city: dto.address.city ?? dto.district } : {}),
-          ...(dto.province !== undefined ? { province: dto.province, state: dto.address.state ?? dto.province } : {}),
-          ...(dto.department !== undefined ? { department: dto.department } : {}),
-        };
-      }
+      if (dto.address_line !== undefined)
+        bankFieldsToMerge.address_line = dto.address_line;
+      if (dto.district !== undefined) bankFieldsToMerge.district = dto.district;
+      if (dto.province !== undefined) bankFieldsToMerge.province = dto.province;
+      if (dto.department !== undefined)
+        bankFieldsToMerge.department = dto.department;
+      if (dto.postal_code !== undefined)
+        bankFieldsToMerge.postal_code = dto.postal_code;
+      if (dto.address_country !== undefined)
+        bankFieldsToMerge.country = dto.address_country;
     }
 
     if (Object.keys(bankFieldsToMerge).length > 0) {

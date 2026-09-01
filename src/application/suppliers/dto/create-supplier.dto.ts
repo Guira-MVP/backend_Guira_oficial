@@ -151,7 +151,7 @@ export class CreateSupplierDto {
 
   // ── ACH / Wire ──
   @ApiPropertyOptional({ example: '1210002481111' })
-  @ValidateIf(o => ['ach', 'wire', 'ach_wire', 'co_bank_transfer', 'pe_bank_transfer', 'faster_payments'].includes(o.payment_rail))
+  @ValidateIf(o => ['ach', 'wire', 'ach_wire', 'co_bank_transfer', 'faster_payments'].includes(o.payment_rail))
   @IsNotEmpty()
   @IsString()
   account_number?: string;
@@ -320,10 +320,35 @@ export class CreateSupplierDto {
     example: '00219100123456789012',
     description: 'CCI (Código de Cuenta Interbancario) peruano — 20 dígitos',
   })
-  @ValidateIf(o => o.payment_rail === 'pe_bank_transfer')
-  @IsNotEmpty({ message: 'cci es requerido para transferencias bancarias en Perú' })
-  @Matches(/^\d{20}$/, { message: 'El CCI debe tener exactamente 20 dígitos numéricos' })
+  @IsOptional()
+  // Se acepta vacío: mientras no llegue la documentación de Pythas todos los
+  // campos de Perú son opcionales y se guardan tal cual lleguen.
+  @Matches(/^(\d{20})?$/, { message: 'El CCI debe tener exactamente 20 dígitos numéricos' })
   cci?: string;
+
+  @ApiPropertyOptional({
+    example: 'Av. Javier Prado 123',
+    description:
+      'Dirección del beneficiario para rails manuales (Perú). No usa BeneficiaryAddressDto ' +
+      'porque ese DTO es el formato que exige Bridge (street_line_1 4-35, state máx 3 chars) ' +
+      'y este rail no pasa por Bridge.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  address_line?: string;
+
+  @ApiPropertyOptional({ example: '15046', description: 'Código postal (rails manuales)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  postal_code?: string;
+
+  @ApiPropertyOptional({ example: 'PER', description: 'País de la dirección (rails manuales)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(3)
+  address_country?: string;
 
   @ApiPropertyOptional({ example: 'San Isidro', description: 'Distrito (Perú)' })
   @IsOptional()
@@ -570,8 +595,26 @@ export class UpdateSupplierDto {
   // PE Bank Transfer (Perú — flujo manual vía Pythas)
   @ApiPropertyOptional({ description: 'CCI peruano — 20 dígitos' })
   @IsOptional()
-  @Matches(/^\d{20}$/, { message: 'El CCI debe tener exactamente 20 dígitos numéricos' })
+  @Matches(/^(\d{20})?$/, { message: 'El CCI debe tener exactamente 20 dígitos numéricos' })
   cci?: string;
+
+  @ApiPropertyOptional({ description: 'Dirección del beneficiario (rails manuales)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  address_line?: string;
+
+  @ApiPropertyOptional({ description: 'Código postal (rails manuales)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  postal_code?: string;
+
+  @ApiPropertyOptional({ description: 'País de la dirección (rails manuales)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(3)
+  address_country?: string;
 
   @ApiPropertyOptional({ description: 'Distrito (Perú)' })
   @IsOptional()
