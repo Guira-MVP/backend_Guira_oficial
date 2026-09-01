@@ -16,6 +16,18 @@ import {
 import { BridgeService } from '../bridge/bridge.service';
 import { FIAT_RAIL_TO_CURRENCY } from '../../common/constants/fiat-rail-catalog.constants';
 
+/**
+ * Rails que NO se integran con Bridge: el proveedor se guarda solo en la DB y el
+ * pago se ejecuta manualmente con el proveedor financiero correspondiente.
+ * 'pe_bank_transfer' → Perú, vía Pythas (integración pendiente de su documentación).
+ */
+const MANUAL_RAILS = ['pe_bank_transfer'];
+
+/** Proveedor financiero que opera cada rail manual (se guarda en bank_details.provider). */
+const MANUAL_RAIL_PROVIDERS: Record<string, string> = {
+  pe_bank_transfer: 'pythas',
+};
+
 @Injectable()
 export class SuppliersService {
   private readonly logger = new Logger(SuppliersService.name);
@@ -112,7 +124,12 @@ export class SuppliersService {
       return this.createAchWireSupplierPair(userId, dto);
     }
 
-    const isFiat = dto.payment_rail !== 'crypto';
+    // Rails manuales: no pasan por Bridge (sin external account ni liquidation
+    // address). Los datos bancarios se guardan tal cual en bank_details y la
+    // operación se ejecuta fuera de la plataforma. Perú (proveedor Pythas) es el
+    // primero; el esquema se ajustará cuando llegue su documentación.
+    const isManualRail = MANUAL_RAILS.includes(dto.payment_rail);
+    const isFiat = dto.payment_rail !== 'crypto' && !isManualRail;
     const normalizedEmail = this.normalizeEmail(dto.contact_email);
 
     // ── Verificar unicidad antes de llamar a Bridge ──────────────────
@@ -121,7 +138,9 @@ export class SuppliersService {
     // El email se normaliza (trim + lowercase) para que dos variantes de
     // mayúsculas/espacios del mismo correo no evadan esta verificación.
     if (normalizedEmail) {
-      if (isFiat) {
+      // Los rails manuales se verifican igual que los fiat: uno por (user_id,
+      // email, payment_rail), tal como impone el índice único de la DB.
+      if (isFiat || isManualRail) {
         const { data: existing } = await this.supabase
           .from('suppliers')
           .select('id, name')
@@ -258,7 +277,7 @@ export class SuppliersService {
             'Por favor revise la información ingresada (dirección, datos bancarios) e intente de nuevo.',
         );
       }
-    } else {
+    } else if (!isManualRail) {
       // Proveedor crypto: crear liquidation address apuntando a la wallet del proveedor
       // Regla de moneda: Tron → USDT, todas las demás redes → USDC.
       // Esto evita el exchange rate de Bridge al mantener la misma moneda de entrada y salida.
@@ -290,7 +309,9 @@ export class SuppliersService {
       }
     }
 
-    const bank_details = isFiat
+    const bank_details: Record<string, unknown> = isManualRail
+      ? this.buildManualRailBankDetails(dto)
+      : isFiat
       ? {
           bank_name: dto.bank_name,
           account_number: dto.account_number,
@@ -322,9 +343,10 @@ export class SuppliersService {
 
     // Para crypto, la moneda del proveedor es el token (usdc, usdt, etc.),
     // no una moneda fiat como USD.
-    const supplierCurrency = isFiat
-      ? dto.currency.toLowerCase()
-      : (dto.wallet_currency?.toLowerCase() ?? dto.currency.toLowerCase());
+    const supplierCurrency =
+      isFiat || isManualRail
+        ? dto.currency.toLowerCase()
+        : (dto.wallet_currency?.toLowerCase() ?? dto.currency.toLowerCase());
 
     // Limpiar nulos/undefined visualmente
     Object.keys(bank_details).forEach(
@@ -621,6 +643,52 @@ export class SuppliersService {
     };
   }
 
+  /**
+   * bank_details de un proveedor con rail manual (sin Bridge).
+   *
+   * La dirección se guarda dos veces a propósito: en las claves genéricas
+   * (street_line_1/city/state/country) para cumplir el constraint
+   * `suppliers_address_minimum_fields` y para que cualquier lector genérico de
+   * direcciones siga funcionando, y además con nombre propio peruano
+   * (district/province/department) para no perder la semántica cuando llegue la
+   * documentación de Pythas y haya que remapear estos datos.
+   */
+  private buildManualRailBankDetails(
+    dto: CreateSupplierDto,
+  ): Record<string, unknown> {
+    const address = dto.address
+      ? {
+          street_line_1: dto.address.street_line_1,
+          street_line_2: dto.address.street_line_2,
+          city: dto.address.city ?? dto.district,
+          state: dto.address.state ?? dto.province,
+          postal_code: dto.address.postal_code,
+          country: dto.address.country,
+          district: dto.district,
+          province: dto.province,
+          department: dto.department,
+        }
+      : undefined;
+
+    if (address) {
+      Object.keys(address).forEach(
+        (k) =>
+          address[k as keyof typeof address] === undefined &&
+          delete address[k as keyof typeof address],
+      );
+    }
+
+    return {
+      bank_name: dto.bank_name,
+      account_number: dto.account_number,
+      checking_or_savings: dto.checking_or_savings,
+      cci: dto.cci,
+      swift_bic: dto.swift_bic,
+      provider: MANUAL_RAIL_PROVIDERS[dto.payment_rail],
+      address,
+    };
+  }
+
   /** Elimina una external account huérfana de Bridge tras un fallo parcial. */
   private async rollbackOrphanedExternalAccount(
     userId: string,
@@ -830,6 +898,29 @@ export class SuppliersService {
       bankFieldsToMerge.wallet_network = dto.wallet_network.toLowerCase();
     if (dto.wallet_currency !== undefined)
       bankFieldsToMerge.wallet_currency = dto.wallet_currency.toLowerCase();
+
+    // Rails manuales (Perú/Pythas): al no existir external account en Bridge, no
+    // hay campos inmutables — todos los datos bancarios se pueden corregir aquí.
+    if (MANUAL_RAILS.includes(existing.payment_rail)) {
+      if (dto.account_number !== undefined)
+        bankFieldsToMerge.account_number = dto.account_number;
+      if (dto.cci !== undefined) bankFieldsToMerge.cci = dto.cci;
+      if (dto.swift_bic !== undefined)
+        bankFieldsToMerge.swift_bic = dto.swift_bic;
+      if (dto.address !== undefined) {
+        const currentAddress =
+          ((existing.bank_details as Record<string, unknown>)?.address as
+            | Record<string, unknown>
+            | undefined) ?? {};
+        bankFieldsToMerge.address = {
+          ...currentAddress,
+          ...dto.address,
+          ...(dto.district !== undefined ? { district: dto.district, city: dto.address.city ?? dto.district } : {}),
+          ...(dto.province !== undefined ? { province: dto.province, state: dto.address.state ?? dto.province } : {}),
+          ...(dto.department !== undefined ? { department: dto.department } : {}),
+        };
+      }
+    }
 
     if (Object.keys(bankFieldsToMerge).length > 0) {
       updateData.bank_details = {

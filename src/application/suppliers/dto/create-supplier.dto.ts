@@ -113,6 +113,7 @@ export class CreateSupplierDto {
       'bre_b',
       'faster_payments',
       'co_bank_transfer',
+      'pe_bank_transfer',
       'crypto',
     ],
   })
@@ -126,6 +127,7 @@ export class CreateSupplierDto {
     'bre_b',
     'faster_payments',
     'co_bank_transfer',
+    'pe_bank_transfer',
     'crypto',
   ])
   payment_rail: string;
@@ -149,7 +151,7 @@ export class CreateSupplierDto {
 
   // ── ACH / Wire ──
   @ApiPropertyOptional({ example: '1210002481111' })
-  @ValidateIf(o => ['ach', 'wire', 'ach_wire', 'co_bank_transfer', 'faster_payments'].includes(o.payment_rail))
+  @ValidateIf(o => ['ach', 'wire', 'ach_wire', 'co_bank_transfer', 'pe_bank_transfer', 'faster_payments'].includes(o.payment_rail))
   @IsNotEmpty()
   @IsString()
   account_number?: string;
@@ -310,6 +312,37 @@ export class CreateSupplierDto {
   @Matches(/^\+\d{7,15}$/, { message: 'phone_number debe estar en formato E.164 (ej. +573001234567)' })
   phone_number?: string;
 
+  // ── PE Bank Transfer (Perú — flujo manual vía Pythas, sin Bridge) ──
+  // Los datos se guardan tal cual en suppliers.bank_details; no se crea external
+  // account ni liquidation address. Cuando llegue la documentación de Pythas este
+  // bloque se ajustará a lo que realmente pida su API.
+  @ApiPropertyOptional({
+    example: '00219100123456789012',
+    description: 'CCI (Código de Cuenta Interbancario) peruano — 20 dígitos',
+  })
+  @ValidateIf(o => o.payment_rail === 'pe_bank_transfer')
+  @IsNotEmpty({ message: 'cci es requerido para transferencias bancarias en Perú' })
+  @Matches(/^\d{20}$/, { message: 'El CCI debe tener exactamente 20 dígitos numéricos' })
+  cci?: string;
+
+  @ApiPropertyOptional({ example: 'San Isidro', description: 'Distrito (Perú)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  district?: string;
+
+  @ApiPropertyOptional({ example: 'Lima', description: 'Provincia (Perú)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  province?: string;
+
+  @ApiPropertyOptional({ example: 'Lima', description: 'Departamento (Perú)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  department?: string;
+
   // ── Crypto Wallet ──
   @ApiPropertyOptional()
   @IsOptional()
@@ -361,6 +394,7 @@ export class UpdateSupplierDto {
       'bre_b',
       'faster_payments',
       'co_bank_transfer',
+      'pe_bank_transfer',
       'crypto',
     ],
   })
@@ -374,6 +408,7 @@ export class UpdateSupplierDto {
     'bre_b',
     'faster_payments',
     'co_bank_transfer',
+    'pe_bank_transfer',
     'crypto',
   ])
   payment_rail?: string;
@@ -531,6 +566,30 @@ export class UpdateSupplierDto {
   @IsOptional()
   @Matches(/^\+\d{7,15}$/, { message: 'phone_number debe estar en formato E.164 (ej. +573001234567)' })
   phone_number?: string;
+
+  // PE Bank Transfer (Perú — flujo manual vía Pythas)
+  @ApiPropertyOptional({ description: 'CCI peruano — 20 dígitos' })
+  @IsOptional()
+  @Matches(/^\d{20}$/, { message: 'El CCI debe tener exactamente 20 dígitos numéricos' })
+  cci?: string;
+
+  @ApiPropertyOptional({ description: 'Distrito (Perú)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  district?: string;
+
+  @ApiPropertyOptional({ description: 'Provincia (Perú)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  province?: string;
+
+  @ApiPropertyOptional({ description: 'Departamento (Perú)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  department?: string;
 
   // Crypto
   @ApiPropertyOptional()
