@@ -2494,7 +2494,7 @@ export class WebhooksService {
     const { data: paymentOrder } = await this.supabase
       .from('payment_orders')
       .select(
-        'id, user_id, wallet_id, flow_type, amount, fee_amount, amount_destination, currency, source_currency, destination_currency, deposit_reference_code, receipt_url',
+        'id, user_id, wallet_id, flow_type, destination_type, amount, fee_amount, amount_destination, currency, source_currency, destination_currency, deposit_reference_code, receipt_url',
       )
       .eq('bridge_transfer_id', bridgeTransferId)
       .in('status', [
@@ -2506,11 +2506,18 @@ export class WebhooksService {
       .maybeSingle();
 
     if (paymentOrder) {
-      // ── Guard: flujo de dos tramos (bridge_wallet_to_fiat_bo) ──
+      // ── Guard: flujos de dos tramos ──
       // Tramo 1 (Bridge Transfer → PSAV) completado por webhook.
-      // Tramo 2 (PSAV → BOB → cuenta usuario) debe ser gestionado por staff.
+      // Tramo 2 (PSAV → destino final) debe ser gestionado por staff:
+      //   - bridge_wallet_to_fiat_bo → PSAV convierte a BOB y paga la cuenta del cliente.
+      //   - destination_type 'manual_pe_bank' → PSAV envía a Pythas, que paga al
+      //     proveedor peruano. Sin este guard la orden se cerraría como completada
+      //     cuando el dinero solo llegó al PSAV, no al proveedor.
+      const isPeruManualFlow =
+        paymentOrder.destination_type === 'manual_pe_bank';
       const isDualLegFlow =
-        paymentOrder.flow_type === 'bridge_wallet_to_fiat_bo';
+        paymentOrder.flow_type === 'bridge_wallet_to_fiat_bo' ||
+        isPeruManualFlow;
 
       if (isDualLegFlow) {
         // Asentar ledger (debit confirmed on-chain) y liberar reserva en una sola
@@ -2550,8 +2557,12 @@ export class WebhooksService {
           const notifications = admins.map((admin) => ({
             user_id: admin.id,
             type: 'system',
-            title: 'Retiro BO — Crypto recibido por PSAV',
-            message: `Orden ${paymentOrder.id}: Bridge confirmó que el PSAV recibió ${paymentOrder.amount} ${paymentOrder.currency}. Pendiente: conversión USDC→BOB y depósito a cuenta BO del cliente.`,
+            title: isPeruManualFlow
+              ? 'Pago a Perú — Crypto recibido por PSAV'
+              : 'Retiro BO — Crypto recibido por PSAV',
+            message: isPeruManualFlow
+              ? `Orden ${paymentOrder.id}: Bridge confirmó que el PSAV recibió ${paymentOrder.amount} ${paymentOrder.currency}. Pendiente: envío a Pythas para que pague al proveedor peruano.`
+              : `Orden ${paymentOrder.id}: Bridge confirmó que el PSAV recibió ${paymentOrder.amount} ${paymentOrder.currency}. Pendiente: conversión USDC→BOB y depósito a cuenta BO del cliente.`,
             reference_type: 'payment_order',
             reference_id: paymentOrder.id,
           }));
@@ -2563,13 +2574,17 @@ export class WebhooksService {
           user_id: paymentOrder.user_id,
           type: 'financial',
           title: 'Transferencia en Proceso',
-          message: `Tu retiro de ${paymentOrder.amount} ${paymentOrder.currency} está siendo procesado. Recibirás tus bolivianos pronto.`,
+          message: isPeruManualFlow
+            ? `Tu pago de ${paymentOrder.amount} ${paymentOrder.currency} está siendo procesado. Te avisaremos en cuanto tu proveedor reciba los fondos.`
+            : `Tu retiro de ${paymentOrder.amount} ${paymentOrder.currency} está siendo procesado. Recibirás tus bolivianos pronto.`,
           reference_type: 'payment_order',
           reference_id: paymentOrder.id,
         });
 
         this.logger.log(
-          `🔄 Payment order ${paymentOrder.id} (bridge_wallet_to_fiat_bo): Tramo 1 completado — crypto en PSAV. Pendiente payout BOB manual.`,
+          isPeruManualFlow
+            ? `🔄 Payment order ${paymentOrder.id} (Perú/manual_pe_bank): Tramo 1 completado — crypto en PSAV. Pendiente envío a Pythas.`
+            : `🔄 Payment order ${paymentOrder.id} (bridge_wallet_to_fiat_bo): Tramo 1 completado — crypto en PSAV. Pendiente payout BOB manual.`,
         );
       } else {
         // Comportamiento original: marcar orden como completed
