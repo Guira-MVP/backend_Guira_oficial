@@ -186,4 +186,71 @@ describe('ExchangeRatesService.syncExternalRates', () => {
     expect(mockGateway.emitRatesBatch.mock.calls[0][0]).toEqual([]);
     expect(mockGateway.emitRateUpdated).not.toHaveBeenCalled();
   });
+
+  it('no escribe los pares cuya tasa repite la del ciclo anterior', async () => {
+    // Binance devuelve exactamente lo que ya hay en la tabla (11.9 / 11.8):
+    // el caso mayoritario en producción, donde casi ningún par se mueve.
+    mockBinanceP2p.getAveragePrice
+      .mockResolvedValueOnce(11.9)
+      .mockResolvedValueOnce(11.8);
+    mockBridgeApi.get.mockRejectedValue(new Error('bridge down'));
+
+    await service.syncExternalRates('system_cron');
+
+    expect(mockSupabase.update).not.toHaveBeenCalled();
+  });
+
+  it('sigue emitiendo por WS los pares que no cambiaron', async () => {
+    // Saltarse el UPDATE no debe dejar sin tasa a un cliente que acaba de
+    // conectarse: el lote se emite igual, con el valor vigente.
+    mockBinanceP2p.getAveragePrice
+      .mockResolvedValueOnce(11.9)
+      .mockResolvedValueOnce(11.8);
+    mockBridgeApi.get.mockRejectedValue(new Error('bridge down'));
+
+    await service.syncExternalRates('system_cron');
+
+    const batch = mockGateway.emitRatesBatch.mock.calls[0][0];
+    expect(batch).toHaveLength(2);
+    expect(batch.map((p: { pair: string }) => p.pair)).toEqual([
+      'BOB_USD',
+      'USD_BOB',
+    ]);
+  });
+
+  it('escribe en cuanto la tasa se mueve, por poco que sea', async () => {
+    mockBinanceP2p.getAveragePrice
+      .mockResolvedValueOnce(11.900001) // difiere de 11.9 en el último dígito
+      .mockResolvedValueOnce(11.8); // idéntico al de la tabla
+    mockBridgeApi.get.mockRejectedValue(new Error('bridge down'));
+
+    await service.syncExternalRates('system_cron');
+
+    const updateCalls = mockSupabase.update.mock.calls.map((c) => c[0]);
+    expect(updateCalls).toHaveLength(1);
+    expect(updateCalls[0].rate).toBe(11.900001);
+  });
+
+  it('escribe si cambian los rates crudos de Bridge aunque el par no se mueva', async () => {
+    // sell_rate 11.9 hace que BOB_EUR salga 11.9/11.9 = 1, el valor que ya
+    // tiene la fila. buy_rate sí cambia (0.9 -> 0.95), y esos valores se
+    // guardan para trazabilidad: perderlos dejaría la fila desincronizada.
+    mockBinanceP2p.getAveragePrice
+      .mockResolvedValueOnce(11.9)
+      .mockResolvedValueOnce(11.8);
+    mockBridgeApi.get.mockResolvedValue({
+      midmarket_rate: '0.87',
+      buy_rate: '0.95',
+      sell_rate: '11.9',
+    });
+
+    await service.syncExternalRates('system_cron');
+
+    const updateCalls = mockSupabase.update.mock.calls.map((c) => c[0]);
+    expect(
+      updateCalls.some(
+        (c) => c.rate === 1 && c.bridge_buy_rate === 0.95,
+      ),
+    ).toBe(true);
+  });
 });

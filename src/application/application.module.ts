@@ -18,8 +18,8 @@ import { PsavModule } from './psav/psav.module';
 import { ExchangeRatesModule } from './exchange-rates/exchange-rates.module';
 import { ClientBankAccountsModule } from './client-bank-accounts/client-bank-accounts.module';
 import { OrdersModule } from './orders/orders.module';
-import { StaffAdminModule } from './staff-admin/staff-admin.module';
 import { AnnouncementsModule } from './announcements/announcements.module';
+import { StaffAdminModule } from './staff-admin/staff-admin.module';
 import { QuotesModule } from './quotes/quotes.module';
 
 /**
@@ -47,8 +47,8 @@ import { QuotesModule } from './quotes/quotes.module';
     ExchangeRatesModule,
     ClientBankAccountsModule,
     OrdersModule,
-    StaffAdminModule,
     AnnouncementsModule,
+    StaffAdminModule,
     QuotesModule,
   ],
 })

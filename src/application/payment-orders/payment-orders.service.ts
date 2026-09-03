@@ -2678,6 +2678,14 @@ export class PaymentOrdersService {
       .eq('user_id', userId)
       .single();
 
+    // Perú (pe_bank_transfer) no liquida por Bridge: es un flujo de dos tramos
+    // idéntico a bridge_wallet_to_fiat_bo — Bridge mueve los fondos al PSAV y el
+    // PSAV los envía a Pythas, que paga al proveedor peruano. Se bifurca aquí,
+    // antes de exigir external account, porque estos proveedores no la tienen.
+    if (supplier?.payment_rail === 'pe_bank_transfer') {
+      return this.createBridgeWalletToPeruPsav(userId, dto, supplier);
+    }
+
     if (!supplier || !supplier.bridge_external_account_id) {
       throw new NotFoundException(
         'Proveedor no encontrado o no tiene cuenta bancaria registrada en Bridge.',
@@ -2957,6 +2965,302 @@ export class PaymentOrdersService {
 
     this.logger.log(
       `📋 Orden bridge_wallet_to_fiat_us: ${order.id} — ${dto.amount} ${sourceCurrency}→${destCurrency}`,
+    );
+    return order;
+  }
+
+  /**
+   * 2.7 Wallet Bridge → Perú (PSAV + Pythas) — flujo de DOS TRAMOS
+   *
+   * Calcado de createBridgeWalletToFiatBo: mismo Tramo 1 (Bridge Transfer desde la
+   * wallet del cliente hacia la wallet crypto del PSAV asignado) y mismo Tramo 2
+   * manual gestionado por staff. Lo único que cambia es a quién se liquida al final:
+   * en vez de convertir a BOB y pagar una cuenta boliviana, el PSAV envía los fondos
+   * a Pythas y Pythas paga al proveedor peruano.
+   *
+   * Diferencias respecto a fiat_bo:
+   *   - El destino es un supplier peruano (no una client_bank_account del cliente).
+   *   - NO hay conversión de divisa: el proveedor cobra en USD vía SWIFT, así que
+   *     exchange_rate_applied es 1 y amount_destination es el neto en USD.
+   *   - La comisión se indexa por el riel de destino (ramp_off_fiat_us/pe_bank_transfer).
+   *
+   * Se marca requires_psav=true y destination_type='manual_pe_bank': el primero
+   * reactiva el pipeline de staff (processing → sent → completed) y el segundo hace
+   * que el webhook trate la orden como dual-leg y NO la cierre al llegar al PSAV.
+   */
+  private async createBridgeWalletToPeruPsav(
+    userId: string,
+    dto: CreateWalletRampOrderDto,
+    supplier: {
+      id: string;
+      name: string | null;
+      bank_details: Record<string, unknown> | null;
+    },
+  ) {
+    const wallet = await this.getUserWallet(userId, dto.wallet_id);
+
+    const sourceCurrency = (dto.source_currency ?? 'usdc').toUpperCase();
+
+    // Comisión del riel de destino peruano (no del token de origen), igual que el
+    // resto de destinos de bridge_wallet_to_fiat_us. Destino USD: llega por SWIFT.
+    const { fee_amount, net_amount } = await this.feesService.calculateFee(
+      userId,
+      'ramp_off_fiat_us',
+      'pe_bank_transfer',
+      'USD',
+      dto.amount,
+    );
+
+    // Validar token y ruta PSAV antes de tocar el saldo — sin coste de rollback si falla
+    if (
+      !FIAT_BO_OFF_RAMP_SOURCE_CURRENCIES.includes(sourceCurrency.toLowerCase())
+    ) {
+      throw new BadRequestException(
+        `El token ${sourceCurrency} no está habilitado para pagos a Perú. Tokens permitidos: ${FIAT_BO_OFF_RAMP_SOURCE_CURRENCIES.map((t) => t.toUpperCase()).join(', ')}.`,
+      );
+    }
+
+    const activePsavAccounts =
+      await this.psavService.getActiveCryptoAccountsForUser(userId);
+    const psavMatch = resolveFiatBoPsavMatch(sourceCurrency, activePsavAccounts);
+
+    if (!psavMatch) {
+      throw new BadRequestException(
+        `No es posible pagar a Perú con ${sourceCurrency} en este momento. ` +
+          `El operador PSAV no tiene habilitada una cuenta ${sourceCurrency} activa. ` +
+          `Por favor usa uno de los tokens disponibles o contacta al soporte.`,
+      );
+    }
+
+    const {
+      psavAccount,
+      destCurrency: psavDestCurrency,
+      minAmount: routeMinAmount,
+    } = psavMatch;
+
+    if (!psavAccount.crypto_address) {
+      throw new BadRequestException(
+        `La cuenta PSAV para ${sourceCurrency} no tiene dirección crypto configurada. Contacta al administrador.`,
+      );
+    }
+
+    if (dto.amount < routeMinAmount) {
+      throw new BadRequestException(
+        `El monto mínimo para pagar a Perú con ${sourceCurrency.toUpperCase()} es ${routeMinAmount} ${sourceCurrency.toUpperCase()}.`,
+      );
+    }
+
+    // Verificar saldo disponible del token específico seleccionado
+    const { data: balance } = await this.supabase
+      .from('balances')
+      .select('available_amount')
+      .eq('user_id', userId)
+      .eq('currency', sourceCurrency)
+      .single();
+
+    const totalNeeded = dto.amount;
+    if (!balance || parseFloat(balance.available_amount ?? '0') < totalNeeded) {
+      throw new BadRequestException(
+        `Saldo insuficiente. Necesitas $${totalNeeded} pero tienes $${balance?.available_amount ?? 0}`,
+      );
+    }
+
+    // Bloquear si ya existe un off-ramp fiat US activo hacia el mismo proveedor
+    await this.assertNoConflictingFiatUsOffRamp(
+      userId,
+      sourceCurrency,
+      supplier.id,
+    );
+
+    // Validar bridge_customer_id antes de reservar saldo
+    const { data: profile } = await this.supabase
+      .from('profiles')
+      .select('bridge_customer_id')
+      .eq('id', userId)
+      .single();
+
+    if (!profile?.bridge_customer_id) {
+      throw new BadRequestException(
+        'El usuario no tiene una cuenta Bridge activa. Completa el KYC antes de realizar retiros.',
+      );
+    }
+
+    // Reservar saldo
+    await this.supabase.rpc('reserve_balance', {
+      p_user_id: userId,
+      p_currency: sourceCurrency,
+      p_amount: totalNeeded,
+    });
+
+    // Snapshot de los datos del proveedor peruano para trazabilidad histórica
+    const bankDetails = supplier.bank_details ?? {};
+    const rawAccountNumber = bankDetails.account_number as string | undefined;
+    const destinationAccountNumber = rawAccountNumber
+      ? `****${rawAccountNumber.slice(-4)}`
+      : null;
+
+    const { data: order, error } = await this.supabase
+      .from('payment_orders')
+      .insert({
+        user_id: userId,
+        wallet_id: wallet.id,
+        flow_type: 'bridge_wallet_to_fiat_us',
+        flow_category: 'wallet_ramp',
+        requires_psav: true,
+        source_type: 'bridge_wallet',
+        amount: dto.amount,
+        currency: sourceCurrency,
+        source_currency: sourceCurrency,
+        fee_amount,
+        net_amount,
+        destination_type: 'manual_pe_bank',
+        destination_currency: 'USD',
+        destination_bank_name: (bankDetails.bank_name as string) ?? null,
+        destination_account_holder: supplier.name ?? null,
+        destination_account_number: destinationAccountNumber,
+        supplier_id: supplier.id,
+        // El proveedor cobra en dólares vía SWIFT: no hay conversión que aplicar.
+        exchange_rate_applied: 1.0,
+        amount_destination: net_amount,
+        business_purpose: dto.business_purpose,
+        supporting_document_url: dto.supporting_document_url,
+        notes: dto.notes,
+        status: 'created',
+      })
+      .select()
+      .single();
+
+    if (error) {
+      await this.supabase.rpc('release_reserved_balance', {
+        p_user_id: userId,
+        p_currency: sourceCurrency,
+        p_amount: totalNeeded,
+      });
+      throwDbError(error);
+    }
+
+    // Ejecutar Tramo 1: Bridge Transfer → PSAV crypto wallet
+    try {
+      if (
+        !psavAccount.crypto_network ||
+        psavAccount.crypto_network.trim() === ''
+      ) {
+        throw new Error(
+          `La cuenta PSAV para ${sourceCurrency} no tiene red crypto configurada. Contacta al administrador.`,
+        );
+      }
+      const psavRail = psavAccount.crypto_network.toLowerCase().trim();
+      if (!ALLOWED_NETWORKS.includes(psavRail)) {
+        throw new Error(
+          `Red PSAV inválida: "${psavAccount.crypto_network}" (normalizada: "${psavRail}"). Valores permitidos: ${ALLOWED_NETWORKS.join(', ')}`,
+        );
+      }
+
+      const transferPayload = {
+        on_behalf_of: profile.bridge_customer_id,
+        source: {
+          payment_rail: 'bridge_wallet',
+          currency: sourceCurrency.toLowerCase(),
+          bridge_wallet_id: wallet.provider_wallet_id,
+        },
+        destination: {
+          payment_rail: psavRail,
+          currency: psavDestCurrency.toLowerCase(),
+          to_address: psavAccount.crypto_address,
+        },
+        amount: dto.amount.toFixed(2),
+        ...(fee_amount > 0 && { developer_fee: fee_amount.toFixed(2) }),
+        client_reference_id: order.id,
+      };
+
+      this.logger.log(
+        `🔍 Bridge Transfer payload (perú): ${JSON.stringify(transferPayload)}`,
+      );
+
+      const idempotencyKey = `po_pe_${order.id}`;
+      const bridgeResult = await this.bridgeApi.post<Record<string, unknown>>(
+        '/v0/transfers',
+        transferPayload,
+        idempotencyKey,
+      );
+
+      const transferId = (bridgeResult?.id ?? null) as string | null;
+      await this.supabase
+        .from('payment_orders')
+        .update({
+          status: 'processing',
+          bridge_transfer_id: transferId,
+        })
+        .eq('id', order.id);
+
+      // Crear registro bridge_transfers para que el webhook pueda vincularlo
+      const { data: btRow } = await this.supabase
+        .from('bridge_transfers')
+        .insert({
+          user_id: userId,
+          bridge_transfer_id: transferId,
+          source_payment_rail: 'bridge_wallet',
+          source_currency: sourceCurrency.toLowerCase(),
+          destination_payment_rail: psavRail,
+          destination_currency: psavDestCurrency.toLowerCase(),
+          amount: dto.amount,
+          developer_fee_amount: fee_amount,
+          net_amount,
+          status: 'pending',
+          bridge_state: (bridgeResult?.state as string) ?? 'awaiting_funds',
+          bridge_raw_response: bridgeResult,
+        })
+        .select('id')
+        .single();
+
+      // Crear ledger entry (debit, pending — se asienta con webhook transfer.complete).
+      // bridge_transfer_id referencia el id LOCAL de bridge_transfers (FK) — NO el UUID de Bridge.
+      const { error: ledgerErr } = await this.supabase
+        .from('ledger_entries')
+        .insert({
+          wallet_id: wallet.id,
+          type: 'debit',
+          amount: totalNeeded,
+          currency: sourceCurrency,
+          status: 'pending',
+          reference_type: 'payment_order',
+          reference_id: order.id,
+          bridge_transfer_id: btRow?.id ?? null,
+          description: `Pago a Perú: ${net_amount} ${sourceCurrency} → PSAV (Pythas)`,
+        });
+      if (ledgerErr) {
+        this.logger.error(
+          `❌ No se pudo crear el ledger_entry (debit) de la order ${order.id}: ${ledgerErr.message}. ` +
+            `El transfer Bridge ${transferId} ya fue enviado — requiere reconciliación manual del saldo.`,
+        );
+      }
+
+      order.status = 'processing';
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // Revertir: liberar reserva + marcar failed
+      await this.supabase.rpc('release_reserved_balance', {
+        p_user_id: userId,
+        p_currency: sourceCurrency,
+        p_amount: totalNeeded,
+      });
+      await this.supabase
+        .from('payment_orders')
+        .update({
+          status: 'failed',
+          failure_reason: `Bridge Transfer falló: ${message}`,
+        })
+        .eq('id', order.id);
+
+      void this.notifyOrderFinalStatusEmail(order, 'failed');
+
+      throw new BadRequestException(
+        `Error al ejecutar transfer a Perú: ${message}`,
+      );
+    }
+
+    this.logger.log(
+      `📋 Orden Perú (bridge_wallet_to_fiat_us/manual_pe_bank): ${order.id} — ${dto.amount} ${sourceCurrency} → PSAV, pendiente envío a Pythas`,
     );
     return order;
   }
@@ -3841,7 +4145,10 @@ export class PaymentOrdersService {
     let query = this.supabase
       .from('payment_orders')
       .select(
-        `*, suppliers(id, name), profiles!payment_orders_user_id_fkey(full_name, email)`,
+        // bank_details/payment_rail del proveedor: el staff los necesita para los
+        // pagos manuales (Perú vía Pythas), donde debe transcribir banco, cuenta,
+        // CCI y SWIFT al proveedor financiero externo.
+        `*, suppliers(id, name, payment_rail, bank_details), profiles!payment_orders_user_id_fkey(full_name, email)`,
         { count: 'exact' },
       )
       .order('created_at', { ascending: false })

@@ -113,6 +113,7 @@ export class CreateSupplierDto {
       'bre_b',
       'faster_payments',
       'co_bank_transfer',
+      'pe_bank_transfer',
       'crypto',
     ],
   })
@@ -126,6 +127,7 @@ export class CreateSupplierDto {
     'bre_b',
     'faster_payments',
     'co_bank_transfer',
+    'pe_bank_transfer',
     'crypto',
   ])
   payment_rail: string;
@@ -310,6 +312,81 @@ export class CreateSupplierDto {
   @Matches(/^\+\d{7,15}$/, { message: 'phone_number debe estar en formato E.164 (ej. +573001234567)' })
   phone_number?: string;
 
+  // ── PE Bank Transfer (Perú — flujo manual vía Pythas, sin Bridge) ──
+  // Los datos se guardan tal cual en suppliers.bank_details; no se crea external
+  // account ni liquidation address. Cuando llegue la documentación de Pythas este
+  // bloque se ajustará a lo que realmente pida su API.
+  @ApiPropertyOptional({
+    example: '00219100123456789012',
+    description: 'CCI (Código de Cuenta Interbancario) peruano — 20 dígitos',
+  })
+  @IsOptional()
+  // Se acepta vacío: mientras no llegue la documentación de Pythas todos los
+  // campos de Perú son opcionales y se guardan tal cual lleguen.
+  @Matches(/^(\d{20})?$/, { message: 'El CCI debe tener exactamente 20 dígitos numéricos' })
+  cci?: string;
+
+  @ApiPropertyOptional({
+    example: 'Av. Javier Prado 123',
+    description:
+      'Dirección del beneficiario para rails manuales (Perú). No usa BeneficiaryAddressDto ' +
+      'porque ese DTO es el formato que exige Bridge (street_line_1 4-35, state máx 3 chars) ' +
+      'y este rail no pasa por Bridge.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  address_line?: string;
+
+  @ApiPropertyOptional({
+    example: 'Piso 8',
+    description: 'Segunda línea de dirección — piso, oficina, referencia (rails manuales)',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  address_line_2?: string;
+
+  @ApiPropertyOptional({ example: '15046', description: 'Código postal (rails manuales)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  postal_code?: string;
+
+  @ApiPropertyOptional({ example: 'PER', description: 'País de la dirección (rails manuales)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(3)
+  address_country?: string;
+
+  @ApiPropertyOptional({ example: 'San Isidro', description: 'Distrito (Perú)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  district?: string;
+
+  @ApiPropertyOptional({ example: 'Lima', description: 'Provincia (Perú)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  province?: string;
+
+  @ApiPropertyOptional({ example: 'Lima', description: 'Departamento (Perú)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  department?: string;
+
+  @ApiPropertyOptional({
+    example: '09484497',
+    description:
+      'Identificador adicional que algunos remitentes piden en lugar del RUC (rails manuales, Perú).',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  idc?: string;
+
   // ── Crypto Wallet ──
   @ApiPropertyOptional()
   @IsOptional()
@@ -361,6 +438,7 @@ export class UpdateSupplierDto {
       'bre_b',
       'faster_payments',
       'co_bank_transfer',
+      'pe_bank_transfer',
       'crypto',
     ],
   })
@@ -374,6 +452,7 @@ export class UpdateSupplierDto {
     'bre_b',
     'faster_payments',
     'co_bank_transfer',
+    'pe_bank_transfer',
     'crypto',
   ])
   payment_rail?: string;
@@ -531,6 +610,62 @@ export class UpdateSupplierDto {
   @IsOptional()
   @Matches(/^\+\d{7,15}$/, { message: 'phone_number debe estar en formato E.164 (ej. +573001234567)' })
   phone_number?: string;
+
+  // PE Bank Transfer (Perú — flujo manual vía Pythas)
+  @ApiPropertyOptional({ description: 'CCI peruano — 20 dígitos' })
+  @IsOptional()
+  @Matches(/^(\d{20})?$/, { message: 'El CCI debe tener exactamente 20 dígitos numéricos' })
+  cci?: string;
+
+  @ApiPropertyOptional({ description: 'Dirección del beneficiario (rails manuales)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  address_line?: string;
+
+  @ApiPropertyOptional({ description: 'Segunda línea de dirección — piso, oficina, referencia (rails manuales)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  address_line_2?: string;
+
+  @ApiPropertyOptional({ description: 'Código postal (rails manuales)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  postal_code?: string;
+
+  @ApiPropertyOptional({ description: 'País de la dirección (rails manuales)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(3)
+  address_country?: string;
+
+  @ApiPropertyOptional({ description: 'Distrito (Perú)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  district?: string;
+
+  @ApiPropertyOptional({ description: 'Provincia (Perú)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  province?: string;
+
+  @ApiPropertyOptional({ description: 'Departamento (Perú)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  department?: string;
+
+  @ApiPropertyOptional({
+    description: 'Identificador adicional que algunos remitentes piden en lugar del RUC (rails manuales, Perú).',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  idc?: string;
 
   // Crypto
   @ApiPropertyOptional()

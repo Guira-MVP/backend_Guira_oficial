@@ -135,10 +135,20 @@ export class AuthService {
   extractSessionId(request: {
     headers?: Record<string, string | string[] | undefined>;
   }): string | undefined {
+    const auth = request.headers?.['authorization'];
+    const token = typeof auth === 'string' ? auth.split(' ')[1] : undefined;
+    return token ? this.decodeSessionIdFromToken(token) : undefined;
+  }
+
+  /**
+   * Lee el claim `session_id` de un access token de Supabase.
+   *
+   * Solo decodifica el payload: el token o bien lo acaba de emitir Supabase
+   * (login), o bien ya lo verificó el guard server-side. No se reverifica la
+   * firma porque en ninguno de los dos casos aporta nada.
+   */
+  private decodeSessionIdFromToken(token: string): string | undefined {
     try {
-      const auth = request.headers?.['authorization'];
-      const token = typeof auth === 'string' ? auth.split(' ')[1] : undefined;
-      if (!token) return undefined;
       const payload = JSON.parse(
         Buffer.from(token.split('.')[1], 'base64url').toString('utf8'),
       ) as Record<string, unknown>;
@@ -147,6 +157,68 @@ export class AuthService {
         : undefined;
     } catch {
       return undefined;
+    }
+  }
+
+  /**
+   * Guarda el dispositivo e IP REALES desde los que nacio una sesion.
+   *
+   * Hace falta porque `auth.sessions` no sirve para esto: GoTrue graba ahi los
+   * datos de quien le hace la peticion, y en Guira el login corre en el
+   * servidor (this.createAuthClient().auth.signInWithPassword). El resultado es
+   * que el panel "Sesiones activas" mostraba user_agent 'node' y la IP de
+   * Render en vez del dispositivo del usuario. El middleware SSR de Next.js
+   * agrava el efecto: al refrescar la sesion en cada request pisa esos campos
+   * con 'Next.js Middleware'.
+   *
+   * Aqui si tenemos los datos buenos: el navegador llama a POST /auth/login
+   * contra nuestro backend, asi que llega su User-Agent real, y desde el
+   * cambio de `trust proxy` a lista de CIDRs (main.ts) tambien su IP real.
+   *
+   * BEST-EFFORT A PROPOSITO: esto corre dentro del flujo de login. Si fallara
+   * y la excepcion escapara, nadie podria entrar a Guira. Un metadato de
+   * presentacion no puede tumbar la autenticacion — mismo criterio que
+   * logAuthEvent().
+   */
+  private async recordSessionMetadata(params: {
+    accessToken: string;
+    userId: string;
+    context: { ip_address: string; user_agent: string };
+  }): Promise<void> {
+    const sessionId = this.decodeSessionIdFromToken(params.accessToken);
+    if (!sessionId) return;
+    await this.saveSessionMetadata(sessionId, params.userId, params.context);
+  }
+
+  /** Escritura efectiva del metadato. Ver recordSessionMetadata para el porque. */
+  private async saveSessionMetadata(
+    sessionId: string,
+    userId: string,
+    context: { ip_address: string; user_agent: string },
+  ): Promise<void> {
+    try {
+      const { error } = await this.supabase.from('session_metadata').upsert(
+        {
+          session_id: sessionId,
+          user_id: userId,
+          ip_address: context.ip_address,
+          user_agent: context.user_agent,
+        },
+        // Un mismo session_id no deberia llegar dos veces, pero si Supabase
+        // reutilizara la sesion (p. ej. un segundo login sin cerrar la
+        // anterior) preferimos actualizar el metadato antes que fallar.
+        { onConflict: 'session_id' },
+      );
+
+      if (error) {
+        this.logger.warn(
+          `No se pudo guardar el metadato de sesion ${sessionId}: ${error.message}`,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        `No se pudo guardar el metadato de sesion: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
@@ -223,6 +295,15 @@ export class AuthService {
       email: data.user.email,
       ip_address: context.ip_address,
       user_agent: context.user_agent,
+    });
+
+    // Dispositivo e IP reales del navegador, para el panel "Sesiones activas".
+    // auth.sessions guardaria aqui 'node' + la IP de Render (ver el comentario
+    // de recordSessionMetadata).
+    await this.recordSessionMetadata({
+      accessToken: data.session.access_token,
+      userId: data.user.id,
+      context,
     });
 
     return {
@@ -537,6 +618,7 @@ export class AuthService {
     userId: string,
     provider: string,
     context: { ip_address: string; user_agent: string },
+    sessionId?: string,
   ): Promise<{ message: string }> {
     // Registrar evento de login OAuth
     await this.logAuthEvent({
@@ -546,6 +628,14 @@ export class AuthService {
       user_agent: context.user_agent,
       metadata: { provider },
     });
+
+    // En OAuth la sesion la crea el navegador contra Supabase, asi que
+    // auth.sessions nace con los datos correctos. Se guarda el metadato igual
+    // porque el middleware SSR de Next.js los pisa con 'Next.js Middleware' en
+    // el primer refresh del lado servidor.
+    if (sessionId) {
+      await this.saveSessionMetadata(sessionId, userId, context);
+    }
 
     // Corrección G3: Verificar que el perfil tenga full_name
     // Si el trigger handle_new_user no lo capturó, lo obtenemos

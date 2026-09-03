@@ -174,7 +174,13 @@ export class AuthController {
     @Req() req: Request,
   ) {
     const context = this.authService.extractRequestContext(req);
-    return this.authService.oauthCallback(user.id, dto.provider, context);
+    const sessionId = this.authService.extractSessionId(req);
+    return this.authService.oauthCallback(
+      user.id,
+      dto.provider,
+      context,
+      sessionId,
+    );
   }
 
   // ─────────────────────────────────────────────────────────────
