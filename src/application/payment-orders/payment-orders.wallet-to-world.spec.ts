@@ -6,7 +6,7 @@ import { WalletRampFlowType } from './dto/create-wallet-ramp-order.dto';
  * Tests del flujo wallet_to_world.
  *
  * Las tres invariantes críticas de dinero, cada una con su test dedicado:
- *   1. NUNCA se llama reserve_balance  → los fondos no salen del saldo Guira.
+ *   1. NUNCA se llama reserve_balance  → los fondos no salen del saldo del cliente.
  *   2. NUNCA se inserta en ledger_entries → evita el cargo fantasma (ver el
  *      comentario extenso en createWalletToWorld).
  *   3. Sin tarifa activa se RECHAZA, en vez de crear la orden cobrando 0.

@@ -367,7 +367,7 @@ export class PdfService {
 
     // ── Depósitos on-chain desde wallet externa: red + dirección del remitente ──
     // wallet_to_world comparte la mecánica de crypto_to_bridge_wallet: el cliente
-    // paga desde su propia wallet (Binance, etc.), NO desde la billetera Guira, así
+    // paga desde su propia wallet (Binance, etc.), NO desde el saldo del cliente, así
     // que aquí no se muestra clientWallet sino el remitente real que registró Bridge.
     if (ft === 'crypto_to_bridge_wallet' || ft === 'wallet_to_world') {
       rows.push(
@@ -442,7 +442,7 @@ export class PdfService {
       rows.push(this.row('País', 'Bolivia'));
     } else if (ft === 'bridge_wallet_to_fiat_us' || ft === 'wallet_to_world') {
       // Mismo destino en ambos flujos: la cuenta bancaria del proveedor.
-      // Solo cambia el origen de los fondos (billetera Guira vs. wallet externa).
+      // Solo cambia el origen de los fondos (saldo del cliente vs. wallet externa).
       if (supplier?.name) rows.push(this.row('Proveedor', this.toDisplay(supplier.name)));
       const holder = order.destination_account_holder
         || bd.business_name

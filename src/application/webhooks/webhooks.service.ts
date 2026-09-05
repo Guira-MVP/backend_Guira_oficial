@@ -3020,7 +3020,7 @@ export class WebhooksService {
       failedOrder != null && offRampWalletFlows.includes(failedOrder.flow_type);
 
     // Flujos on-chain: los fondos llegan desde una wallet externa y nunca pasan
-    // por el saldo Guira, así que NUNCA se llamó reserve_balance. Liberar aquí
+    // por el saldo del cliente, así que NUNCA se llamó reserve_balance. Liberar aquí
     // sería regalar saldo: release_reserved_balance incrementa available_amount
     // de forma incondicional, sin comprobar que exista una reserva previa.
     // Se excluyen de la liberación genérica y tampoco entran en el bloque de
