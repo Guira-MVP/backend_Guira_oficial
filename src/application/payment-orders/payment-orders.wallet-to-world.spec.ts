@@ -144,7 +144,7 @@ describe('PaymentOrdersService — wallet_to_world', () => {
     expect(payload.destination.ach_reference).toBe('GUIRA');
   });
 
-  it('funciona SIN wallet_id — no hay billetera Guira de origen que elegir', async () => {
+  it('funciona SIN wallet_id — no hay saldo del cliente de origen que elegir', async () => {
     const supabase = makeSupabase();
     const { service, bridgePost } = makeService(supabase);
     const { wallet_id: _omitido, ...sinWallet } = validDto;
