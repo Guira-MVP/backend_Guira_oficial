@@ -51,30 +51,30 @@ const COLORS = {
 // ═══════════════════════════════════════════════════════════
 const FLOW_LABELS: Record<string, string> = {
   // ── Pago Internacional a Proveedor ──
-  bolivia_to_world: 'Pago Internacional a Proveedor — Transferencia Bancaria',
-  bolivia_to_wallet: 'Pago Internacional a Proveedor — Liquidación en Activos Virtuales',
-  wallet_to_wallet: 'Pago Internacional a Proveedor — Transferencia entre Activos Virtuales',
-  wallet_to_world: 'Pago Internacional a Proveedor — Liquidación desde Billetera Externa',
+  bolivia_to_world: 'Pago Internacional a Beneficiario — Transferencia Bancaria',
+  bolivia_to_wallet: 'Pago Internacional a Beneficiario — Liquidación en Activos Virtuales',
+  wallet_to_wallet: 'Pago Internacional a Beneficiario — Transferencia entre Activos Virtuales',
+  wallet_to_world: 'Pago Internacional a Beneficiario — Liquidación desde Wallet Externa',
 
   // ── Recepción de Fondos del Exterior ──
   world_to_bolivia: 'Recepción de Fondos del Exterior — Abono en Cuenta Nacional',
 
   // ── Constitución de Fondos ──
-  fiat_bo_to_bridge_wallet: 'Constitución de Fondos — Depósito en Bolivianos',
-  crypto_to_bridge_wallet: 'Constitución de Fondos — Depósito en Activos Virtuales',
-  va_deposit: 'Constitución de Fondos — Depósito vía Cuenta Bancaria Asignada',
+  fiat_bo_to_bridge_wallet: 'Constitución de Fondos — Ingreso en Bolivianos',
+  crypto_to_bridge_wallet: 'Constitución de Fondos — Ingreso en Activos Virtuales',
+  va_deposit: 'Constitución de Fondos — Ingreso vía Cuenta Bancaria Asignada',
 
   // ── Retiro de Fondos ──
   bridge_wallet_to_fiat_bo: 'Retiro de Fondos — Abono en Cuenta Bancaria Nacional',
   bridge_wallet_to_fiat_us: 'Retiro de Fondos — Abono en Cuenta Bancaria del Exterior',
-  bridge_wallet_to_crypto: 'Retiro de Fondos — Envío a Billetera de Activos Virtuales',
+  bridge_wallet_to_crypto: 'Retiro de Fondos — Envío a Cuenta de Activos Virtuales',
 };
 
 const STATUS_LABELS: Record<string, string> = {
   CREATED: 'Creado',
   PENDING: 'Pendiente',
-  WAITING_DEPOSIT: 'Esperando Depósito',
-  DEPOSIT_RECEIVED: 'Depósito Validado',
+  WAITING_DEPOSIT: 'Esperando Ingreso',
+  DEPOSIT_RECEIVED: 'Ingreso Validado',
   PROCESSING: 'En Proceso',
   SENT: 'Enviado',
   COMPLETED: 'Completado',
@@ -353,14 +353,14 @@ export class PdfService {
 
     const rows: any[][] = [
       this.row('Monto Origen', `${this.fmtAmount(order.amount)} ${originCcy}`),
-      this.row('Comisión', `${this.fmtAmount(order.fee_amount)} ${originCcy}`),
+      this.row('Tarifa', `${this.fmtAmount(order.fee_amount)} ${originCcy}`),
       this.row('Tipo de Cambio', exchangeRateDisplay),
     ];
 
     // ── Off-ramp flows: show source Bridge wallet ──────────
     if (['bridge_wallet_to_fiat_bo', 'bridge_wallet_to_fiat_us', 'bridge_wallet_to_crypto'].includes(ft)) {
       rows.push(
-        this.linkRow('Billetera Origen', this.truncateAddress(clientWallet?.address), this.buildExplorerUrl(clientWallet?.address, clientWallet?.network, 'address')),
+        this.linkRow('Cuenta Origen', this.truncateAddress(clientWallet?.address), this.buildExplorerUrl(clientWallet?.address, clientWallet?.network, 'address')),
         this.row('Red Origen', this.toDisplay(clientWallet?.network)),
       );
     }
@@ -371,11 +371,11 @@ export class PdfService {
     // que aquí no se muestra clientWallet sino el remitente real que registró Bridge.
     if (ft === 'crypto_to_bridge_wallet' || ft === 'wallet_to_world') {
       rows.push(
-        this.row('Red de Depósito', this.toDisplay(order.source_network)),
+        this.row('Red de Ingreso', this.toDisplay(order.source_network)),
       );
       // source_address = the external crypto wallet that sent funds to Bridge
       if (order.source_address) {
-        rows.push(this.linkRow('Dirección de Depósito', this.truncateAddress(order.source_address), this.buildExplorerUrl(order.source_address, order.source_network, 'address')));
+        rows.push(this.linkRow('Dirección de Ingreso', this.truncateAddress(order.source_address), this.buildExplorerUrl(order.source_address, order.source_network, 'address')));
       }
     }
 
@@ -406,7 +406,7 @@ export class PdfService {
       const srcNet = order.source_network ?? clientWallet?.network;
       rows.push(
         this.row('Red Origen', this.toDisplay(srcNet)),
-        this.linkRow('Billetera Origen', this.truncateAddress(srcAddr), this.buildExplorerUrl(srcAddr, srcNet, 'address')),
+        this.linkRow('Cuenta Origen', this.truncateAddress(srcAddr), this.buildExplorerUrl(srcAddr, srcNet, 'address')),
       );
     }
 
@@ -435,7 +435,7 @@ export class PdfService {
       if (supplier?.name) rows.push(this.row('Proveedor', this.toDisplay(supplier.name)));
       if (supplier?.contact_email) rows.push(this.row('Email de Contacto', this.toDisplay(supplier.contact_email)));
     } else if (['fiat_bo_to_bridge_wallet', 'crypto_to_bridge_wallet'].includes(ft)) {
-      rows.push(this.row('Titular', 'Billetera Propia'));
+      rows.push(this.row('Titular', 'Cuenta Propia'));
     } else if (ft === 'bridge_wallet_to_fiat_bo') {
       const holder = clientBankAccount?.account_holder || order.destination_account_holder;
       if (holder) rows.push(this.row('Titular', this.toDisplay(holder)));
@@ -549,7 +549,7 @@ export class PdfService {
     // ── On-ramps: fiat/crypto → bridge_wallet ─────────────
     else if (['fiat_bo_to_bridge_wallet', 'crypto_to_bridge_wallet'].includes(ft)) {
       rows.push(
-        this.linkRow('Billetera Destino', this.toDisplay(clientWallet?.address), this.buildExplorerUrl(clientWallet?.address, clientWallet?.network, 'address')),
+        this.linkRow('Cuenta Destino', this.toDisplay(clientWallet?.address), this.buildExplorerUrl(clientWallet?.address, clientWallet?.network, 'address')),
         this.row('Red Destino', this.toDisplay(clientWallet?.network)),
         this.row('Moneda Destino', this.toDisplay(order.destination_currency ?? order.currency)),
       );
