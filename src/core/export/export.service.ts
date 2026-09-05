@@ -68,8 +68,8 @@ function formatDate(isoStr: string): string {
 
 const STATUS_LABELS: Record<string, string> = {
   created: 'Orden creada',
-  waiting_deposit: 'Esperando depósito',
-  deposit_received: 'Depósito validado',
+  waiting_deposit: 'Esperando ingreso',
+  deposit_received: 'Ingreso validado',
   processing: 'Procesando',
   sent: 'Enviado',
   completed: 'Completado',
@@ -106,7 +106,7 @@ const FLOW_LABELS: Record<string, string> = {
   bridge_wallet_to_crypto: 'Guira a cripto',
   bridge_wallet_to_fiat_us: 'Guira al exterior',
   wallet_to_world: 'Wallet externa al exterior',
-  va_deposit: 'Depósito cuenta virtual',
+  va_deposit: 'Ingreso por cuenta virtual',
 };
 
 // Previene CSV/Excel Formula Injection (CWE-1236): si un valor de texto

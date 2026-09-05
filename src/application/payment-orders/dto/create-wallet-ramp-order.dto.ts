@@ -36,7 +36,7 @@ export enum WalletRampFlowType {
   /**
    * Off-ramp on-chain: el cliente paga desde su wallet externa (Binance, etc.)
    * escaneando el QR que devuelve Bridge, y los fondos se liquidan en la cuenta
-   * bancaria del proveedor. Nunca tocan el saldo Guira del cliente.
+   * bancaria del proveedor. Nunca tocan el saldo del cliente.
    */
   WALLET_TO_WORLD = 'wallet_to_world',
 }
@@ -54,7 +54,7 @@ export class CreateWalletRampOrderDto {
 
   // ── wallet_id: requerido para todos los flujos rampa EXCEPTO wallet_to_world ──
   // En wallet_to_world los fondos llegan on-chain desde una wallet externa del
-  // cliente, así que no hay billetera Guira de origen que seleccionar. El servicio
+  // cliente, así que no hay saldo del cliente de origen que seleccionar. El servicio
   // resuelve una wallet activa por su cuenta, solo como referencia del expediente.
   @ApiPropertyOptional()
   @ValidateIf((o) => o.flow_type !== 'wallet_to_world')

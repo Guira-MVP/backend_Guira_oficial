@@ -6,7 +6,7 @@ import { WalletRampFlowType } from './dto/create-wallet-ramp-order.dto';
  * Tests del flujo wallet_to_world.
  *
  * Las tres invariantes críticas de dinero, cada una con su test dedicado:
- *   1. NUNCA se llama reserve_balance  → los fondos no salen del saldo Guira.
+ *   1. NUNCA se llama reserve_balance  → los fondos no salen del saldo del cliente.
  *   2. NUNCA se inserta en ledger_entries → evita el cargo fantasma (ver el
  *      comentario extenso en createWalletToWorld).
  *   3. Sin tarifa activa se RECHAZA, en vez de crear la orden cobrando 0.
@@ -144,7 +144,7 @@ describe('PaymentOrdersService — wallet_to_world', () => {
     expect(payload.destination.ach_reference).toBe('GUIRA');
   });
 
-  it('funciona SIN wallet_id — no hay billetera Guira de origen que elegir', async () => {
+  it('funciona SIN wallet_id — no hay saldo del cliente de origen que elegir', async () => {
     const supabase = makeSupabase();
     const { service, bridgePost } = makeService(supabase);
     const { wallet_id: _omitido, ...sinWallet } = validDto;

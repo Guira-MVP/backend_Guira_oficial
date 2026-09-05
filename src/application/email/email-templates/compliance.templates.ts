@@ -26,7 +26,7 @@ function greeting(name?: string | null): string {
 export function buildComplianceApprovedEmail(
   params: ComplianceEmailParams,
 ): ComplianceEmailContent {
-  const subject = '¡Tu cuenta Guira ha sido verificada!';
+  const subject = '¡Tu cuenta ha sido verificada!';
   const intro = greeting(params.name);
   const message =
     'Tu identidad fue verificada exitosamente. Ya puedes usar todos los servicios de Guira.';
