@@ -1636,8 +1636,8 @@ export class WebhooksService {
     await this.supabase.from('notifications').insert({
       user_id: userId,
       type: 'financial',
-      title: 'Deposito en Proceso',
-      message: `Recibimos $${amount.toFixed(2)} de ${senderName}. Tu balance se actualizara cuando Bridge confirme el pago.`,
+      title: 'Ingreso en Proceso',
+      message: `Se registro un ingreso de $${amount.toFixed(2)} de ${senderName}. Tu saldo se actualizara cuando el proveedor confirme el pago.`,
       reference_type: 'payment_order',
       reference_id: order?.id ?? null,
     });
@@ -1646,7 +1646,7 @@ export class WebhooksService {
     await this.supabase.from('activity_logs').insert({
       user_id: userId,
       action: 'VA_DEPOSIT_PENDING',
-      description: `Deposito VA recibido: $${amount} de ${senderName} — pendiente confirmacion on-chain`,
+      description: `Ingreso VA recibido: $${amount} de ${senderName} — pendiente confirmacion on-chain`,
     });
 
     this.logger.log(
@@ -1770,7 +1770,7 @@ export class WebhooksService {
     await this.supabase.from('notifications').insert({
       user_id: userId,
       type: 'financial',
-      title: 'Depósito Reenviado a Wallet Externa',
+      title: 'Ingreso Reenviado a Wallet Externa',
       message: `$${netAmount.toFixed(2)} de ${senderName} fue reenviado automáticamente a ${externalLabel} (fee: $${feeAmount.toFixed(2)})`,
       reference_type: 'payment_order',
       reference_id: orderId,
@@ -1953,7 +1953,7 @@ export class WebhooksService {
       status: 'settled',
       reference_type: 'payment_order',
       reference_id: order.id,
-      description: `Deposito confirmado via cuenta virtual Bridge`,
+      description: `Ingreso confirmado via cuenta virtual del proveedor`,
     });
 
     // Marcar order como completada y persistir datos del receipt.
@@ -1990,8 +1990,8 @@ export class WebhooksService {
     await this.supabase.from('notifications').insert({
       user_id: order.user_id,
       type: 'financial',
-      title: 'Deposito Confirmado',
-      message: `$${creditAmount.toFixed(2)} ${order.currency} acreditados en tu wallet Guira.`,
+      title: 'Ingreso Confirmado',
+      message: `$${creditAmount.toFixed(2)} ${order.currency} acreditados en tu saldo.`,
       reference_type: 'payment_order',
       reference_id: order.id,
     });
@@ -1999,7 +1999,7 @@ export class WebhooksService {
     await this.supabase.from('activity_logs').insert({
       user_id: order.user_id,
       action: 'VA_DEPOSIT_CONFIRMED',
-      description: `Deposito VA confirmado: $${creditAmount} acreditados (order ${order.id})`,
+      description: `Ingreso VA confirmado: $${creditAmount} acreditados (order ${order.id})`,
     });
 
     this.logger.log(
@@ -2050,13 +2050,13 @@ export class WebhooksService {
 
     if (va?.user_id) {
       const etaText = estimatedArrival
-        ? ` Tu deposito ACH llegara aproximadamente el ${estimatedArrival}.`
+        ? ` Tu ingreso ACH llegara aproximadamente el ${estimatedArrival}.`
         : '';
       await this.supabase.from('notifications').insert({
         user_id: va.user_id,
         type: 'financial',
-        title: 'Deposito ACH en Camino',
-        message: `Detectamos un deposito de $${amount.toFixed(2)} en transito hacia tu cuenta virtual.${etaText}`,
+        title: 'Ingreso ACH en Camino',
+        message: `Se detecto un ingreso de $${amount.toFixed(2)} en transito hacia tu cuenta virtual.${etaText}`,
       });
     }
   }
@@ -2108,8 +2108,8 @@ export class WebhooksService {
       await this.supabase.from('notifications').insert({
         user_id: va.user_id,
         type: 'compliance',
-        title: 'Deposito en Revision',
-        message: `Tu deposito de $${amount.toFixed(2)} esta siendo revisado por el equipo de cumplimiento. Te notificaremos cuando se resuelva.`,
+        title: 'Ingreso en Revision',
+        message: `Tu ingreso de $${amount.toFixed(2)} esta siendo revisado por el equipo de cumplimiento. Te notificaremos cuando se resuelva.`,
       });
     }
   }
@@ -2160,7 +2160,7 @@ export class WebhooksService {
         user_id: va.user_id,
         type: 'financial',
         title: 'Reembolso en Proceso',
-        message: `Tu deposito de $${amount.toFixed(2)} esta siendo devuelto al remitente original.`,
+        message: `Tu ingreso de $${amount.toFixed(2)} esta siendo devuelto al remitente original.`,
       });
     }
   }
@@ -2225,7 +2225,7 @@ export class WebhooksService {
         status: 'settled',
         reference_type: 'payment_order',
         reference_id: order.id,
-        description: `Reversa de deposito Bridge \u2014 reembolso al remitente`,
+        description: `Reversa de ingreso \u2014 reembolso al remitente`,
         metadata: { reason: 'va_deposit_refunded', deposit_id: depositId },
       });
 
@@ -2252,8 +2252,8 @@ export class WebhooksService {
     await this.supabase.from('notifications').insert({
       user_id: order.user_id,
       type: 'financial',
-      title: 'Deposito Reembolsado',
-      message: `Tu deposito de $${amount.toFixed(2)} fue devuelto al remitente. Si tu balance ya habia sido acreditado, ha sido corregido automaticamente.`,
+      title: 'Ingreso Reembolsado',
+      message: `Tu ingreso de $${amount.toFixed(2)} fue devuelto al remitente. Si tu saldo ya habia sido acreditado, ha sido corregido automaticamente.`,
       reference_type: 'payment_order',
       reference_id: order.id,
     });
@@ -2261,7 +2261,7 @@ export class WebhooksService {
     await this.supabase.from('activity_logs').insert({
       user_id: order.user_id,
       action: 'VA_DEPOSIT_REFUNDED',
-      description: `Deposito VA reembolsado: $${amount} (deposit_id=${depositId})`,
+      description: `Ingreso VA reembolsado: $${amount} (deposit_id=${depositId})`,
     });
   }
 
@@ -2800,7 +2800,7 @@ export class WebhooksService {
             user_id: paymentOrder.user_id,
             type: 'financial',
             title: 'Fondeo Completado',
-            message: `Tu fondeo de ${creditAmount} ${destCurrency} ha sido acreditado en tu wallet Bridge.`,
+            message: `Tu ingreso de ${creditAmount} ${destCurrency} ha sido acreditado en tu saldo.`,
             reference_type: 'payment_order',
             reference_id: paymentOrder.id,
           });

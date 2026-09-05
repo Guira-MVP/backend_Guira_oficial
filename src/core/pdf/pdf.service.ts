@@ -395,7 +395,7 @@ export class PdfService {
       // exchange_fee = Bridge's own conversion fee (show only when non-zero)
       const bridgeFee = Number(order.exchange_fee);
       if (order.exchange_fee != null && !Number.isNaN(bridgeFee) && bridgeFee !== 0) {
-        rows.push(this.row('Comision Guira', `${this.fmtAmount(bridgeFee)} ${order.source_currency ?? ''}`));
+        rows.push(this.row('Tarifa aplicable', `${this.fmtAmount(bridgeFee)} ${order.source_currency ?? ''}`));
       }
     }
 
@@ -563,7 +563,7 @@ export class PdfService {
         this.row('Moneda Recibida', destCcy),
       );
       if (order.sender_name) rows.push(this.row('Remitente', this.toDisplay(order.sender_name)));
-      if (order.va_deposit_status) rows.push(this.row('Estado del Depósito', this.toDisplay(order.va_deposit_status)));
+      if (order.va_deposit_status) rows.push(this.row('Estado del Ingreso', this.toDisplay(order.va_deposit_status)));
     }
 
     // ── bridge_wallet_to_fiat_bo ─────────────────────────
@@ -712,7 +712,7 @@ export class PdfService {
       'No implica captación de recursos del público, intermediación financiera, asesoramiento en inversiones ni garantía de rendimiento.',
 
       // 6. Explica por qué las dos cifras del panel no coinciden, antes de que lo pregunten.
-      'Montos. El tipo de cambio y las comisiones consignados son los aplicados al momento de la ejecución. La diferencia entre ' +
+      'Montos. El tipo de cambio y las tarifas consignados son los aplicados al momento de la ejecución. La diferencia entre ' +
       'el monto ordenado y el monto acreditado corresponde a dichos conceptos. Fechas y horas se expresan en hora oficial de Bolivia (UTC-4).',
 
       // 7. Lo que una banca corresponsal busca explícitamente.
@@ -852,7 +852,7 @@ export class PdfService {
 
       // Bridge Deposit ID — va_deposit
       if (order.deposit_id) {
-        traceRows.push(this.row('ID Deposito Guira', this.toDisplay(order.deposit_id)));
+        traceRows.push(this.row('ID de Ingreso', this.toDisplay(order.deposit_id)));
       }
 
       // Fedwire IMAD — the reference the correspondent bank uses in traces and disputes
