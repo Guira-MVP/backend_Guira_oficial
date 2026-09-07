@@ -100,11 +100,11 @@ const FLOW_LABELS: Record<string, string> = {
   bolivia_to_wallet: 'Bolivia a cripto',
   world_to_bolivia: 'Exterior a Bolivia',
   wallet_to_wallet: 'Cripto a cripto',
-  fiat_bo_to_bridge_wallet: 'Bolivia a Guira',
-  crypto_to_bridge_wallet: 'Cripto a Guira',
-  bridge_wallet_to_fiat_bo: 'Guira a Bolivia',
-  bridge_wallet_to_crypto: 'Guira a cripto',
-  bridge_wallet_to_fiat_us: 'Guira al exterior',
+  fiat_bo_to_bridge_wallet: 'Bolivia a saldo',
+  crypto_to_bridge_wallet: 'Cripto a saldo',
+  bridge_wallet_to_fiat_bo: 'Saldo a Bolivia',
+  bridge_wallet_to_crypto: 'Saldo a cripto',
+  bridge_wallet_to_fiat_us: 'Saldo al exterior',
   wallet_to_world: 'Wallet externa al exterior',
   va_deposit: 'Ingreso por cuenta virtual',
 };
@@ -121,7 +121,7 @@ function sanitizeCellValue<T>(val: T): T {
 }
 
 function buildRows(orders: PaymentOrder[], suppliersMap: Map<string, string>, noSupplierFallback?: string) {
-  const fallback = noSupplierFallback || 'Sin proveedor';
+  const fallback = noSupplierFallback || 'Sin beneficiario';
   return orders.map((o) => ({
     id: o.id.slice(0, 8).toUpperCase(),
     fecha: formatDate(o.created_at),
@@ -255,12 +255,12 @@ export class ExportService {
       { key: 'fecha',         label: 'Fecha',             width: 20 },
       { key: 'flujo',         label: 'Flujo',             width: 26 },
       { key: 'estado',        label: 'Estado',            width: 20 },
-      { key: 'proveedor',     label: 'Proveedor',         width: 22 },
+      { key: 'proveedor',     label: 'Beneficiario',      width: 22 },
       { key: 'moneda_origen', label: 'Moneda Origen',     width: 15 },
       { key: 'monto_origen',  label: 'Monto Origen',      width: 16 },
       { key: 'moneda_destino',label: 'Moneda Destino',    width: 15 },
       { key: 'monto_destino', label: 'Monto Destino',     width: 16 },
-      { key: 'fee',           label: 'Comisión',          width: 14 },
+      { key: 'fee',           label: 'Tarifa',            width: 14 },
       { key: 'tipo_cambio',   label: 'Tipo de Cambio',    width: 16 },
     ];
 

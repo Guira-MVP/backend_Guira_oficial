@@ -35,7 +35,7 @@ const COLORS = {
 //  y HACIA DÓNDE, no el nombre comercial del flujo.
 //
 //  Cuatro familias, en este orden:
-//    · Pago Internacional a Proveedor  — salida hacia un tercero
+//    · Pago Internacional a Beneficiario — salida hacia un tercero
 //    · Recepción de Fondos del Exterior — entrada desde el exterior
 //    · Constitución de Fondos           — el cliente fondea su cuenta
 //    · Retiro de Fondos                 — el cliente retira a un destino propio
@@ -50,7 +50,7 @@ const COLORS = {
 //  desbordar; al añadir entradas mucho más largas, revisar el header.
 // ═══════════════════════════════════════════════════════════
 const FLOW_LABELS: Record<string, string> = {
-  // ── Pago Internacional a Proveedor ──
+  // ── Pago Internacional a Beneficiario ──
   bolivia_to_world: 'Pago Internacional a Beneficiario — Transferencia Bancaria',
   bolivia_to_wallet: 'Pago Internacional a Beneficiario — Liquidación en Activos Virtuales',
   wallet_to_wallet: 'Pago Internacional a Beneficiario — Transferencia entre Activos Virtuales',
@@ -387,10 +387,10 @@ export class PdfService {
       const psavAddress = order.source_address
         || this.readMeta(order.bridge_source_deposit_instructions, 'to_address');
       if (psavAddress) {
-        rows.push(this.linkRow('Direccion PSAV Guira', this.truncateAddress(psavAddress), this.buildExplorerUrl(psavAddress, order.source_network, 'address')));
+        rows.push(this.linkRow('Dirección PSAV', this.truncateAddress(psavAddress), this.buildExplorerUrl(psavAddress, order.source_network, 'address')));
       }
       if (order.source_network) {
-        rows.push(this.row('Red de Salida Guira', this.toDisplay(order.source_network)));
+        rows.push(this.row('Red de Salida', this.toDisplay(order.source_network)));
       }
       // exchange_fee = Bridge's own conversion fee (show only when non-zero)
       const bridgeFee = Number(order.exchange_fee);
@@ -421,7 +421,7 @@ export class PdfService {
     const bd: any = supplier?.bank_details ?? {};
 
     if (ft === 'bolivia_to_world') {
-      if (supplier?.name) rows.push(this.row('Proveedor', this.toDisplay(supplier.name)));
+      if (supplier?.name) rows.push(this.row('Beneficiario', this.toDisplay(supplier.name)));
       if (order.destination_account_holder) rows.push(this.row('Titular', this.toDisplay(order.destination_account_holder)));
       if (supplier?.contact_email) rows.push(this.row('Email de Contacto', this.toDisplay(supplier.contact_email)));
       const rail = (supplier?.payment_rail ?? '').toLowerCase();
@@ -432,7 +432,7 @@ export class PdfService {
       if (holder) rows.push(this.row('Titular', this.toDisplay(holder)));
       rows.push(this.row('País', 'Bolivia'));
     } else if (['bolivia_to_wallet', 'wallet_to_wallet'].includes(ft)) {
-      if (supplier?.name) rows.push(this.row('Proveedor', this.toDisplay(supplier.name)));
+      if (supplier?.name) rows.push(this.row('Beneficiario', this.toDisplay(supplier.name)));
       if (supplier?.contact_email) rows.push(this.row('Email de Contacto', this.toDisplay(supplier.contact_email)));
     } else if (['fiat_bo_to_bridge_wallet', 'crypto_to_bridge_wallet'].includes(ft)) {
       rows.push(this.row('Titular', 'Cuenta Propia'));
@@ -443,7 +443,7 @@ export class PdfService {
     } else if (ft === 'bridge_wallet_to_fiat_us' || ft === 'wallet_to_world') {
       // Mismo destino en ambos flujos: la cuenta bancaria del proveedor.
       // Solo cambia el origen de los fondos (saldo del cliente vs. wallet externa).
-      if (supplier?.name) rows.push(this.row('Proveedor', this.toDisplay(supplier.name)));
+      if (supplier?.name) rows.push(this.row('Beneficiario', this.toDisplay(supplier.name)));
       const holder = order.destination_account_holder
         || bd.business_name
         || [bd.first_name, bd.last_name].filter(Boolean).join(' ')
@@ -454,7 +454,7 @@ export class PdfService {
       const country = rail === 'sepa' ? bd.iban_country : bd.address?.country;
       if (country) rows.push(this.row('País', this.resolveCountryName(country)));
     } else if (ft === 'bridge_wallet_to_crypto') {
-      if (supplier?.name) rows.push(this.row('Proveedor', this.toDisplay(supplier.name)));
+      if (supplier?.name) rows.push(this.row('Beneficiario', this.toDisplay(supplier.name)));
       if (supplier?.contact_email) rows.push(this.row('Email de Contacto', this.toDisplay(supplier.contact_email)));
     }
 
@@ -847,7 +847,7 @@ export class PdfService {
 
       // Bridge Transfer ID — all Bridge flows
       if (order.bridge_transfer_id) {
-        traceRows.push(this.row('ID Transferencia Guira', this.toDisplay(order.bridge_transfer_id)));
+        traceRows.push(this.row('ID de Transferencia', this.toDisplay(order.bridge_transfer_id)));
       }
 
       // Bridge Deposit ID — va_deposit

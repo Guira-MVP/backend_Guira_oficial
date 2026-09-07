@@ -106,7 +106,7 @@ export class CreateVirtualAccountDto {
 
   @ApiPropertyOptional({
     description:
-      'Wallet interna de Guira como destino (si los fondos se quedan en plataforma)',
+      'Wallet interna del cliente como destino (si los fondos se acreditan en su saldo)',
   })
   @IsOptional()
   @IsUUID()
@@ -114,7 +114,7 @@ export class CreateVirtualAccountDto {
 
   @ApiPropertyOptional({
     description:
-      'Dirección de wallet externa (Binance, MetaMask, etc.). Si se proporciona, los fondos se envían fuera de Guira y NO incrementan el balance interno.',
+      'Dirección de wallet externa (Binance, MetaMask, etc.). Si se proporciona, los fondos se envían a esa wallet y NO se acreditan en el saldo del cliente.',
     example: '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18',
   })
   @IsOptional()

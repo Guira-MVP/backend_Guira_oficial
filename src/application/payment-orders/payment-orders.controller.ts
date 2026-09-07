@@ -560,7 +560,7 @@ export class AdminPaymentOrdersController {
   @Roles('staff', 'admin', 'super_admin')
   @ApiOperation({
     summary:
-      'Descargar el comprobante Guira en PDF de cualquier orden (el mismo que descarga el cliente)',
+      'Descargar el comprobante en PDF de cualquier orden (el mismo que descarga el cliente)',
   })
   async getOrderPdf(
     @Param('id', new ParseUUIDPipe()) id: string,
