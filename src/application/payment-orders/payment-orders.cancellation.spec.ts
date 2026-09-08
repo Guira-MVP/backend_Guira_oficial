@@ -94,6 +94,9 @@ const createService = (supabase: any, bridgeApi: any = {}) =>
     { emitOrderUpdated: jest.fn() } as any,
     {} as any, // emailService
     {} as any, // pdfService
+    // Switch por flujo de la puerta de revisión: estos tests ejercitan
+    // cancelaciones sobre expedientes ya creados, así que nunca se consulta.
+    { requiresReview: jest.fn().mockResolvedValue(true) } as any,
   );
 
 const buildOrder = (overrides: Record<string, unknown> = {}) => ({
@@ -233,9 +236,26 @@ describe('cancellation-policy', () => {
     }
   });
 
+  it('permite al cliente cancelar mientras el expediente espera revisión del staff', () => {
+    // Es la única ventana provablemente segura de los flujos wallet-ramp: no
+    // existe ningún transfer en Bridge todavía, solo una reserva de saldo.
+    for (const flow of [
+      'bridge_wallet_to_fiat_bo',
+      'bridge_wallet_to_crypto',
+      'bridge_wallet_to_fiat_us',
+      'wallet_to_world',
+    ]) {
+      expect(
+        evaluateClientCancellation({ flow_type: flow, status: 'pending_review' })
+          .allowed,
+      ).toBe(true);
+    }
+  });
+
   it('el staff puede cancelar hasta processing, nunca desde sent', () => {
     for (const status of [
       'created',
+      'pending_review',
       'waiting_deposit',
       'deposit_received',
       'processing',

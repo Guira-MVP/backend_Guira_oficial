@@ -43,11 +43,15 @@ import { ConfirmDepositDto } from './dto/confirm-deposit.dto';
 import { CancelOrderDto, AdminCancelOrderDto } from './dto/cancel-order.dto';
 import {
   ApproveOrderDto,
+  ApproveOrderReviewDto,
+  RejectOrderReviewDto,
   MarkSentDto,
   CompleteOrderDto,
   FailOrderDto,
 } from './dto/admin-order-action.dto';
 import { UpsertPsavAccountDto } from './dto/upsert-psav-account.dto';
+import { UpdateFlowReviewSettingDto } from './dto/flow-review-setting.dto';
+import { FlowReviewSettingsService } from './flow-review-settings.service';
 import {
   BRIDGE_RAMP_ON_ROUTES,
   BRIDGE_RAMP_OFF_ROUTES,
@@ -497,7 +501,39 @@ export class AdminPaymentOrdersController {
     private readonly psavService: PsavService,
     private readonly orderReviewService: OrderReviewService,
     private readonly orderPdfService: OrderPdfService,
+    private readonly flowReviewSettings: FlowReviewSettingsService,
   ) {}
+
+  // ── Switch de la puerta de revisión, flujo por flujo ──
+
+  @Get('flow-review-settings')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({
+    summary:
+      'Estado del switch de revisión de staff para cada flujo (activada / desactivada)',
+  })
+  listFlowReviewSettings() {
+    return this.flowReviewSettings.listSettings();
+  }
+
+  @Patch('flow-review-settings/:flowType')
+  @Roles('admin', 'super_admin')
+  @ApiOperation({
+    summary:
+      'Activar o desactivar la revisión de staff en un flujo. No afecta a los expedientes que ya están en revisión.',
+  })
+  updateFlowReviewSetting(
+    @Param('flowType') flowType: string,
+    @Body() dto: UpdateFlowReviewSettingDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.flowReviewSettings.updateSetting(
+      flowType,
+      dto.requires_staff_review,
+      user.id,
+      user.profile?.role ?? 'staff',
+    );
+  }
 
   // ── Listados ──
 
@@ -606,6 +642,44 @@ export class AdminPaymentOrdersController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.paymentOrdersService.approveOrder(id, user.id, dto);
+  }
+
+  // ── Puerta de revisión de staff (pending_review) ──
+  // Rutas propias en vez de extender :id/approve, que exige status
+  // 'deposit_received' Y requires_psav — condiciones que 3 de los 4 flujos con
+  // puerta no cumplen, así que reutilizarlo abriría un agujero en esa guarda.
+
+  @Post(':id/review-approve')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({
+    summary:
+      'Aprobar la revisión del expediente y crear el transfer en Bridge (pending_review → processing/waiting_deposit)',
+  })
+  approveOrderReviewStep(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: ApproveOrderReviewDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.paymentOrdersService.approveOrderReviewStep(id, user.id, dto);
+  }
+
+  @Post(':id/review-reject')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({
+    summary:
+      'Rechazar la revisión del expediente (pending_review → failed, libera la reserva de saldo)',
+  })
+  rejectOrderReviewStep(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: RejectOrderReviewDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    if (!dto.reason || dto.reason.trim().length < 10) {
+      throw new BadRequestException(
+        'El motivo del rechazo es obligatorio (mínimo 10 caracteres). El cliente lo verá.',
+      );
+    }
+    return this.paymentOrdersService.rejectOrderReviewStep(id, user.id, dto);
   }
 
   @Post(':id/mark-sent')

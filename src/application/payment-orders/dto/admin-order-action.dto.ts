@@ -22,6 +22,40 @@ export class ApproveOrderDto {
   receipt_url?: string;
 }
 
+/**
+ * Aprobación de la puerta de revisión de staff (pending_review → transfer).
+ *
+ * Igual que ApproveOrderDto, NO acepta valores financieros: la cotización quedó
+ * congelada al crear el expediente y la aprobación solo la honra.
+ */
+export class ApproveOrderReviewDto {
+  @ApiPropertyOptional({
+    description:
+      'Nota interna del staff sobre la revisión. Queda en notes y en audit_logs.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  notes?: string;
+}
+
+/** Rechazo de la puerta de revisión: cierra el expediente y libera la reserva. */
+export class RejectOrderReviewDto {
+  @ApiProperty({
+    description:
+      'Motivo del rechazo. Se muestra al cliente y queda en failure_reason.',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(2000)
+  reason: string;
+
+  @ApiPropertyOptional({ default: true })
+  @IsOptional()
+  @IsBoolean()
+  notify_user?: boolean;
+}
+
 export class MarkSentDto {
   @ApiProperty({ description: 'Hash de transacción o referencia bancaria' })
   @IsString()

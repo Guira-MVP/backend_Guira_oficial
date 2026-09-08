@@ -73,6 +73,7 @@ const FLOW_LABELS: Record<string, string> = {
 const STATUS_LABELS: Record<string, string> = {
   CREATED: 'Creado',
   PENDING: 'Pendiente',
+  PENDING_REVIEW: 'En Revisión',
   WAITING_DEPOSIT: 'Esperando Ingreso',
   DEPOSIT_RECEIVED: 'Ingreso Validado',
   PROCESSING: 'En Proceso',
@@ -203,7 +204,8 @@ export class PdfService {
     const s = status.toUpperCase();
     if (s === 'COMPLETED' || s === 'APPROVED') return COLORS.success;
     if (s === 'FAILED' || s === 'REJECTED' || s === 'CANCELLED') return COLORS.destructive;
-    if (s === 'PENDING' || s === 'WAITING_DEPOSIT') return COLORS.warning;
+    if (s === 'PENDING' || s === 'PENDING_REVIEW' || s === 'WAITING_DEPOSIT')
+      return COLORS.warning;
     if (s === 'PROCESSING' || s === 'SENT') return COLORS.primary;
     return COLORS.muted;
   }

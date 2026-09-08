@@ -73,15 +73,19 @@ const WALLET_RAMP_OUT_FLOWS = [
 ] as const;
 
 /**
- * Estados en los que el cliente puede cancelar, por grupo. Para wallet_ramp_out
- * la lista es vacía a propósito: 'created' existe apenas los milisegundos entre
- * el INSERT y la respuesta de Bridge, y cancelar en esa ventana puede pisar un
- * transfer que ya salió.
+ * Estados en los que el cliente puede cancelar, por grupo.
+ *
+ * Para wallet_ramp_out la lista solo contiene 'pending_review'. 'created' sigue
+ * excluido a propósito: existe apenas los milisegundos entre el INSERT y la
+ * respuesta de Bridge, y cancelar en esa ventana puede pisar un transfer que ya
+ * salió. 'pending_review', en cambio, es la única ventana provablemente segura:
+ * el expediente espera a un humano y NO existe ningún transfer en Bridge, así
+ * que no hay nada que pisar — solo una reserva de saldo que se libera.
  */
 const CLIENT_CANCELLABLE_STATUSES: Record<CancellationGroup, string[]> = {
   fiat_in_bo: ['created', 'waiting_deposit'],
-  crypto_in: ['created', 'waiting_deposit'],
-  wallet_ramp_out: [],
+  crypto_in: ['created', 'pending_review', 'waiting_deposit'],
+  wallet_ramp_out: ['pending_review'],
 };
 
 /**
@@ -92,6 +96,7 @@ const CLIENT_CANCELLABLE_STATUSES: Record<CancellationGroup, string[]> = {
 const STAFF_CANCELLABLE_STATUSES = [
   'created',
   'pending',
+  'pending_review',
   'waiting_deposit',
   'deposit_received',
   'processing',
@@ -176,7 +181,11 @@ export function evaluateClientCancellation(
     };
   }
 
-  if (group === 'wallet_ramp_out') {
+  // Los off-ramp de wallet mueven fondos del saldo del cliente al crearse, así
+  // que como regla no se cancelan. La excepción es 'pending_review': ahí el
+  // expediente todavía no generó ningún transfer en Bridge y solo hay una
+  // reserva de saldo, que se devuelve al cancelar.
+  if (group === 'wallet_ramp_out' && input.status !== 'pending_review') {
     return {
       allowed: false,
       reason_code: 'FLOW_NOT_CANCELLABLE',

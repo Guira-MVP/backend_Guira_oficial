@@ -2624,6 +2624,11 @@ export class WebhooksService {
       .eq('bridge_transfer_id', bridgeTransferId)
       .in('status', [
         'pending',
+        // Mismo motivo que 'pending': si el proceso cae entre la respuesta de
+        // Bridge y el UPDATE al aprobar la revisión, la orden se queda en
+        // 'pending_review' con un transfer real ya creado. Sin este estado en el
+        // filtro, el webhook la trataría como orden cancelada.
+        'pending_review',
         'waiting_deposit',
         'processing',
         'deposit_received',
@@ -3137,7 +3142,13 @@ export class WebhooksService {
         'id, user_id, wallet_id, amount, fee_amount, currency, flow_type, deposit_reference_code',
       )
       .eq('bridge_transfer_id', bridgeTransferId)
-      .in('status', ['pending', 'processing', 'created', 'waiting_deposit'])
+      .in('status', [
+        'pending',
+        'pending_review',
+        'processing',
+        'created',
+        'waiting_deposit',
+      ])
       .maybeSingle();
 
     // Flujos off-ramp de wallet reservan en source_currency (USDC), no en destination_currency.

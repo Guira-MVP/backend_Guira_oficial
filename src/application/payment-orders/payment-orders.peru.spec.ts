@@ -60,6 +60,14 @@ describe('PaymentOrdersService — pago a Perú (PSAV + Pythas)', () => {
       wallets: { id: 'wallet-1', network: 'solana', provider_wallet_id: 'bw_1' },
       balances: { available_amount: '5000' },
       va_source_currency_settings: { is_active_supplier: true },
+      // La relee el ejecutor al aprobar la revisión, por si la cuenta PSAV
+      // cambió de dirección o se desactivó mientras el expediente esperaba.
+      psav_accounts: {
+        id: 'psav-acc-1',
+        crypto_address: PSAV_ADDRESS,
+        crypto_network: 'solana',
+        is_active: true,
+      },
     };
 
     const from = jest.fn((table: string) => {
@@ -102,6 +110,7 @@ describe('PaymentOrdersService — pago a Perú (PSAV + Pythas)', () => {
     const psavService = {
       getActiveCryptoAccountsForUser: jest.fn().mockResolvedValue([
         {
+          id: 'psav-acc-1',
           currency: 'USDC',
           crypto_network: 'solana',
           crypto_address: PSAV_ADDRESS,
@@ -122,6 +131,11 @@ describe('PaymentOrdersService — pago a Perú (PSAV + Pythas)', () => {
       { emitOrderCreated: jest.fn(), emitOrderUpdated: jest.fn() } as any,
       {} as any, // emailService
       {} as any, // pdfService
+      // Switch por flujo de la puerta de revision: en los tests la puerta se
+      // controla pasando `opts` a los creadores, asi que el servicio nunca la
+      // consulta. requiresReview solo se usa desde createInterbankOrder /
+      // createWalletRampOrder, que estos specs no ejercitan.
+      { requiresReview: jest.fn().mockResolvedValue(true) } as any,
     ) as any;
 
     return { service, bridgePost, calculateFee, psavService, getRate };
@@ -136,11 +150,19 @@ describe('PaymentOrdersService — pago a Perú (PSAV + Pythas)', () => {
     business_purpose: 'Pago de factura 00123',
   } as any;
 
+  /**
+   * Camino sin puerta de revisión: es el que recorre createOrderFromReview
+   * cuando el staff ya revisó el expediente en la cola de order_review_requests.
+   * Usarlo aquí preserva la cobertura histórica del payload y, de paso, es la
+   * regresión de "un expediente ya revisado no se revisa dos veces".
+   */
+  const bypass = { skipReviewGate: true };
+
   it('transfiere a la wallet del PSAV, no a una external account de Bridge', async () => {
     const supabase = makeSupabase(PERU_SUPPLIER);
     const { service, bridgePost } = makeService(supabase);
 
-    await service.createBridgeWalletToFiatUs('user-1', dto);
+    await service.createBridgeWalletToFiatUs('user-1', dto, bypass);
 
     expect(bridgePost).toHaveBeenCalledTimes(1);
     const [path, payload, idempotencyKey] = bridgePost.mock.calls[0];
@@ -206,7 +228,7 @@ describe('PaymentOrdersService — pago a Perú (PSAV + Pythas)', () => {
     const supabase = makeSupabase(PERU_SUPPLIER);
     const { service } = makeService(supabase);
 
-    await service.createBridgeWalletToFiatUs('user-1', dto);
+    await service.createBridgeWalletToFiatUs('user-1', dto, bypass);
 
     expect(supabase.rpc).toHaveBeenCalledWith('reserve_balance', {
       p_user_id: 'user-1',
@@ -231,10 +253,11 @@ describe('PaymentOrdersService — pago a Perú (PSAV + Pythas)', () => {
     const supabase = makeSupabase(ACH_SUPPLIER);
     const { service, bridgePost, psavService } = makeService(supabase);
 
-    await service.createBridgeWalletToFiatUs('user-1', {
-      ...dto,
-      supplier_id: 'supplier-us',
-    });
+    await service.createBridgeWalletToFiatUs(
+      'user-1',
+      { ...dto, supplier_id: 'supplier-us' },
+      bypass,
+    );
 
     const [, payload, idempotencyKey] = bridgePost.mock.calls[0];
     expect(idempotencyKey).toMatch(/^po_w2f_/);
@@ -242,5 +265,107 @@ describe('PaymentOrdersService — pago a Perú (PSAV + Pythas)', () => {
     expect(payload.destination.to_address).toBeUndefined();
     // La ruta Bridge no toca al PSAV
     expect(psavService.getActiveCryptoAccountsForUser).not.toHaveBeenCalled();
+  });
+
+  // ── Puerta de revisión de staff ──
+
+  it('con la puerta activa NO llama a Bridge: el expediente espera revisión', async () => {
+    const supabase = makeSupabase(PERU_SUPPLIER);
+    const { service, bridgePost } = makeService(supabase);
+
+    const order = await service.createBridgeWalletToFiatUs('user-1', dto);
+
+    expect(bridgePost).not.toHaveBeenCalled();
+    expect(order.status).toBe('pending_review');
+    // La reserva SÍ se hace al crear: bloquea los fondos mientras el staff mira.
+    expect(supabase.rpc).toHaveBeenCalledWith('reserve_balance', {
+      p_user_id: 'user-1',
+      p_currency: 'USDC',
+      p_amount: 1000,
+    });
+  });
+
+  it('guarda kind="bridge_wallet_to_peru_psav" aunque flow_type sea bridge_wallet_to_fiat_us', async () => {
+    // El dispatcher discrimina por ctx.kind, NUNCA por flow_type: enrutar este
+    // expediente por su flow_type lo mandaría al ejecutor de cuentas externas y
+    // Bridge recibiría un external_account_id que no existe.
+    const supabase = makeSupabase(PERU_SUPPLIER);
+    const { service } = makeService(supabase);
+
+    const order = await service.createBridgeWalletToFiatUs('user-1', dto);
+
+    expect(order.flow_type).toBe('bridge_wallet_to_fiat_us');
+    expect(order.bridge_execution_context).toMatchObject({
+      kind: 'bridge_wallet_to_peru_psav',
+      psav_account_id: 'psav-acc-1',
+      psav_dest_currency: 'USDC',
+      source_currency: 'USDC',
+      total_needed: 1000,
+    });
+  });
+
+  it('un proveedor ACH guarda kind="bridge_wallet_to_fiat_us", no el de Perú', async () => {
+    const supabase = makeSupabase(ACH_SUPPLIER);
+    const { service } = makeService(supabase);
+
+    const order = await service.createBridgeWalletToFiatUs('user-1', {
+      ...dto,
+      supplier_id: 'supplier-us',
+    });
+
+    expect(order.bridge_execution_context).toMatchObject({
+      kind: 'bridge_wallet_to_fiat_us',
+      external_account_local_id: 'ext-local-1',
+      supplier_payment_rail: 'ach',
+    });
+  });
+
+  it('al aprobar, el expediente peruano liquida contra el PSAV con la key po_pe_', async () => {
+    const supabase = makeSupabase(PERU_SUPPLIER);
+    const { service, bridgePost } = makeService(supabase);
+
+    const order = await service.createBridgeWalletToFiatUs('user-1', dto);
+    const result = await service.executeReviewedBridgeLeg(
+      { ...order, id: 'order-pe-1', user_id: 'user-1', wallet_id: 'wallet-1' },
+      { onFailure: 'return_to_review' },
+    );
+
+    expect(result.status).toBe('processing');
+    const [, payload, idempotencyKey] = bridgePost.mock.calls[0];
+    expect(idempotencyKey).toBe('po_pe_order-pe-1');
+    expect(payload.destination).toEqual({
+      payment_rail: 'solana',
+      currency: 'usdc',
+      to_address: PSAV_ADDRESS,
+    });
+    expect(payload.destination.external_account_id).toBeUndefined();
+  });
+
+  it('rechaza aprobar si la cuenta PSAV se desactivó durante la revisión', async () => {
+    // Enviar a una dirección obsoleta es dinero perdido: mejor que el staff
+    // rechace el expediente y el cliente cree uno nuevo.
+    const supabase = makeSupabase(PERU_SUPPLIER);
+    const { service, bridgePost } = makeService(supabase);
+
+    const order = await service.createBridgeWalletToFiatUs('user-1', dto);
+
+    const originalFrom = supabase.from;
+    supabase.from = jest.fn((table: string) => {
+      const query = originalFrom(table);
+      if (table === 'psav_accounts') {
+        query.maybeSingle = jest
+          .fn()
+          .mockResolvedValue({ data: { id: 'psav-acc-1', is_active: false }, error: null });
+      }
+      return query;
+    });
+
+    await expect(
+      service.executeReviewedBridgeLeg(
+        { ...order, id: 'order-pe-1', user_id: 'user-1', wallet_id: 'wallet-1' },
+        { onFailure: 'return_to_review' },
+      ),
+    ).rejects.toThrow(/revisión|activa/i);
+    expect(bridgePost).not.toHaveBeenCalled();
   });
 });
