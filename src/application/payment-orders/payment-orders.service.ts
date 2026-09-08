@@ -3453,7 +3453,7 @@ export class PaymentOrdersService {
 
     if (!wallet) {
       throw new NotFoundException(
-        'No se encontró una billetera activa para asociar el expediente.',
+        'No se encontró una cuenta activa para asociar el expediente.',
       );
     }
 
