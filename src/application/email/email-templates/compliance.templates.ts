@@ -26,7 +26,7 @@ function greeting(name?: string | null): string {
 export function buildComplianceApprovedEmail(
   params: ComplianceEmailParams,
 ): ComplianceEmailContent {
-  const subject = '¡Tu cuenta Guira ha sido verificada!';
+  const subject = '¡Tu cuenta ha sido verificada!';
   const intro = greeting(params.name);
   const message =
     'Tu identidad fue verificada exitosamente. Ya puedes usar todos los servicios de Guira.';
@@ -138,7 +138,7 @@ export function buildComplianceCorrectionsRequestedEmail(
       <p style="margin:0;">${escapeHtml(reason)}</p>
       ${requiredActionsHtml}
       ${fieldObservationsHtml}
-      <p style="margin:28px 0 0;">Inicia sesión en tu cuenta de Guira para corregir y reenviar tu información.</p>
+      <p style="margin:28px 0 0;">Inicia sesión en tu cuenta para corregir y reenviar tu información.</p>
       ${renderButton('Ir a Guira', APP_URL)}
     `,
   });
@@ -152,7 +152,7 @@ export function buildComplianceCorrectionsRequestedEmail(
         .join('\n')}`
     : '';
 
-  const text = `${intro}\n\n${message}\n\n${reason}${requiredActionsText}${fieldObservationsText}\n\nInicia sesión en tu cuenta de Guira para corregir y reenviar tu información.`;
+  const text = `${intro}\n\n${message}\n\n${reason}${requiredActionsText}${fieldObservationsText}\n\nInicia sesión en tu cuenta para corregir y reenviar tu información.`;
 
   return { subject, html, text };
 }

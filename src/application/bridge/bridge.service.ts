@@ -139,7 +139,7 @@ export class BridgeService {
     if (dto.destination_wallet_id && dto.destination_address) {
       throw new BadRequestException(
         'No puedes especificar destination_wallet_id y destination_address al mismo tiempo. ' +
-          'Usa destination_wallet_id para fondear tu wallet en Guira, o destination_address para enviar a una wallet externa (Binance, MetaMask, etc.).',
+          'Usa destination_wallet_id para acreditar en tu saldo, o destination_address para enviar a una wallet externa (Binance, MetaMask, etc.).',
       );
     }
 
