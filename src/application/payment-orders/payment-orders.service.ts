@@ -5,6 +5,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  ServiceUnavailableException,
   Logger,
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
@@ -31,12 +32,21 @@ import {
   WalletRampFlowType,
 } from './dto/create-wallet-ramp-order.dto';
 import { ConfirmDepositDto } from './dto/confirm-deposit.dto';
+import { CancelOrderDto, AdminCancelOrderDto } from './dto/cancel-order.dto';
 import {
   ApproveOrderDto,
   MarkSentDto,
   CompleteOrderDto,
   FailOrderDto,
 } from './dto/admin-order-action.dto';
+import {
+  CancellationDecision,
+  evaluateClientCancellation,
+  evaluateStaffCancellation,
+  requiresBridgeStateCheck,
+  requiresNoDepositDeclaration,
+  defaultClientCancellationReason,
+} from './cancellation-policy';
 import { ALLOWED_NETWORKS } from '../../common/constants/guira-crypto-config.constants';
 import {
   isValidOnRampSourceForDest,
@@ -151,6 +161,57 @@ export class PaymentOrdersService {
     } catch (err) {
       this.logger.error(
         `Error enviando email de orden ${status} (${order.id}): ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Avisa a operaciones de que un cliente canceló un expediente con depósito
+   * fiat en Bolivia.
+   *
+   * En esos flujos el cliente transfiere BOB a la cuenta del PSAV por fuera de
+   * la plataforma: el sistema no puede saber si el dinero entró. La cancelación
+   * se autoriza con la declaración del cliente, pero alguien tiene que verificar
+   * la cuenta. Fire-and-forget: nunca bloquea la cancelación.
+   */
+  private async notifyOpsCancellationForReconciliation(
+    order: {
+      id: string;
+      flow_type: string | null;
+      amount: number | string | null;
+      currency: string | null;
+    },
+    reason: string,
+  ): Promise<void> {
+    try {
+      const { data: staff } = await this.supabase
+        .from('profiles')
+        .select('id')
+        .in('role', ['staff', 'admin', 'super_admin'])
+        .eq('is_active', true)
+        .limit(5);
+
+      if (!staff?.length) return;
+
+      const shortId = order.id.slice(0, 8);
+      const amountLabel =
+        `${order.amount ?? 0} ${(order.currency ?? '').toUpperCase()}`.trim();
+
+      await this.supabase.from('notifications').insert(
+        staff.map((member) => ({
+          user_id: member.id,
+          type: 'alert',
+          title: 'Cancelación con depósito por verificar',
+          message:
+            `El expediente ${shortId} (${order.flow_type}, ${amountLabel}) fue cancelado por el cliente. ` +
+            `Verificar que no haya ingreso en la cuenta PSAV antes de dar el caso por cerrado. Motivo: ${reason}`,
+          reference_type: 'payment_order',
+          reference_id: order.id,
+        })),
+      );
+    } catch (err) {
+      this.logger.error(
+        `Error avisando a operaciones de la cancelación ${order.id}: ${(err as Error).message}`,
       );
     }
   }
@@ -3666,10 +3727,35 @@ export class PaymentOrdersService {
   //  USER QUERIES & ACTIONS
   // ═══════════════════════════════════════════════
 
-  /** Lista órdenes del usuario autenticado. */
+  /**
+   * Serializa una orden para el cliente.
+   *
+   * `can_cancel` se calcula aquí, con la misma política que aplica `cancelOrder`,
+   * para que el frontend no vuelva a decidirlo por su cuenta: antes la tabla de
+   * expedientes tenía su propia regla y mostraba "Cancelar" en estados donde el
+   * backend siempre respondía 400.
+   *
+   * La decisión no consulta a Bridge (sería una llamada externa por fila): en los
+   * flujos cripto-in el botón puede aparecer y la cancelación rechazarse después
+   * con FUNDS_IN_FLIGHT. Es el único caso donde `can_cancel: true` no garantiza
+   * éxito, y el frontend lo maneja mostrando el motivo del rechazo.
+   */
   private toClientOrder(order: any) {
     const { bridge_receipt_url: _br, ...rest } = order ?? {};
-    return rest;
+
+    const decision = evaluateClientCancellation({
+      flow_type: rest.flow_type,
+      status: rest.status,
+    });
+
+    return {
+      ...rest,
+      can_cancel: decision.allowed,
+      cancel_blocked_reason: decision.message,
+      cancel_requires_no_deposit_declaration: requiresNoDepositDeclaration(
+        rest.flow_type,
+      ),
+    };
   }
 
   async getMyOrders(
@@ -3902,8 +3988,43 @@ export class PaymentOrdersService {
     return updated;
   }
 
-  /** El usuario cancela su orden (solo si está en waiting_deposit). */
-  async cancelOrder(userId: string, orderId: string) {
+  /**
+   * Traduce una decisión de la política de cancelación a la excepción HTTP
+   * correspondiente, conservando el `code` para que el frontend pueda mostrar
+   * el mensaje adecuado sin parsear texto.
+   */
+  private buildCancellationError(decision: CancellationDecision): Error {
+    const body = {
+      code: decision.reason_code,
+      message: decision.message,
+    };
+
+    switch (decision.reason_code) {
+      case 'FUNDS_IN_FLIGHT':
+        return new ConflictException(body);
+      case 'FLOW_NOT_CANCELLABLE':
+        return new ForbiddenException(body);
+      default:
+        return new BadRequestException(body);
+    }
+  }
+
+  /**
+   * El cliente cancela su expediente.
+   *
+   * La política de qué estados admiten cancelación vive en `cancellation-policy.ts`
+   * y la comparten el serializador (`can_cancel`) y el frontend. Aquí se aplica en
+   * tres pasos, en este orden y no en otro:
+   *
+   *   1. Decisión con el estado local (grupo de flujo + status + declaración del DTO).
+   *   2. Verificación contra Bridge: estado fresco y DELETE bloqueante. Si Bridge no
+   *      confirma la cancelación NO se cancela en Guira. Antes este error se tragaba
+   *      y la orden quedaba 'cancelled' mientras los fondos seguían camino al destino,
+   *      donde el webhook `transfer.complete` ya no la reconocía.
+   *   3. Compare-and-set del status. Los ledgers y la reserva se revierten SOLO si el
+   *      CAS ganó: al revés, una carrera liberaría saldo de una orden todavía viva.
+   */
+  async cancelOrder(userId: string, orderId: string, dto: CancelOrderDto = {}) {
     const { data: order } = await this.supabase
       .from('payment_orders')
       .select(
@@ -3915,18 +4036,59 @@ export class PaymentOrdersService {
 
     if (!order) throw new NotFoundException('Orden no encontrada');
 
-    const cancellableStatuses = ['created', 'waiting_deposit'];
-    if (!cancellableStatuses.includes(order.status)) {
-      throw new BadRequestException(
-        `No se puede cancelar una orden en estado "${order.status}"`,
-      );
+    // ── 1. Política con el estado local ──
+    // confirm_no_deposit se normaliza a false: en los flujos fiat BO la ausencia
+    // de declaración es un rechazo explícito, no un "no aplica".
+    const localDecision = evaluateClientCancellation({
+      flow_type: order.flow_type,
+      status: order.status,
+      confirm_no_deposit: dto.confirm_no_deposit ?? false,
+    });
+    if (!localDecision.allowed) {
+      throw this.buildCancellationError(localDecision);
     }
 
-    // 0. Cancelar el transfer en Bridge (si existe y está en awaiting_funds)
-    // Bridge solo permite DELETE cuando el transfer está en awaiting_funds.
-    // Si falla (transfer ya procesado, Bridge caído, etc.) no bloqueamos
-    // la cancelación local — el usuario no debe quedar atrapado.
+    // ── 2. Verificación contra Bridge ──
     if (order.bridge_transfer_id) {
+      // 2a. Estado fresco: solo decide en los flujos donde el cliente envía
+      // cripto a una dirección de Bridge (en los fiat BO el transfer lo funde
+      // el PSAV mucho después, así que su estado no dice nada del depósito).
+      if (requiresBridgeStateCheck(order.flow_type)) {
+        let freshState: string | null = null;
+        try {
+          const transfer = await this.bridgeApi.get<Record<string, unknown>>(
+            `/v0/transfers/${order.bridge_transfer_id}`,
+          );
+          freshState = (transfer?.state as string) ?? null;
+        } catch (err: any) {
+          // Bridge caído o inaccesible: NO cancelar a ciegas. Cancelar sin saber
+          // si los fondos llegaron es exactamente el fallo que este bloque evita.
+          this.logger.error(
+            `❌ No se pudo consultar el transfer ${order.bridge_transfer_id} antes de cancelar la orden ${orderId}: ${err?.message ?? err}`,
+          );
+          throw new ServiceUnavailableException({
+            code: 'BRIDGE_UNAVAILABLE',
+            message:
+              'No pudimos verificar el estado de tus fondos con el proveedor. Vuelve a intentarlo en unos minutos.',
+          });
+        }
+
+        const freshDecision = evaluateClientCancellation({
+          flow_type: order.flow_type,
+          status: order.status,
+          bridge_state: freshState,
+          confirm_no_deposit: dto.confirm_no_deposit ?? false,
+        });
+        if (!freshDecision.allowed) {
+          this.logger.warn(
+            `⚠️ Cancelación rechazada para la orden ${orderId}: Bridge reporta state="${freshState}" (${freshDecision.reason_code})`,
+          );
+          throw this.buildCancellationError(freshDecision);
+        }
+      }
+
+      // 2b. DELETE bloqueante. Bridge solo lo acepta en awaiting_funds; si
+      // responde error, el transfer ya se movió y la orden debe seguir viva.
       try {
         await this.bridgeApi.delete(
           `/v0/transfers/${order.bridge_transfer_id}`,
@@ -3935,10 +4097,15 @@ export class PaymentOrdersService {
           `🗑️ Transfer Bridge cancelado: ${order.bridge_transfer_id} (orden ${orderId})`,
         );
       } catch (err: any) {
-        // No lanzar — la cancelación en Guira debe proseguir
-        this.logger.warn(
-          `⚠️ No se pudo cancelar transfer Bridge ${order.bridge_transfer_id}: ${err?.message ?? err}`,
+        this.logger.error(
+          `❌ Bridge rechazó la cancelación del transfer ${order.bridge_transfer_id} (orden ${orderId}): ${err?.message ?? err}. ` +
+            `La orden NO se cancela en Guira para no dejar fondos huérfanos.`,
         );
+        throw new ConflictException({
+          code: 'BRIDGE_DELETE_FAILED',
+          message:
+            'No pudimos cancelar la operación con el proveedor: es probable que los fondos ya estén en camino. El expediente sigue activo; contacta a soporte si necesitas revertirlo.',
+        });
       }
 
       // Actualizar estado en bridge_transfers local
@@ -3948,7 +4115,44 @@ export class PaymentOrdersService {
         .eq('bridge_transfer_id', order.bridge_transfer_id);
     }
 
-    // 1. Manejar ledger entries 'pending' de esta orden
+    // ── 3. Compare-and-set del status ──
+    // El .eq('status', order.status) cierra la carrera con el webhook y con la
+    // creación de flujos wallet-ramp: si el estado cambió desde la lectura, este
+    // UPDATE no afecta filas y salimos sin tocar saldos.
+    const cancellationReason = dto.reason?.trim()
+      ? `${defaultClientCancellationReason(order.flow_type)} — ${dto.reason.trim()}`
+      : defaultClientCancellationReason(order.flow_type);
+
+    const { data: updated, error: cancelError } = await this.supabase
+      .from('payment_orders')
+      .update({
+        status: 'cancelled',
+        cancelled_at: new Date().toISOString(),
+        cancelled_by: userId,
+        cancelled_by_role: 'client',
+        cancellation_reason: cancellationReason,
+      })
+      .eq('id', orderId)
+      .eq('user_id', userId)
+      .eq('status', order.status)
+      .select()
+      .maybeSingle();
+
+    if (cancelError) throwDbError(cancelError);
+
+    if (!updated) {
+      this.logger.warn(
+        `⚠️ CAS de cancelación perdido para la orden ${orderId}: el estado cambió desde "${order.status}" durante la operación.`,
+      );
+      throw new ConflictException({
+        code: 'ORDER_STATE_CHANGED',
+        message:
+          'El expediente cambió de estado mientras procesábamos la cancelación. Actualiza la página y vuelve a revisarlo.',
+      });
+    }
+
+    // ── 4. Reverso de ledgers y reservas (solo con el CAS ganado) ──
+    // 4.1 Manejar ledger entries 'pending' de esta orden
     // NOTA: el check constraint de ledger_entries solo acepta: pending | settled | failed | reversed
     // 'reversed' es el estado correcto para entradas canceladas por el usuario (no error técnico).
     const { data: pendingLedgers } = await this.supabase
@@ -3978,7 +4182,7 @@ export class PaymentOrdersService {
       }
     }
 
-    // 2. Manejar ledgers 'settled' (es decir, el balance ya fue deducto definitivamente)
+    // 4.2 Manejar ledgers 'settled' (es decir, el balance ya fue deducto definitivamente)
     // Para devoluciones en este punto, necesitamos emitir un reembolso (credit).
     const { data: settledLedgers } = await this.supabase
       .from('ledger_entries')
@@ -4012,15 +4216,38 @@ export class PaymentOrdersService {
       }
     }
 
-    const { data: updated, error } = await this.supabase
-      .from('payment_orders')
-      .update({ status: 'cancelled' })
-      .eq('id', orderId)
-      .eq('user_id', userId)
-      .select()
-      .single();
+    // ── 5. Auditoría y avisos ──
+    await this.supabase.from('audit_logs').insert({
+      performed_by: userId,
+      role: 'client',
+      action: 'CANCEL_PAYMENT_ORDER',
+      table_name: 'payment_orders',
+      record_id: orderId,
+      previous_values: { status: order.status },
+      new_values: {
+        status: 'cancelled',
+        cancelled_by_role: 'client',
+        confirm_no_deposit: dto.confirm_no_deposit ?? false,
+      },
+      reason: cancellationReason,
+      source: 'client_app',
+    });
 
-    if (error) throwDbError(error);
+    await this.supabase.from('activity_logs').insert({
+      user_id: order.user_id,
+      action: 'PAYMENT_ORDER_CANCELLED',
+      description: `Expediente ${orderId} (${order.flow_type}) cancelado por el cliente. Motivo: ${cancellationReason}`,
+    });
+
+    // En los flujos con depósito fiat en Bolivia el dinero puede estar ya en la
+    // cuenta del PSAV sin que el sistema pueda saberlo: operaciones tiene que
+    // conciliar a mano. El aviso es best-effort, no bloquea la cancelación.
+    if (requiresNoDepositDeclaration(order.flow_type)) {
+      void this.notifyOpsCancellationForReconciliation(
+        order,
+        cancellationReason,
+      );
+    }
 
     // Notificar al usuario y al staff del cambio de estado
     this.ordersGateway.emitOrderUpdated(updated.user_id, {
@@ -5035,6 +5262,169 @@ export class PaymentOrdersService {
     });
 
     // Notificar al usuario y al staff del cambio de estado
+    this.ordersGateway.emitOrderUpdated(updated.user_id, {
+      id: updated.id,
+      user_id: updated.user_id,
+      status: updated.status,
+      flow_type: updated.flow_type,
+      updated_at: new Date().toISOString(),
+    });
+
+    return updated;
+  }
+
+  /**
+   * El staff cancela un expediente desde el panel de operaciones.
+   *
+   * Existe porque hasta ahora la única salida operativa era `failOrder`, que
+   * marca la orden como fallida: una cancelación a pedido del cliente quedaba
+   * registrada como error técnico y ensuciaba las métricas.
+   *
+   * A diferencia de la cancelación de cliente, el staff sí puede cancelar con
+   * los fondos en tránsito (`deposit_received`, `processing`) porque tiene el
+   * contexto para conciliar. Lo que no puede es cancelar algo ya enviado o
+   * completado: ahí el reverso es operativo, no de sistema.
+   */
+  async cancelOrderByStaff(
+    orderId: string,
+    actorId: string,
+    dto: AdminCancelOrderDto,
+  ) {
+    const { data: order } = await this.supabase
+      .from('payment_orders')
+      .select('*')
+      .eq('id', orderId)
+      .single();
+
+    if (!order) throw new NotFoundException('Orden no encontrada');
+
+    const decision = evaluateStaffCancellation(order.status);
+    if (!decision.allowed) {
+      throw this.buildCancellationError(decision);
+    }
+
+    // Compare-and-set, igual que en la cancelación de cliente: si el webhook
+    // movió la orden mientras el staff decidía, no se toca nada.
+    const { data: updated, error } = await this.supabase
+      .from('payment_orders')
+      .update({
+        status: 'cancelled',
+        cancelled_at: new Date().toISOString(),
+        cancelled_by: actorId,
+        cancelled_by_role: 'staff',
+        cancellation_reason: dto.reason,
+      })
+      .eq('id', orderId)
+      .eq('status', order.status)
+      .select()
+      .maybeSingle();
+
+    if (error) throwDbError(error);
+
+    if (!updated) {
+      throw new ConflictException({
+        code: 'ORDER_STATE_CHANGED',
+        message: `El expediente cambió de estado desde "${order.status}" mientras se procesaba la cancelación. Recarga y vuelve a intentarlo.`,
+      });
+    }
+
+    // El reverso replica el de failOrder, con dos diferencias: los ledgers
+    // pendientes quedan en 'reversed' (cancelación, no fallo técnico) y se puede
+    // desactivar con refund=false cuando la devolución se gestiona por fuera.
+    if (dto.refund !== false) {
+      const { data: pendingLedgers } = await this.supabase
+        .from('ledger_entries')
+        .update({ status: 'reversed' })
+        .eq('reference_type', 'payment_order')
+        .eq('reference_id', orderId)
+        .eq('status', 'pending')
+        .select('amount, type');
+
+      if (pendingLedgers && pendingLedgers.length > 0) {
+        const totalToRelease = pendingLedgers
+          .filter((l) => l.type === 'debit')
+          .reduce((sum, l) => sum + parseFloat(l.amount), 0);
+
+        if (totalToRelease > 0) {
+          await this.supabase.rpc('release_reserved_balance', {
+            p_user_id: order.user_id,
+            p_currency: (order.currency ?? 'USDC').toUpperCase(),
+            p_amount: totalToRelease,
+          });
+
+          this.logger.log(
+            `💰 Reserva liberada por cancelación de staff: ${totalToRelease} ${order.currency} (orden ${orderId})`,
+          );
+        }
+      }
+
+      const { data: settledLedgers } = await this.supabase
+        .from('ledger_entries')
+        .select('amount, type')
+        .eq('reference_type', 'payment_order')
+        .eq('reference_id', orderId)
+        .eq('status', 'settled')
+        .eq('type', 'debit');
+
+      if (settledLedgers && settledLedgers.length > 0 && order.wallet_id) {
+        const totalToRefund = settledLedgers.reduce(
+          (sum, l) => sum + parseFloat(l.amount),
+          0,
+        );
+
+        if (totalToRefund > 0) {
+          await this.supabase.from('ledger_entries').insert({
+            wallet_id: order.wallet_id,
+            type: 'credit',
+            amount: totalToRefund,
+            currency: order.currency,
+            status: 'settled',
+            reference_type: 'payment_order',
+            reference_id: orderId,
+            description: `Reembolso por cancelación operativa`,
+          });
+
+          this.logger.log(
+            `💰 Reembolso emitido por cancelación de staff: ${totalToRefund} ${order.currency} (orden ${orderId})`,
+          );
+        }
+      }
+    }
+
+    const actorRole = await this.getActorRole(actorId);
+    await this.supabase.from('audit_logs').insert({
+      performed_by: actorId,
+      role: actorRole,
+      action: 'CANCEL_PAYMENT_ORDER',
+      table_name: 'payment_orders',
+      record_id: orderId,
+      previous_values: { status: order.status },
+      new_values: {
+        status: 'cancelled',
+        cancelled_by_role: 'staff',
+        refund: dto.refund !== false,
+      },
+      reason: dto.reason,
+      source: 'admin_panel',
+    });
+
+    if (dto.notify_user !== false) {
+      await this.supabase.from('notifications').insert({
+        user_id: order.user_id,
+        type: 'alert',
+        title: 'Expediente cancelado',
+        message: `Tu expediente fue cancelado por nuestro equipo. Motivo: ${dto.reason}`,
+        reference_type: 'payment_order',
+        reference_id: orderId,
+      });
+    }
+
+    await this.supabase.from('activity_logs').insert({
+      user_id: order.user_id,
+      action: 'PAYMENT_ORDER_CANCELLED',
+      description: `Expediente ${orderId} (${order.flow_type}) cancelado por el equipo. Motivo: ${dto.reason}`,
+    });
+
     this.ordersGateway.emitOrderUpdated(updated.user_id, {
       id: updated.id,
       user_id: updated.user_id,

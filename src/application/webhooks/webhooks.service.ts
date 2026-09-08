@@ -421,7 +421,7 @@ export class WebhooksService {
           await this.handleTransferFailed(payload);
         } else {
           this.logger.log(
-            `transfer status_transitioned a ${state} - actualizando bridge_state sin acción adicional`,
+            `transfer status_transitioned a ${state} - actualizando bridge_state`,
           );
           if (state && data?.id) {
             await this.supabase
@@ -431,6 +431,11 @@ export class WebhooksService {
                 updated_at: new Date().toISOString(),
               })
               .eq('bridge_transfer_id', data.id as string);
+
+            // Los estados intermedios significan que Bridge YA recibió los fondos.
+            // Sin esto la orden se queda en 'waiting_deposit' hasta transfer.complete
+            // y el cliente puede cancelarla con su cripto ya en vuelo.
+            await this.markOrderDepositReceived(data.id as string, state);
           }
         }
         break;
@@ -2386,6 +2391,126 @@ export class WebhooksService {
     await this.handleTransferComplete(payload, 'payment_processed', context);
   }
 
+  /**
+   * Registra el caso "transfer completado sobre orden cancelada".
+   *
+   * Es la señal de que los fondos llegaron al destino después de que el cliente
+   * cancelara: requiere conciliación manual. Con el DELETE bloqueante de
+   * `cancelOrder` esto ya no debería ocurrir, pero si ocurre no puede pasar
+   * inadvertido — antes el webhook simplemente ignoraba la orden.
+   */
+  private async flagCompletedTransferOnCancelledOrder(
+    bridgeTransferId: string,
+  ): Promise<void> {
+    const { data: cancelledOrder } = await this.supabase
+      .from('payment_orders')
+      .select('id, user_id, flow_type, amount, currency, status')
+      .eq('bridge_transfer_id', bridgeTransferId)
+      .in('status', ['cancelled', 'failed'])
+      .maybeSingle();
+
+    if (!cancelledOrder) return;
+
+    this.logger.error(
+      `🚨 CONCILIACIÓN: el transfer ${bridgeTransferId} se completó en Bridge, pero la orden ` +
+        `${cancelledOrder.id} (${cancelledOrder.flow_type}) está en "${cancelledOrder.status}". ` +
+        `Los fondos llegaron al destino sin expediente activo — revisar manualmente.`,
+    );
+
+    await this.supabase.from('audit_logs').insert({
+      performed_by: null,
+      role: 'system',
+      action: 'RECONCILIATION_REQUIRED',
+      table_name: 'payment_orders',
+      record_id: cancelledOrder.id,
+      new_values: {
+        bridge_transfer_id: bridgeTransferId,
+        order_status: cancelledOrder.status,
+        amount: cancelledOrder.amount,
+        currency: cancelledOrder.currency,
+      },
+      reason: `Transfer completado en Bridge sobre una orden en estado "${cancelledOrder.status}"`,
+      source: 'bridge_webhook',
+    });
+
+    const { data: staff } = await this.supabase
+      .from('profiles')
+      .select('id')
+      .in('role', ['staff', 'admin', 'super_admin'])
+      .eq('is_active', true)
+      .limit(5);
+
+    if (staff?.length) {
+      await this.supabase.from('notifications').insert(
+        staff.map((member) => ({
+          user_id: member.id,
+          type: 'alert',
+          title: 'Conciliación requerida',
+          message:
+            `El expediente ${cancelledOrder.id.slice(0, 8)} está en "${cancelledOrder.status}" ` +
+            `pero el proveedor completó la transferencia de ${cancelledOrder.amount} ${(cancelledOrder.currency ?? '').toUpperCase()}. ` +
+            `Verificar dónde quedaron los fondos.`,
+          reference_type: 'payment_order',
+          reference_id: cancelledOrder.id,
+        })),
+      );
+    }
+  }
+
+  /**
+   * Promueve waiting_deposit → deposit_received cuando Bridge reporta que ya
+   * recibió los fondos del cliente.
+   *
+   * Sin esto, los flujos donde el cliente envía cripto a una dirección de Bridge
+   * (wallet_to_wallet, wallet_to_world, crypto_to_bridge_wallet) se quedaban en
+   * 'waiting_deposit' desde que se creaba la orden hasta transfer.complete: el
+   * estado local no distinguía "esperando depósito" de "fondos ya en vuelo", y la
+   * cancelación del cliente se aceptaba en ambos casos.
+   *
+   * Se limita a esos tres flujos a propósito. En fiat_bo_to_bridge_wallet el
+   * transfer lo funde el PSAV después de la revisión del staff, así que su estado
+   * en Bridge no dice nada sobre el depósito del cliente.
+   */
+  private async markOrderDepositReceived(
+    bridgeTransferId: string,
+    bridgeState: string,
+  ): Promise<void> {
+    const FUNDS_RECEIVED_STATES = [
+      'funds_received',
+      'payment_submitted',
+      'in_review',
+    ];
+    if (!FUNDS_RECEIVED_STATES.includes(bridgeState)) return;
+
+    const CRYPTO_IN_FLOWS = [
+      'wallet_to_wallet',
+      'wallet_to_world',
+      'crypto_to_bridge_wallet',
+    ];
+
+    const { data: updated, error } = await this.supabase
+      .from('payment_orders')
+      .update({ status: 'deposit_received' })
+      .eq('bridge_transfer_id', bridgeTransferId)
+      .eq('status', 'waiting_deposit')
+      .in('flow_type', CRYPTO_IN_FLOWS)
+      .select('id, flow_type')
+      .maybeSingle();
+
+    if (error) {
+      this.logger.error(
+        `❌ No se pudo promover a deposit_received la orden del transfer ${bridgeTransferId}: ${error.message}`,
+      );
+      return;
+    }
+
+    if (updated) {
+      this.logger.log(
+        `📥 Orden ${updated.id} (${updated.flow_type}) pasa a deposit_received: Bridge reporta "${bridgeState}"`,
+      );
+    }
+  }
+
   // ═══════════════════════════════════════════════
   //  HANDLER: transfer.complete (REFACTORIZADO)
   //  [GAP 1 FIX] UPDATE ledger pending→settled, NO crear nuevo
@@ -2504,6 +2629,13 @@ export class WebhooksService {
         'deposit_received',
       ])
       .maybeSingle();
+
+    // Si el transfer se completó pero la orden vinculada quedó fuera del filtro
+    // por estar cancelada, el dinero llegó al destino sin expediente vivo que lo
+    // registre. Antes esto pasaba en silencio; ahora deja rastro para conciliar.
+    if (!paymentOrder) {
+      await this.flagCompletedTransferOnCancelledOrder(bridgeTransferId);
+    }
 
     if (paymentOrder) {
       // ── Guard: flujos de dos tramos ──

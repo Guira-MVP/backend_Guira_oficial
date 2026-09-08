@@ -40,6 +40,7 @@ import { ProfilesService } from '../profiles/profiles.service';
 import { CreateInterbankOrderDto } from './dto/create-interbank-order.dto';
 import { CreateWalletRampOrderDto } from './dto/create-wallet-ramp-order.dto';
 import { ConfirmDepositDto } from './dto/confirm-deposit.dto';
+import { CancelOrderDto, AdminCancelOrderDto } from './dto/cancel-order.dto';
 import {
   ApproveOrderDto,
   MarkSentDto,
@@ -437,12 +438,19 @@ export class PaymentOrdersController {
   }
 
   @Post(':id/cancel')
-  @ApiOperation({ summary: 'Cancelar una orden pendiente' })
+  @ApiOperation({
+    summary: 'Cancelar un expediente propio',
+    description:
+      'La ventana de cancelación depende del grupo de flujo (ver cancellation-policy.ts). ' +
+      'Los flujos con depósito fiat en Bolivia exigen confirm_no_deposit=true; en los flujos ' +
+      'cripto se verifica contra Bridge que los fondos no estén ya en tránsito.',
+  })
   cancelOrder(
     @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: CancelOrderDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.paymentOrdersService.cancelOrder(user.id, id);
+    return this.paymentOrdersService.cancelOrder(user.id, id, dto);
   }
 
   // ── Solicitudes de revisión por exceso de límite (cliente) ──
@@ -631,6 +639,23 @@ export class AdminPaymentOrdersController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.paymentOrdersService.failOrder(id, user.id, dto);
+  }
+
+  @Post(':id/cancel')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({
+    summary: 'Cancelar un expediente (cancelación operativa, no técnica)',
+    description:
+      'Usar en lugar de /fail cuando la operación se aborta a pedido del cliente o por decisión ' +
+      'operativa: deja status=cancelled con motivo y actor, sin contaminar las métricas de fallos. ' +
+      'Permitido hasta processing; prohibido en sent, completed y estados terminales.',
+  })
+  cancelOrderByStaff(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: AdminCancelOrderDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.paymentOrdersService.cancelOrderByStaff(id, user.id, dto);
   }
 
   // ── PSAV Agents Admin ──
