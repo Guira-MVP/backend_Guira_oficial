@@ -513,7 +513,8 @@ export class PdfService {
         if (addrCountry) rows.push(this.row('País Destino', this.resolveCountryName(addrCountry)));
       }
       const addr = supplier?.bank_details?.address;
-      if (addr) rows.push(this.row('Dirección del Beneficiario', this.formatSupplierAddress(addr)));
+      if (addr?.country) rows.push(this.row('País', this.resolveCountryName(addr.country)));
+      if (addr) rows.push(this.row('Dirección del Banco', this.formatSupplierAddress(addr)));
     }
 
     // ── world_to_bolivia ─────────────────────────────────
@@ -619,7 +620,8 @@ export class PdfService {
 
       rows.push(this.row('Moneda Destino', this.toDisplay(order.destination_currency ?? 'USD')));
       const addrUs = bd.address;
-      if (addrUs) rows.push(this.row('Dirección del Beneficiario', this.formatSupplierAddress(addrUs)));
+      if (addrUs?.country) rows.push(this.row('País', this.resolveCountryName(addrUs.country)));
+      if (addrUs) rows.push(this.row('Dirección del Banco', this.formatSupplierAddress(addrUs)));
     }
 
     // ── bridge_wallet_to_crypto ──────────────────────────
