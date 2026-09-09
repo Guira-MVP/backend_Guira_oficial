@@ -708,8 +708,8 @@ export class PdfService {
       'fiscal o contable que corresponda emitir a las partes.',
 
       // 5. Delimitación del servicio: evita que se lea como actividad financiera regulada.
-      'Servicio. La operación corresponde a un servicio de procesamiento y transferencia de fondos por cuenta y orden del cliente. ' +
-      'No implica captación de recursos del público, intermediación financiera, asesoramiento en inversiones ni garantía de rendimiento.',
+      'Servicio. La operación corresponde a la originación y documentación de una instrucción de pago por cuenta y orden del cliente, ejecutada íntegramente por un proveedor de pagos licenciado. ' +
+      ' No implica custodia de fondos, captación de recursos del público, intermediación financiera, asesoramiento en inversiones ni garantía de rendimiento.',
 
       // 6. Explica por qué las dos cifras del panel no coinciden, antes de que lo pregunten.
       'Montos. El tipo de cambio y las tarifas consignados son los aplicados al momento de la ejecución. La diferencia entre ' +
@@ -949,41 +949,41 @@ export class PdfService {
 
       const partyTable = isBeneficiaryOnlyFlow
         ? {
-            table: {
-              headerRows: 1,
-              widths: ['30%', '70%'],
-              body: [
-                sectionHeader('BENEFICIARIO', 2),
-                ...clientRows,
-              ],
-            },
-            layout: borderedLayout,
-            margin: [0, 0, 0, 14] as [number, number, number, number],
-          }
+          table: {
+            headerRows: 1,
+            widths: ['30%', '70%'],
+            body: [
+              sectionHeader('BENEFICIARIO', 2),
+              ...clientRows,
+            ],
+          },
+          layout: borderedLayout,
+          margin: [0, 0, 0, 14] as [number, number, number, number],
+        }
         : {
-            table: {
-              headerRows: 1,
-              widths: ['25%', '25%', '25%', '25%'],
-              body: [
-                sectionHeader('CLIENTE Y BENEFICIARIO', 4),
-                [
-                  { text: 'ORDENANTE / CLIENTE', style: 'subHeader', colSpan: 2 }, {},
-                  { text: 'BENEFICIARIO', style: 'subHeader', colSpan: 2 }, {},
-                ],
-                ...this.mergeColumns(clientRows, beneficiarySummaryRows),
+          table: {
+            headerRows: 1,
+            widths: ['25%', '25%', '25%', '25%'],
+            body: [
+              sectionHeader('CLIENTE Y BENEFICIARIO', 4),
+              [
+                { text: 'ORDENANTE / CLIENTE', style: 'subHeader', colSpan: 2 }, {},
+                { text: 'BENEFICIARIO', style: 'subHeader', colSpan: 2 }, {},
               ],
+              ...this.mergeColumns(clientRows, beneficiarySummaryRows),
+            ],
+          },
+          layout: {
+            ...borderedLayout,
+            vLineWidth: (i: number, node: any) => {
+              if (i === 0 || i === node.table.widths.length) return 0.6;
+              if (i === 2) return 0.4;
+              return 0;
             },
-            layout: {
-              ...borderedLayout,
-              vLineWidth: (i: number, node: any) => {
-                if (i === 0 || i === node.table.widths.length) return 0.6;
-                if (i === 2) return 0.4;
-                return 0;
-              },
-              vLineColor: (i: number) => i === 2 ? COLORS.borderLight : COLORS.border,
-            },
-            margin: [0, 0, 0, 14] as [number, number, number, number],
-          };
+            vLineColor: (i: number) => i === 2 ? COLORS.borderLight : COLORS.border,
+          },
+          margin: [0, 0, 0, 14] as [number, number, number, number],
+        };
 
       // ── Sección 2: DATOS BANCARIOS DEL BENEFICIARIO ──
       const bankingTable = {
@@ -1283,7 +1283,7 @@ export class PdfService {
 
     // Detectar flujo: world_to_bolivia (origen divisa extranjera, destino BOB)
     const isWorldToBolivia = (order.currency ?? 'BOB').toUpperCase() !== 'BOB' &&
-                              (order.destination_currency ?? '').toUpperCase() === 'BOB';
+      (order.destination_currency ?? '').toUpperCase() === 'BOB';
 
     const currency = (order.currency ?? 'BOB').toUpperCase();
     const destCcy = (order.destination_currency ?? '').toUpperCase();
@@ -1913,14 +1913,14 @@ export class PdfService {
 
       const docRows = input.documentsSummary.length > 0
         ? input.documentsSummary.map((d) => [
-            { text: d.ownerLabel, style: 'tLabel' },
-            { text: d.docTypeLabel, style: 'tValue' },
-            {
-              text: d.included ? 'Incluido en este paquete' : 'No disponible en Storage',
-              style: 'tValue',
-              color: d.included ? COLORS.success : COLORS.destructive,
-            },
-          ])
+          { text: d.ownerLabel, style: 'tLabel' },
+          { text: d.docTypeLabel, style: 'tValue' },
+          {
+            text: d.included ? 'Incluido en este paquete' : 'No disponible en Storage',
+            style: 'tValue',
+            color: d.included ? COLORS.success : COLORS.destructive,
+          },
+        ])
         : [[{ text: 'No se encontraron documentos asociados.', style: 'tLabel', colSpan: 3 }, {}, {}]];
 
       const content: any[] = [
