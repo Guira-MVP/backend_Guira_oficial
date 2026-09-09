@@ -6218,6 +6218,10 @@ export class PaymentOrdersService {
       .eq('id', orderId)
       .single();
 
+    // Se emiten las instrucciones (Bridge y PSAV) junto al cambio de estado para
+    // que la pantalla del cliente pase de "en revisión" a mostrar dónde pagar
+    // sin recargar. Los flujos PSAV usan psav_deposit_instructions; los de
+    // Bridge, bridge_source_deposit_instructions.
     this.ordersGateway.emitOrderUpdated(order.user_id, {
       id: orderId,
       user_id: order.user_id,
@@ -6226,6 +6230,7 @@ export class PaymentOrdersService {
       updated_at: new Date().toISOString(),
       bridge_source_deposit_instructions:
         updated?.bridge_source_deposit_instructions ?? null,
+      psav_deposit_instructions: updated?.psav_deposit_instructions ?? null,
     });
 
     return updated ?? claimed;
@@ -6317,12 +6322,16 @@ export class PaymentOrdersService {
       });
     }
 
+    // El motivo viaja en el evento para que, si el cliente sigue en la pantalla
+    // del expediente, vea POR QUÉ se rechazó en vez de quedarse esperando un
+    // aviso que ya no va a llegar.
     this.ordersGateway.emitOrderUpdated(order.user_id, {
       id: orderId,
       user_id: order.user_id,
       status: 'failed',
       flow_type: order.flow_type,
       updated_at: new Date().toISOString(),
+      failure_reason: rejected.failure_reason ?? null,
     });
 
     return rejected;
