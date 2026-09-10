@@ -702,16 +702,16 @@ export class PdfService {
       'Se genera automáticamente a partir de los registros del sistema y refleja el estado de la operación a la fecha de emisión.',
 
       // 3. Validez sin firma manuscrita: la objeción más habitual ante un PDF.
-      'Validez. Documento generado por medios electrónicos. Es válido y oponible sin firma manuscrita ni sello, ' +
-      'conforme a la normativa vigente sobre documentos electrónicos.',
+      'El país del beneficiario está mal, y es un error de trazabilidad. ' +
+      'Separa los campos: País del beneficiario (Perú) y País del banco / de la cuenta (Estados Unidos). Son dos hechos distintos y ambos importan.',
 
       // 4. Alcance fiscal.
-      'Alcance fiscal. No constituye factura, nota fiscal ni comprobante tributario, y no sustituye la documentación ' +
-      'fiscal o contable que corresponda emitir a las partes.',
+      'Retiro de Fondos" y "Cuenta Origen" son lenguaje de custodia. Cambia a "Instrucción de pago internacional desde cuenta operativa del cliente", ' +
+      'y el campo a "Cuenta operativa del cliente en el proveedor licenciado (ref. 73eHv…nfTeF)". Mismo dato, sin insinuar que el dinero estaba en tu poder.',
 
       // 5. Delimitación del servicio: evita que se lea como actividad financiera regulada.
       'Servicio. La operación corresponde a la originación y documentación de una instrucción de pago por cuenta y orden del cliente, ejecutada íntegramente por un proveedor de pagos licenciado. ' +
-      ' No implica custodia de fondos, captación de recursos del público, intermediación financiera, asesoramiento en inversiones ni garantía de rendimiento.',
+      'No implica custodia de fondos, captación de recursos del público, intermediación financiera, asesoramiento en inversiones ni garantía de rendimiento.',
 
       // 6. Explica por qué las dos cifras del panel no coinciden, antes de que lo pregunten.
       'Montos. El tipo de cambio y las tarifas consignados son los aplicados al momento de la ejecución. La diferencia entre ' +
@@ -1045,7 +1045,7 @@ export class PdfService {
                     {
                       stack: [
                         { ...logo, margin: [0, 2, 0, 0] },
-                        { text: 'Plataforma de Operaciones Interbancarias', style: 'headerTagline', margin: [0, 6, 0, 0] },
+                        { text: 'Plataforma de originación y documentación de pagos internacionales', style: 'headerTagline', margin: [0, 6, 0, 0] },
                       ],
                       width: 'auto',
                     },
@@ -1175,7 +1175,7 @@ export class PdfService {
           columns: [
             {
               stack: [
-                { text: 'Guira — Plataforma de Operaciones Interbancarias', style: 'footerBrand' },
+                { text: 'Guira — Plataforma de originación y documentación de pagos internacionales', style: 'footerBrand' },
                 { text: 'www.guiracorp.com  |  soporte@guiracorp.com', style: 'footerContact' },
               ],
               alignment: 'left' as const,
@@ -2027,7 +2027,7 @@ export class PdfService {
           columns: [
             {
               stack: [
-                { text: 'Guira — Plataforma de Operaciones Interbancarias', style: 'footerBrand' },
+                { text: 'Guira — Plataforma de originación y documentación de pagos internacionales', style: 'footerBrand' },
                 { text: 'www.guiracorp.com  |  soporte@guiracorp.com', style: 'footerContact' },
               ],
               alignment: 'left' as const,
