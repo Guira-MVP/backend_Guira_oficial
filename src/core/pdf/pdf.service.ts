@@ -73,6 +73,7 @@ const FLOW_LABELS: Record<string, string> = {
 const STATUS_LABELS: Record<string, string> = {
   CREATED: 'Creado',
   PENDING: 'Pendiente',
+  PENDING_REVIEW: 'En Revisión',
   WAITING_DEPOSIT: 'Esperando Ingreso',
   DEPOSIT_RECEIVED: 'Ingreso Validado',
   PROCESSING: 'En Proceso',
@@ -203,7 +204,8 @@ export class PdfService {
     const s = status.toUpperCase();
     if (s === 'COMPLETED' || s === 'APPROVED') return COLORS.success;
     if (s === 'FAILED' || s === 'REJECTED' || s === 'CANCELLED') return COLORS.destructive;
-    if (s === 'PENDING' || s === 'WAITING_DEPOSIT') return COLORS.warning;
+    if (s === 'PENDING' || s === 'PENDING_REVIEW' || s === 'WAITING_DEPOSIT')
+      return COLORS.warning;
     if (s === 'PROCESSING' || s === 'SENT') return COLORS.primary;
     return COLORS.muted;
   }
@@ -702,12 +704,12 @@ export class PdfService {
       'Se genera automáticamente a partir de los registros del sistema y refleja el estado de la operación a la fecha de emisión.',
 
       // 3. Validez sin firma manuscrita: la objeción más habitual ante un PDF.
-      'El país del beneficiario está mal, y es un error de trazabilidad. ' +
-      'Separa los campos: País del beneficiario (Perú) y País del banco / de la cuenta (Estados Unidos). Son dos hechos distintos y ambos importan.',
+      'Validez. Documento generado por medios electrónicos. Es válido y oponible sin firma manuscrita ni sello, ' +
+      'conforme a la normativa vigente sobre documentos electrónicos.',
 
       // 4. Alcance fiscal.
-      'Retiro de Fondos" y "Cuenta Origen" son lenguaje de custodia. Cambia a "Instrucción de pago internacional desde cuenta operativa del cliente", ' +
-      'y el campo a "Cuenta operativa del cliente en el proveedor licenciado (ref. 73eHv…nfTeF)". Mismo dato, sin insinuar que el dinero estaba en tu poder.',
+      'Alcance fiscal. No constituye factura, nota fiscal ni comprobante tributario, y no sustituye la documentación ' +
+      'fiscal o contable que corresponda emitir a las partes.',
 
       // 5. Delimitación del servicio: evita que se lea como actividad financiera regulada.
       'Servicio. La operación corresponde a la originación y documentación de una instrucción de pago por cuenta y orden del cliente, ejecutada íntegramente por un proveedor de pagos licenciado. ' +

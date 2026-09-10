@@ -6,6 +6,7 @@ import {
 import { PaymentOrdersService } from './payment-orders.service';
 import { OrderReviewService } from './order-review.service';
 import { OrderPdfService } from './order-pdf.service';
+import { FlowReviewSettingsService } from './flow-review-settings.service';
 import { FeesModule } from '../fees/fees.module';
 import { PsavModule } from '../psav/psav.module';
 import { ExchangeRatesModule } from '../exchange-rates/exchange-rates.module';
@@ -31,7 +32,12 @@ import { OrdersModule } from '../orders/orders.module';
     OrdersModule,
   ],
   controllers: [PaymentOrdersController, AdminPaymentOrdersController],
-  providers: [PaymentOrdersService, OrderReviewService, OrderPdfService],
-  exports: [PaymentOrdersService, OrderReviewService],
+  providers: [
+    PaymentOrdersService,
+    OrderReviewService,
+    OrderPdfService,
+    FlowReviewSettingsService,
+  ],
+  exports: [PaymentOrdersService, OrderReviewService, FlowReviewSettingsService],
 })
 export class PaymentOrdersModule {}

@@ -68,6 +68,7 @@ function formatDate(isoStr: string): string {
 
 const STATUS_LABELS: Record<string, string> = {
   created: 'Orden creada',
+  pending_review: 'En revisión',
   waiting_deposit: 'Esperando ingreso',
   deposit_received: 'Ingreso validado',
   processing: 'Procesando',

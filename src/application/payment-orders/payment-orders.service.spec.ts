@@ -16,27 +16,37 @@ describe('PaymentOrdersService bridge deposit collision guard', () => {
       {} as any, // ordersGateway
       {} as any, // emailService
       {} as any, // pdfService
+      // Switch por flujo de la puerta de revision: en los tests la puerta se
+      // controla pasando `opts` a los creadores, asi que el servicio nunca la
+      // consulta. requiresReview solo se usa desde createInterbankOrder /
+      // createWalletRampOrder, que estos specs no ejercitan.
+      { requiresReview: jest.fn().mockResolvedValue(true) } as any,
     );
 
-  const createCollisionQuery = (conflicting: unknown) => {
+  // El guard trae candidatos y decide en memoria cuál ocupa la dirección de
+  // depósito, así que la consulta resuelve una LISTA (no .maybeSingle()).
+  const createCollisionQuery = (candidates: unknown[]) => {
     const query: any = {
       select: jest.fn(() => query),
       eq: jest.fn(() => query),
       in: jest.fn(() => query),
       or: jest.fn(() => query),
       not: jest.fn(() => query),
-      limit: jest.fn(() => query),
-      maybeSingle: jest.fn().mockResolvedValue({ data: conflicting }),
+      limit: jest.fn().mockResolvedValue({ data: candidates, error: null }),
     };
     return query;
   };
 
   it('checks wallet_to_wallet when looking for conflicting Bridge deposit orders', async () => {
-    const query = createCollisionQuery({
-      id: '12345678-aaaa-bbbb-cccc-123456789012',
-      flow_type: 'wallet_to_wallet',
-      created_at: '2026-05-12T00:00:00.000Z',
-    });
+    const query = createCollisionQuery([
+      {
+        id: '12345678-aaaa-bbbb-cccc-123456789012',
+        flow_type: 'wallet_to_wallet',
+        status: 'waiting_deposit',
+        bridge_transfer_id: 'bridge-transfer-uuid',
+        created_at: '2026-05-12T00:00:00.000Z',
+      },
+    ]);
     const service = createService({ from: jest.fn(() => query) }) as any;
 
     await expect(
@@ -56,10 +66,51 @@ describe('PaymentOrdersService bridge deposit collision guard', () => {
     expect(query.or).toHaveBeenCalledWith(
       'source_currency.eq.USDC,source_currency.is.null',
     );
+    expect(query.in).toHaveBeenCalledWith('status', [
+      'pending_review',
+      'waiting_deposit',
+    ]);
+  });
+
+  it('bloquea también contra un expediente en revisión, que aún no tiene transfer', async () => {
+    // Sin esto un cliente podría acumular varios expedientes en revisión sobre
+    // la misma ruta y el staff, al aprobarlos, generaría varios transfers que
+    // Bridge resolvería contra la MISMA dirección de depósito.
+    const query = createCollisionQuery([
+      {
+        id: '12345678-aaaa-bbbb-cccc-123456789012',
+        flow_type: 'crypto_to_bridge_wallet',
+        status: 'pending_review',
+        bridge_transfer_id: null,
+        created_at: '2026-05-12T00:00:00.000Z',
+      },
+    ]);
+    const service = createService({ from: jest.fn(() => query) }) as any;
+
+    await expect(
+      service.assertNoConflictingBridgeDepositOrder('user-1', 'usdc', 'solana'),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('un waiting_deposit sin transfer NO bloquea: no ocupa ninguna dirección', async () => {
+    const query = createCollisionQuery([
+      {
+        id: '12345678-aaaa-bbbb-cccc-123456789012',
+        flow_type: 'wallet_to_wallet',
+        status: 'waiting_deposit',
+        bridge_transfer_id: null,
+        created_at: '2026-05-12T00:00:00.000Z',
+      },
+    ]);
+    const service = createService({ from: jest.fn(() => query) }) as any;
+
+    await expect(
+      service.assertNoConflictingBridgeDepositOrder('user-1', 'usdc', 'solana'),
+    ).resolves.toBeUndefined();
   });
 
   it('allows Bridge deposit orders when there is no same network/currency conflict', async () => {
-    const query = createCollisionQuery(null);
+    const query = createCollisionQuery([]);
     const service = createService({ from: jest.fn(() => query) }) as any;
 
     await expect(
@@ -118,6 +169,11 @@ describe('PaymentOrdersService bridge deposit collision guard', () => {
       {} as any, // ordersGateway
       {} as any, // emailService
       {} as any, // pdfService
+      // Switch por flujo de la puerta de revision: en los tests la puerta se
+      // controla pasando `opts` a los creadores, asi que el servicio nunca la
+      // consulta. requiresReview solo se usa desde createInterbankOrder /
+      // createWalletRampOrder, que estos specs no ejercitan.
+      { requiresReview: jest.fn().mockResolvedValue(true) } as any,
     ) as any;
     const guard = jest
       .spyOn(service, 'assertNoConflictingBridgeDepositOrder')

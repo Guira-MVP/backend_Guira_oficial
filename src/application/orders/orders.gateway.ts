@@ -46,6 +46,15 @@ export interface OrderUpdatedPayload {
   exchange_rate_applied?: number | null;
   amount_destination?: number | null;
   bridge_source_deposit_instructions?: Record<string, unknown> | null;
+  // Instrucciones PSAV (cuenta bancaria donde deposita el cliente). Viajan por
+  // el socket para que, al aprobar una revisión de staff, la pantalla del
+  // cliente pase de "en revisión" a mostrar la cuenta sin recargar. Sin este
+  // campo los 4 flujos PSAV quedarían destrabados a medias: verían el cambio
+  // de estado pero no dónde depositar.
+  psav_deposit_instructions?: Record<string, unknown> | null;
+  // Motivo del cierre. Permite mostrar en vivo por qué el staff rechazó la
+  // revisión, en vez de dejar al cliente esperando un aviso que ya no llegará.
+  failure_reason?: string | null;
   // URLs de documentos: permiten que el detalle del staff refleje en vivo el
   // comprobante que sube el cliente sin recargar (mismo socket/evento ya existente).
   deposit_proof_url?: string | null;

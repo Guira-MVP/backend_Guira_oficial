@@ -10,6 +10,14 @@ import { WalletRampFlowType } from './dto/create-wallet-ramp-order.dto';
  *   2. NUNCA se inserta en ledger_entries → evita el cargo fantasma (ver el
  *      comentario extenso en createWalletToWorld).
  *   3. Sin tarifa activa se RECHAZA, en vez de crear la orden cobrando 0.
+ *
+ * Desde la puerta de revisión de staff el flujo tiene DOS fases:
+ *   - createWalletToWorld deja el expediente en 'pending_review' SIN llamar a
+ *     Bridge (por eso no hay QR todavía).
+ *   - executeWalletToWorldLeg crea el transfer al aprobar y deja la orden en
+ *     'waiting_deposit' con las instrucciones de depósito.
+ * Pasando `{ skipReviewGate: true }` se recorre el camino sin puerta, que es el
+ * que usa createOrderFromReview cuando el staff ya revisó en la otra cola.
  */
 describe('PaymentOrdersService — wallet_to_world', () => {
   const BRIDGE_TRANSFER_RESPONSE = {
@@ -21,6 +29,29 @@ describe('PaymentOrdersService — wallet_to_world', () => {
       currency: 'usdc',
       amount: '1000.00',
     },
+  };
+
+  /** Contexto de ejecución tal y como lo persiste createWalletToWorld. */
+  const EXEC_CONTEXT = {
+    kind: 'wallet_to_world' as const,
+    source_currency: 'USDC',
+    amount: 1000,
+    fee_amount: 30,
+    net_amount: 970,
+    total_needed: 0,
+    source_network: 'solana',
+    supplier_payment_rail: 'ach',
+    external_account_local_id: 'ext-local-1',
+    destination_currency: 'usd',
+  };
+
+  const PENDING_ORDER = {
+    id: '8341dad5-6031-453f-ab01-f871b7e7fb31',
+    user_id: 'user-1',
+    wallet_id: null,
+    flow_type: 'wallet_to_world',
+    status: 'processing',
+    bridge_execution_context: EXEC_CONTEXT,
   };
 
   /** Construye un mock de supabase que responde por tabla. */
@@ -48,6 +79,8 @@ describe('PaymentOrdersService — wallet_to_world', () => {
       ...overrides,
     };
 
+    const updates: Record<string, any[]> = {};
+
     const from = jest.fn((table: string) => {
       // Las respuestas se resuelven de forma perezosa (mockImplementation, no
       // mockResolvedValue) para poder devolver la fila realmente insertada.
@@ -58,7 +91,10 @@ describe('PaymentOrdersService — wallet_to_world', () => {
           query.__inserted = payload;
           return query;
         }),
-        update: jest.fn(() => query),
+        update: jest.fn((payload: unknown) => {
+          (updates[table] ??= []).push(payload);
+          return query;
+        }),
         eq: jest.fn(() => query),
         in: jest.fn(() => query),
         or: jest.fn(() => query),
@@ -79,7 +115,7 @@ describe('PaymentOrdersService — wallet_to_world', () => {
       return query;
     });
 
-    return { from, rpc, __ledgerInsert: ledgerInsert };
+    return { from, rpc, __ledgerInsert: ledgerInsert, __updates: updates };
   }
 
   function makeService(supabase: any, opts: { bridgePost?: jest.Mock; assertFee?: jest.Mock } = {}) {
@@ -101,6 +137,11 @@ describe('PaymentOrdersService — wallet_to_world', () => {
       { emitOrderCreated: jest.fn(), emitOrderUpdated: jest.fn() } as any,
       {} as any, // emailService
       {} as any, // pdfService
+      // Switch por flujo de la puerta de revision: en los tests la puerta se
+      // controla pasando `opts` a los creadores, asi que el servicio nunca la
+      // consulta. requiresReview solo se usa desde createInterbankOrder /
+      // createWalletRampOrder, que estos specs no ejercitan.
+      { requiresReview: jest.fn().mockResolvedValue(true) } as any,
     ) as any;
     return { service, bridgePost, feesService };
   }
@@ -115,11 +156,118 @@ describe('PaymentOrdersService — wallet_to_world', () => {
     business_purpose: 'Pago de factura 00123',
   } as any;
 
+  /** Atajo para el camino sin puerta (expediente ya revisado por el staff). */
+  const bypass = { skipReviewGate: true };
+
+  // ── Puerta de revisión: la creación ya NO manda el dinero al proveedor ──
+
+  it('con la puerta activa NO llama a Bridge: el expediente queda esperando revisión', async () => {
+    const supabase = makeSupabase();
+    const { service, bridgePost } = makeService(supabase);
+
+    const order = await service.createWalletToWorld('user-1', validDto);
+
+    expect(bridgePost).not.toHaveBeenCalled();
+    expect(order.status).toBe('pending_review');
+    expect(order.bridge_transfer_id).toBeNull();
+    expect(order.bridge_source_deposit_instructions).toBeNull();
+  });
+
+  it('persiste el contexto de ejecución que el tramo Bridge necesitará al aprobar', async () => {
+    const supabase = makeSupabase();
+    const { service } = makeService(supabase);
+
+    const order = await service.createWalletToWorld('user-1', validDto);
+
+    expect(order.bridge_execution_context).toMatchObject({
+      kind: 'wallet_to_world',
+      source_network: 'solana',
+      source_currency: 'USDC',
+      supplier_payment_rail: 'ach',
+      external_account_local_id: 'ext-local-1',
+      destination_currency: 'usd',
+      // Este flujo nunca reserva saldo: no hay nada que devolver al rechazar.
+      total_needed: 0,
+    });
+  });
+
+  it('al aprobar crea el transfer y deja la orden en waiting_deposit con el QR', async () => {
+    const supabase = makeSupabase();
+    const { service, bridgePost } = makeService(supabase);
+
+    const result = await service.executeWalletToWorldLeg(
+      { ...PENDING_ORDER },
+      EXEC_CONTEXT,
+      { onFailure: 'return_to_review' },
+    );
+
+    expect(bridgePost).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe('waiting_deposit');
+    expect(result.bridge_transfer_id).toBe(BRIDGE_TRANSFER_RESPONSE.id);
+
+    const persisted = supabase.__updates['payment_orders'].at(-1);
+    expect(persisted.status).toBe('waiting_deposit');
+    expect(persisted.bridge_source_deposit_instructions).toMatchObject({
+      address: BRIDGE_TRANSFER_RESPONSE.source_deposit_instructions.to_address,
+      amount: '1000.00',
+      chain: 'solana',
+    });
+  });
+
+  it('la Idempotency-Key deriva del id del expediente, así que sobrevive al salto crear→aprobar', async () => {
+    const supabase = makeSupabase();
+    const { service, bridgePost } = makeService(supabase);
+
+    await service.executeWalletToWorldLeg({ ...PENDING_ORDER }, EXEC_CONTEXT, {
+      onFailure: 'return_to_review',
+    });
+
+    const [, , idempotencyKey] = bridgePost.mock.calls[0];
+    expect(idempotencyKey).toBe(`po_w2w_${PENDING_ORDER.id}`);
+  });
+
+  it('si Bridge falla al aprobar, el expediente vuelve a revisión y se puede reintentar', async () => {
+    const supabase = makeSupabase();
+    const bridgePost = jest.fn().mockRejectedValue(new Error('502 Bad Gateway'));
+    const { service } = makeService(supabase, { bridgePost });
+
+    await expect(
+      service.executeWalletToWorldLeg({ ...PENDING_ORDER }, EXEC_CONTEXT, {
+        onFailure: 'return_to_review',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    const persisted = supabase.__updates['payment_orders'].at(-1);
+    expect(persisted.status).toBe('pending_review');
+    expect(persisted.approved_by).toBeNull();
+    // La reserva no se toca: el expediente sigue vivo. (Aquí además es 0.)
+    expect(supabase.rpc).not.toHaveBeenCalled();
+  });
+
+  it('si al aprobar Bridge no devuelve dirección, el expediente se cierra en failed y NO vuelve a revisión', async () => {
+    // La Idempotency-Key ya está quemada: un reintento recibiría eternamente el
+    // mismo transfer sin dirección, así que reintentar sería un bucle infinito.
+    const supabase = makeSupabase();
+    const bridgePost = jest.fn().mockResolvedValue({ id: 'tid', state: 'awaiting_funds' });
+    const { service } = makeService(supabase, { bridgePost });
+
+    await expect(
+      service.executeWalletToWorldLeg({ ...PENDING_ORDER }, EXEC_CONTEXT, {
+        onFailure: 'return_to_review',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    const persisted = supabase.__updates['payment_orders'].at(-1);
+    expect(persisted.status).toBe('failed');
+  });
+
+  // ── Camino sin puerta (createOrderFromReview): comportamiento histórico ──
+
   it('envía a Bridge el payload correcto: allow_any_from_address, sin bridge_wallet_id ni flexible_amount', async () => {
     const supabase = makeSupabase();
     const { service, bridgePost } = makeService(supabase);
 
-    await service.createWalletToWorld('user-1', validDto);
+    await service.createWalletToWorld('user-1', validDto, bypass);
 
     expect(bridgePost).toHaveBeenCalledTimes(1);
     const [path, payload, idempotencyKey] = bridgePost.mock.calls[0];
@@ -144,46 +292,15 @@ describe('PaymentOrdersService — wallet_to_world', () => {
     expect(payload.destination.ach_reference).toBe('GUIRA');
   });
 
-  it('funciona SIN wallet_id — no hay saldo del cliente de origen que elegir', async () => {
+  it('un expediente que viene de una review ya aprobada NO pasa por pending_review', async () => {
     const supabase = makeSupabase();
     const { service, bridgePost } = makeService(supabase);
-    const { wallet_id: _omitido, ...sinWallet } = validDto;
 
-    const order = await service.createWalletToWorld('user-1', sinWallet);
+    const order = await service.createWalletToWorld('user-1', validDto, bypass);
 
     expect(bridgePost).toHaveBeenCalledTimes(1);
     expect(order.status).toBe('waiting_deposit');
-    // El servicio resuelve una wallet activa por su cuenta, solo como referencia.
-    expect(order.wallet_id).toBe('wallet-1');
-  });
-
-  it('NUNCA reserva saldo — los fondos no salen del balance Guira', async () => {
-    const supabase = makeSupabase();
-    const { service } = makeService(supabase);
-
-    await service.createWalletToWorld('user-1', validDto);
-
-    expect(supabase.rpc).not.toHaveBeenCalledWith('reserve_balance', expect.anything());
-    expect(supabase.rpc).not.toHaveBeenCalled();
-  });
-
-  it('NUNCA escribe en ledger_entries — evita el cargo fantasma', async () => {
-    const supabase = makeSupabase();
-    const { service } = makeService(supabase);
-
-    await service.createWalletToWorld('user-1', validDto);
-
-    expect(supabase.__ledgerInsert).not.toHaveBeenCalled();
-    expect(supabase.from).not.toHaveBeenCalledWith('ledger_entries');
-  });
-
-  it('persiste la dirección de depósito y el importe exacto, con estado waiting_deposit', async () => {
-    const supabase = makeSupabase();
-    const { service } = makeService(supabase);
-
-    const order = await service.createWalletToWorld('user-1', validDto);
-
-    expect(order.status).toBe('waiting_deposit');
+    expect(order.bridge_execution_context).toBeNull();
     expect(order.bridge_source_deposit_instructions).toMatchObject({
       address: BRIDGE_TRANSFER_RESPONSE.source_deposit_instructions.to_address,
       amount: '1000.00',
@@ -191,6 +308,68 @@ describe('PaymentOrdersService — wallet_to_world', () => {
     });
     expect(order.source_address).toBeNull();
   });
+
+  it('funciona SIN wallet_id — no hay saldo del cliente de origen que elegir', async () => {
+    const supabase = makeSupabase();
+    const { service } = makeService(supabase);
+    const { wallet_id: _omitido, ...sinWallet } = validDto;
+
+    const order = await service.createWalletToWorld('user-1', sinWallet);
+
+    expect(order.status).toBe('pending_review');
+    // El servicio resuelve una wallet activa por su cuenta, solo como referencia.
+    expect(order.wallet_id).toBe('wallet-1');
+  });
+
+  it('rechaza si Bridge no devuelve dirección de depósito (un QR vacío es peor que un error)', async () => {
+    const supabase = makeSupabase();
+    const bridgePost = jest.fn().mockResolvedValue({ id: 'tid', state: 'awaiting_funds' });
+    const { service } = makeService(supabase, { bridgePost });
+
+    await expect(
+      service.createWalletToWorld('user-1', validDto, bypass),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  // ── Invariantes de dinero: valen en AMBOS caminos ──
+
+  it('NUNCA reserva saldo — los fondos no salen del balance Guira', async () => {
+    for (const opts of [undefined, bypass]) {
+      const supabase = makeSupabase();
+      const { service } = makeService(supabase);
+
+      await service.createWalletToWorld('user-1', validDto, opts);
+
+      expect(supabase.rpc).not.toHaveBeenCalledWith('reserve_balance', expect.anything());
+      expect(supabase.rpc).not.toHaveBeenCalled();
+    }
+  });
+
+  it('NUNCA escribe en ledger_entries — evita el cargo fantasma', async () => {
+    for (const opts of [undefined, bypass]) {
+      const supabase = makeSupabase();
+      const { service } = makeService(supabase);
+
+      await service.createWalletToWorld('user-1', validDto, opts);
+
+      expect(supabase.__ledgerInsert).not.toHaveBeenCalled();
+      expect(supabase.from).not.toHaveBeenCalledWith('ledger_entries');
+    }
+  });
+
+  it('tampoco escribe en ledger_entries al aprobar la revisión', async () => {
+    const supabase = makeSupabase();
+    const { service } = makeService(supabase);
+
+    await service.executeWalletToWorldLeg({ ...PENDING_ORDER }, EXEC_CONTEXT, {
+      onFailure: 'return_to_review',
+    });
+
+    expect(supabase.__ledgerInsert).not.toHaveBeenCalled();
+    expect(supabase.rpc).not.toHaveBeenCalled();
+  });
+
+  // ── Validaciones de entrada: rechazan antes de crear nada ──
 
   it('rechaza si no hay tarifa activa, en vez de crear la orden cobrando 0', async () => {
     const supabase = makeSupabase();
@@ -214,16 +393,6 @@ describe('PaymentOrdersService — wallet_to_world', () => {
       service.createWalletToWorld('user-1', { ...validDto, source_network: 'tron', source_currency: 'usdt' }),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(bridgePost).not.toHaveBeenCalled();
-  });
-
-  it('rechaza si Bridge no devuelve dirección de depósito (un QR vacío es peor que un error)', async () => {
-    const supabase = makeSupabase();
-    const bridgePost = jest.fn().mockResolvedValue({ id: 'tid', state: 'awaiting_funds' });
-    const { service } = makeService(supabase, { bridgePost });
-
-    await expect(service.createWalletToWorld('user-1', validDto)).rejects.toBeInstanceOf(
-      BadRequestException,
-    );
   });
 
   it('bloquea un segundo envío activo al mismo proveedor con el mismo token', async () => {
