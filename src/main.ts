@@ -23,6 +23,7 @@ import {
   resolveAppEnv,
 } from './core/config/app/app-env';
 import { CLOUDFLARE_CIDRS } from './core/config/cloudflare-ips';
+import { ACTING_FOR_HEADER } from './core/guards/supabase-auth.guard';
 
 class CorsIoAdapter extends IoAdapter {
   private readonly app: INestApplication;
@@ -131,6 +132,11 @@ async function bootstrap() {
       'X-Requested-With',
       'Accept',
       'Idempotency-Key',
+      // Acceso vinculado: sin declararla aquí, el navegador rechaza la
+      // petición en el preflight y nada llega al servidor. Se toma de la
+      // constante del guard —y no como literal— para que no puedan
+      // desincronizarse: si allí cambia el nombre, aquí cambia solo.
+      ACTING_FOR_HEADER,
     ],
   });
 
