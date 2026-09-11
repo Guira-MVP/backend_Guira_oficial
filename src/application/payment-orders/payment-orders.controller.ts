@@ -37,6 +37,10 @@ import { OrderPdfService } from './order-pdf.service';
 import { SuppliersService } from '../suppliers/suppliers.service';
 import { ExportService } from '../../core/export/export.service';
 import { ProfilesService } from '../profiles/profiles.service';
+import {
+  RequiresCapability,
+  TargetUserId,
+} from '../../core/decorators/linked-access.decorator';
 import { CreateInterbankOrderDto } from './dto/create-interbank-order.dto';
 import { CreateWalletRampOrderDto } from './dto/create-wallet-ramp-order.dto';
 import { ConfirmDepositDto } from './dto/confirm-deposit.dto';
@@ -136,8 +140,9 @@ export class PaymentOrdersController {
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiQuery({ name: 'year', required: false, type: Number })
   @ApiQuery({ name: 'month', required: false, type: Number })
+  @RequiresCapability('orders:read')
   getMyOrders(
-    @CurrentUser() user: AuthenticatedUser,
+    @TargetUserId() targetUserId: string,
     @Query('status') status?: string,
     @Query('flow_category') flow_category?: string,
     @Query('page') page?: string,
@@ -145,7 +150,7 @@ export class PaymentOrdersController {
     @Query('year') year?: string,
     @Query('month') month?: string,
   ) {
-    return this.paymentOrdersService.getMyOrders(user.id, {
+    return this.paymentOrdersService.getMyOrders(targetUserId, {
       status,
       flow_category,
       page: page ? parseInt(page, 10) : undefined,
@@ -372,38 +377,42 @@ export class PaymentOrdersController {
       'Flujos interbank del usuario agrupados por moneda (mapa del dashboard)',
   })
   @ApiQuery({ name: 'month', required: false })
+  @RequiresCapability('activity:read')
   getMyFlowStats(
-    @CurrentUser() user: AuthenticatedUser,
+    @TargetUserId() targetUserId: string,
     @Query('month') month?: string,
   ) {
-    return this.paymentOrdersService.getMyFlowStats(user.id, month);
+    return this.paymentOrdersService.getMyFlowStats(targetUserId, month);
   }
 
   @Get('my-flow-months')
   @ApiOperation({
     summary: 'Meses con transacciones interbank completadas del usuario',
   })
-  getMyFlowMonths(@CurrentUser() user: AuthenticatedUser) {
-    return this.paymentOrdersService.getMyFlowMonths(user.id);
+  @RequiresCapability('activity:read')
+  getMyFlowMonths(@TargetUserId() targetUserId: string) {
+    return this.paymentOrdersService.getMyFlowMonths(targetUserId);
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Detalle de una orden' })
+  @RequiresCapability('orders:read')
   getOrderById(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @CurrentUser() user: AuthenticatedUser,
+    @TargetUserId() targetUserId: string,
   ) {
-    return this.paymentOrdersService.getOrderById(user.id, id);
+    return this.paymentOrdersService.getOrderById(targetUserId, id);
   }
 
   @Get(':id/pdf')
   @ApiOperation({ summary: 'Generar comprobante operativo en PDF de la orden' })
+  @RequiresCapability('orders:documents')
   async getOrderPdf(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @CurrentUser() user: AuthenticatedUser,
+    @TargetUserId() targetUserId: string,
     @Res({ passthrough: true }) res: any,
   ) {
-    const buffer = await this.orderPdfService.buildOrderPdf(id, user.id);
+    const buffer = await this.orderPdfService.buildOrderPdf(id, targetUserId);
 
     res.set({
       'Content-Type': 'application/pdf',

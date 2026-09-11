@@ -115,16 +115,9 @@ export class OrdersGateway
     const user = client.data?.user;
     if (!user?.id) return;
 
-    // Fetch role from profiles using service-role client
-    const { data: profile } = await this.supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single();
+    const role = await this.resolveRole(user.id);
 
-    const role = profile?.role ?? 'client';
-
-    if (STAFF_ROLES.includes(role)) {
+    if (STAFF_ROLES.includes(role as (typeof STAFF_ROLES)[number])) {
       await client.join('staff');
       this.logger.log(
         `Staff conectado al WS /orders: ${client.id} (user: ${user.id}, role: ${role})`,
@@ -135,6 +128,36 @@ export class OrdersGateway
         `Cliente conectado al WS /orders: ${client.id} (user: ${user.id})`,
       );
     }
+  }
+
+  /**
+   * Resuelve el rol del usuario desde `private.staff_members` vía el RPC
+   * `staff_get`, igual que SupabaseAuthGuard.
+   *
+   * Antes esto leía `profiles.role`, que dejó de ser la fuente de verdad
+   * cuando el rol se movió a `private.staff_members` (un cliente podía
+   * escribir esa columna con la anon key y auto-promoverse). El guard HTTP
+   * ya se corrigió en su momento; este gateway se quedó atrás y seguía
+   * dando entrada al room `staff` según la columna vieja.
+   *
+   * Ante cualquier error se devuelve 'client': degradar, nunca conceder.
+   */
+  private async resolveRole(userId: string): Promise<string> {
+    const { data, error } = await this.supabase.rpc('staff_get', {
+      p_user_id: userId,
+    });
+
+    if (error) {
+      this.logger.error(
+        `No se pudo resolver el rol de staff para ${userId}: [${error.code}] ${error.message}`,
+      );
+      return 'client';
+    }
+
+    const member = Array.isArray(data) ? data[0] : data;
+    if (!member || !member.is_active) return 'client';
+
+    return member.role as string;
   }
 
   handleDisconnect(client: Socket) {

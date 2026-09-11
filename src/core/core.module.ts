@@ -7,6 +7,7 @@ import { CoreConfigModule } from './config/config.module';
 import { SupabaseModule } from './supabase/supabase.module';
 import { SupabaseAuthGuard } from './guards/supabase-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
+import { LinkedAccessGuard } from './guards/linked-access.guard';
 import { PdfModule } from './pdf/pdf.module';
 
 @Module({
@@ -47,6 +48,15 @@ import { PdfModule } from './pdf/pdf.module';
     {
       provide: APP_GUARD,
       useClass: RolesGuard,
+    },
+    // Guard global: acceso vinculado (equipo interno de un cliente).
+    // No hace nada en peticiones normales; cuando la petición trae la
+    // cabecera X-Guira-Acting-For exige que el handler declare
+    // @RequiresCapability y que el permiso esté concedido.
+    // DEBE ir después de SupabaseAuthGuard, que resuelve user.linkedAccess.
+    {
+      provide: APP_GUARD,
+      useClass: LinkedAccessGuard,
     },
   ],
 })

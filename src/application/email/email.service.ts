@@ -15,6 +15,7 @@ import {
   buildPaymentOrderFailedEmail,
 } from './email-templates/payment-order.templates';
 import { buildStaffInviteEmail } from './email-templates/staff-invite.templates';
+import { buildTeamInviteEmail } from './email-templates/team-invite.templates';
 
 export interface EmailRecipient {
   email: string;
@@ -204,6 +205,29 @@ export class EmailService {
     },
   ): Promise<boolean> {
     const { subject, html, text } = buildStaffInviteEmail({
+      name: to.name,
+      ...details,
+    });
+    return this.sendEmail({ to, subject, html, text });
+  }
+
+  /**
+   * Invitación a formar parte del equipo de una cuenta cliente.
+   *
+   * Como en el correo de personal interno, el valor de retorno importa: si
+   * el envío falla, quien invita tiene que poder reenviarlo — la persona no
+   * tiene otra forma de enterarse de que la invitaron.
+   */
+  async sendTeamInviteEmail(
+    to: EmailRecipient,
+    details: {
+      inviteUrl: string;
+      companyName: string;
+      presetLabel: string;
+      capabilityLabels: string[];
+    },
+  ): Promise<boolean> {
+    const { subject, html, text } = buildTeamInviteEmail({
       name: to.name,
       ...details,
     });

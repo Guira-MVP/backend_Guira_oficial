@@ -1,0 +1,478 @@
+import {
+  BadRequestException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { SupabaseClient } from '@supabase/supabase-js';
+import { createHash, randomBytes } from 'crypto';
+import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
+import { EmailService } from '../email/email.service';
+import type { AuthenticatedUser } from '../../core/guards/supabase-auth.guard';
+import {
+  CAPABILITY_LABELS,
+  Capability,
+  PRESET_LABELS,
+  Preset,
+  resolveCapabilities,
+} from '../../common/constants/capabilities.constants';
+import {
+  AccountMemberResponse,
+  InviteMemberDto,
+  LinkedAccountResponse,
+  MAX_ACTIVE_MEMBERS,
+  UpdateMemberCapabilitiesDto,
+} from './dto/account-members.dto';
+
+const INVITATION_TTL_DAYS = 7;
+
+@Injectable()
+export class AccountMembersService {
+  private readonly logger = new Logger(AccountMembersService.name);
+  private readonly frontendUrl: string;
+
+  constructor(
+    @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
+    private readonly configService: ConfigService,
+    private readonly emailService: EmailService,
+  ) {
+    this.frontendUrl =
+      this.configService.get<string>('app.frontendUrl') ?? '';
+  }
+
+  // ═══════════════════════════════════════════════
+  //  Utilidades
+  // ═══════════════════════════════════════════════
+
+  /**
+   * El token viaja en claro solo por correo; en la base queda su hash.
+   * Mismo criterio que cualquier credencial: quien lea la tabla no puede
+   * usar lo que ve para aceptar una invitación ajena.
+   */
+  private hashToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
+  }
+
+  private async audit(entry: {
+    actor: AuthenticatedUser;
+    action: string;
+    targetId: string;
+    previous?: Record<string, unknown> | null;
+    next?: Record<string, unknown> | null;
+    reason?: string | null;
+  }): Promise<void> {
+    await this.supabase.from('audit_logs').insert({
+      performed_by: entry.actor.id,
+      role: entry.actor.profile.role,
+      action: entry.action,
+      table_name: 'account_members',
+      record_id: entry.targetId,
+      previous_values: entry.previous ?? null,
+      new_values: entry.next ?? null,
+      reason: entry.reason ?? null,
+      source: 'client_panel',
+    });
+  }
+
+  /**
+   * Marca como expiradas las invitaciones vencidas de una cuenta.
+   *
+   * Se hace de forma perezosa, al consultar, en vez de con un cron: el
+   * estado 'pending' vencido nunca concede acceso (resolveLinkedAccess solo
+   * mira 'active'), así que esto es cosmético — sirve para que el titular
+   * vea "caducada" en vez de "pendiente" eternamente.
+   */
+  private async expireStale(ownerId: string): Promise<void> {
+    await this.supabase
+      .from('account_members')
+      .update({ status: 'expired' })
+      .eq('owner_id', ownerId)
+      .eq('status', 'pending')
+      .lt('expires_at', new Date().toISOString());
+  }
+
+  private toResponse(row: Record<string, any>): AccountMemberResponse {
+    return {
+      id: row.id,
+      member_id: row.member_id ?? null,
+      invited_email: row.invited_email,
+      full_name: row.full_name ?? null,
+      preset: row.preset,
+      capabilities: (row.capabilities ?? []) as Capability[],
+      status: row.status,
+      invited_at: row.created_at,
+      accepted_at: row.accepted_at ?? null,
+    };
+  }
+
+  // ═══════════════════════════════════════════════
+  //  Lado del titular
+  // ═══════════════════════════════════════════════
+
+  async list(ownerId: string): Promise<AccountMemberResponse[]> {
+    await this.expireStale(ownerId);
+
+    const { data, error } = await this.supabase
+      .from('account_members')
+      .select('*')
+      .eq('owner_id', ownerId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      this.logger.error(`Error listando el equipo de ${ownerId}: ${error.message}`);
+      throw new InternalServerErrorException('No se pudo consultar el equipo');
+    }
+
+    return (data ?? []).map((row) => this.toResponse(row));
+  }
+
+  async invite(
+    actor: AuthenticatedUser,
+    dto: InviteMemberDto,
+  ): Promise<{ member: AccountMemberResponse; email_sent: boolean }> {
+    const email = dto.email.trim().toLowerCase();
+
+    // Invitarse a uno mismo no tiene sentido y además chocaría con el
+    // CHECK de la tabla al aceptar.
+    if (email === actor.email.trim().toLowerCase()) {
+      throw new BadRequestException('No puedes invitarte a ti mismo.');
+    }
+
+    await this.expireStale(actor.id);
+
+    const { count } = await this.supabase
+      .from('account_members')
+      .select('id', { count: 'exact', head: true })
+      .eq('owner_id', actor.id)
+      .in('status', ['pending', 'active']);
+
+    if ((count ?? 0) >= MAX_ACTIVE_MEMBERS) {
+      throw new BadRequestException(
+        `Has alcanzado el máximo de ${MAX_ACTIVE_MEMBERS} personas en tu equipo.`,
+      );
+    }
+
+    const capabilities = resolveCapabilities(dto.preset, dto.capabilities);
+    const token = randomBytes(32).toString('hex');
+    const expiresAt = new Date(
+      Date.now() + INVITATION_TTL_DAYS * 24 * 60 * 60 * 1000,
+    );
+
+    const { data, error } = await this.supabase
+      .from('account_members')
+      .insert({
+        owner_id: actor.id,
+        invited_email: email,
+        full_name: dto.full_name.trim(),
+        preset: dto.preset,
+        capabilities,
+        status: 'pending',
+        invited_by: actor.id,
+        invitation_token_hash: this.hashToken(token),
+        expires_at: expiresAt.toISOString(),
+      })
+      .select('*')
+      .single();
+
+    if (error) {
+      // 23505 = violación del índice único parcial: ya hay un vínculo vivo.
+      if (error.code === '23505') {
+        throw new BadRequestException(
+          'Esa persona ya está invitada o ya forma parte de tu equipo.',
+        );
+      }
+      this.logger.error(`Error invitando a ${email}: ${error.message}`);
+      throw new InternalServerErrorException('No se pudo crear la invitación');
+    }
+
+    const emailSent = await this.sendInvite({
+      email,
+      fullName: dto.full_name,
+      token,
+      companyName: actor.profile.full_name ?? 'Una empresa',
+      preset: dto.preset,
+      capabilities,
+    });
+
+    await this.audit({
+      actor,
+      action: 'TEAM_MEMBER_INVITED',
+      targetId: data.id,
+      next: { invited_email: email, preset: dto.preset, capabilities },
+    });
+
+    return { member: this.toResponse(data), email_sent: emailSent };
+  }
+
+  private async sendInvite(params: {
+    email: string;
+    fullName: string;
+    token: string;
+    companyName: string;
+    preset: Preset;
+    capabilities: Capability[];
+  }): Promise<boolean> {
+    const inviteUrl = `${this.frontendUrl}/invitacion-equipo?token=${params.token}`;
+
+    try {
+      return await this.emailService.sendTeamInviteEmail(
+        { email: params.email, name: params.fullName },
+        {
+          inviteUrl,
+          companyName: params.companyName,
+          presetLabel: PRESET_LABELS[params.preset],
+          capabilityLabels: params.capabilities.map(
+            (cap) => CAPABILITY_LABELS[cap],
+          ),
+        },
+      );
+    } catch (err) {
+      this.logger.error(
+        `No se pudo enviar la invitación a ${params.email}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return false;
+    }
+  }
+
+  async updateCapabilities(
+    actor: AuthenticatedUser,
+    memberRowId: string,
+    dto: UpdateMemberCapabilitiesDto,
+  ): Promise<AccountMemberResponse> {
+    const current = await this.findOwnedRow(actor.id, memberRowId);
+
+    if (current.status === 'revoked') {
+      throw new BadRequestException(
+        'Este acceso está revocado. Vuelve a invitar a la persona si quieres darle acceso otra vez.',
+      );
+    }
+
+    const capabilities = resolveCapabilities(dto.preset, dto.capabilities);
+
+    const { data, error } = await this.supabase
+      .from('account_members')
+      .update({ preset: dto.preset, capabilities })
+      .eq('id', memberRowId)
+      .eq('owner_id', actor.id)
+      .select('*')
+      .single();
+
+    if (error) {
+      this.logger.error(
+        `Error actualizando permisos de ${memberRowId}: ${error.message}`,
+      );
+      throw new InternalServerErrorException(
+        'No se pudieron actualizar los permisos',
+      );
+    }
+
+    // Antes y después, no solo "se modificó": en una revisión hay que poder
+    // reconstruir qué permisos tuvo cada persona y entre qué fechas.
+    await this.audit({
+      actor,
+      action: 'TEAM_MEMBER_CAPABILITIES_UPDATED',
+      targetId: memberRowId,
+      previous: { preset: current.preset, capabilities: current.capabilities },
+      next: { preset: dto.preset, capabilities },
+      reason: dto.reason,
+    });
+
+    return this.toResponse(data);
+  }
+
+  async revoke(
+    actor: AuthenticatedUser,
+    memberRowId: string,
+    reason: string,
+  ): Promise<AccountMemberResponse> {
+    const current = await this.findOwnedRow(actor.id, memberRowId);
+
+    if (current.status === 'revoked') {
+      return this.toResponse(current);
+    }
+
+    const { data, error } = await this.supabase
+      .from('account_members')
+      .update({
+        status: 'revoked',
+        revoked_at: new Date().toISOString(),
+        revoked_by: actor.id,
+        revoke_reason: reason,
+      })
+      .eq('id', memberRowId)
+      .eq('owner_id', actor.id)
+      .select('*')
+      .single();
+
+    if (error) {
+      this.logger.error(`Error revocando ${memberRowId}: ${error.message}`);
+      throw new InternalServerErrorException('No se pudo revocar el acceso');
+    }
+
+    await this.audit({
+      actor,
+      action: 'TEAM_MEMBER_REVOKED',
+      targetId: memberRowId,
+      previous: { status: current.status },
+      next: { status: 'revoked' },
+      reason,
+    });
+
+    return this.toResponse(data);
+  }
+
+  private async findOwnedRow(
+    ownerId: string,
+    rowId: string,
+  ): Promise<Record<string, any>> {
+    const { data, error } = await this.supabase
+      .from('account_members')
+      .select('*')
+      .eq('id', rowId)
+      .eq('owner_id', ownerId)
+      .maybeSingle();
+
+    if (error) {
+      this.logger.error(`Error consultando ${rowId}: ${error.message}`);
+      throw new InternalServerErrorException('No se pudo consultar el acceso');
+    }
+
+    if (!data) {
+      throw new NotFoundException('Acceso no encontrado');
+    }
+
+    return data;
+  }
+
+  // ═══════════════════════════════════════════════
+  //  Lado del invitado
+  // ═══════════════════════════════════════════════
+
+  /**
+   * Acepta una invitación.
+   *
+   * El token demuestra que la persona recibió el correo; la comparación de
+   * correos demuestra que es la destinataria. Hacen falta las dos: sin la
+   * segunda, reenviar el enlace a un tercero le daría acceso a los datos de
+   * una empresa que no lo autorizó.
+   */
+  async accept(
+    actor: AuthenticatedUser,
+    token: string,
+  ): Promise<AccountMemberResponse> {
+    const { data: row, error } = await this.supabase
+      .from('account_members')
+      .select('*')
+      .eq('invitation_token_hash', this.hashToken(token))
+      .maybeSingle();
+
+    if (error) {
+      this.logger.error(`Error resolviendo invitación: ${error.message}`);
+      throw new InternalServerErrorException(
+        'No se pudo procesar la invitación',
+      );
+    }
+
+    if (!row || row.status !== 'pending') {
+      throw new NotFoundException(
+        'Esta invitación ya no es válida. Pide que te la reenvíen.',
+      );
+    }
+
+    if (new Date(row.expires_at) < new Date()) {
+      await this.supabase
+        .from('account_members')
+        .update({ status: 'expired' })
+        .eq('id', row.id);
+      throw new BadRequestException(
+        'La invitación caducó. Pide que te la reenvíen.',
+      );
+    }
+
+    if (
+      row.invited_email.trim().toLowerCase() !==
+      actor.email.trim().toLowerCase()
+    ) {
+      throw new ForbiddenException(
+        'Esta invitación es para otra dirección de correo. Inicia sesión con la cuenta a la que fue enviada.',
+      );
+    }
+
+    const { data, error: updateError } = await this.supabase
+      .from('account_members')
+      .update({
+        member_id: actor.id,
+        status: 'active',
+        accepted_at: new Date().toISOString(),
+        invitation_token_hash: null, // de un solo uso
+      })
+      .eq('id', row.id)
+      .eq('status', 'pending') // evita la carrera de dos aceptaciones
+      .select('*')
+      .single();
+
+    if (updateError) {
+      this.logger.error(
+        `Error aceptando invitación ${row.id}: ${updateError.message}`,
+      );
+      throw new InternalServerErrorException(
+        'No se pudo aceptar la invitación',
+      );
+    }
+
+    await this.audit({
+      actor,
+      action: 'TEAM_MEMBER_ACCEPTED',
+      targetId: row.id,
+      next: { member_id: actor.id, owner_id: row.owner_id },
+    });
+
+    return this.toResponse(data);
+  }
+
+  /** Cuentas que este usuario puede consultar. Alimenta el selector. */
+  async myLinkedAccounts(userId: string): Promise<LinkedAccountResponse[]> {
+    const { data, error } = await this.supabase
+      .from('account_members')
+      .select('owner_id, preset, capabilities')
+      .eq('member_id', userId)
+      .eq('status', 'active');
+
+    if (error) {
+      this.logger.error(
+        `Error listando accesos de ${userId}: ${error.message}`,
+      );
+      throw new InternalServerErrorException(
+        'No se pudieron consultar tus accesos',
+      );
+    }
+
+    const rows = data ?? [];
+    if (rows.length === 0) return [];
+
+    const { data: owners } = await this.supabase
+      .from('profiles')
+      .select('id, full_name')
+      .in(
+        'id',
+        rows.map((row) => row.owner_id),
+      );
+
+    const nameById = new Map(
+      (owners ?? []).map((owner) => [owner.id, owner.full_name]),
+    );
+
+    return rows.map((row) => ({
+      owner_id: row.owner_id,
+      company_name: nameById.get(row.owner_id) ?? null,
+      preset: row.preset as Preset,
+      capabilities: (row.capabilities ?? []) as Capability[],
+    }));
+  }
+}

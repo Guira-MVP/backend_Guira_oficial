@@ -20,6 +20,7 @@ import { ClientBankAccountsModule } from './client-bank-accounts/client-bank-acc
 import { OrdersModule } from './orders/orders.module';
 import { AnnouncementsModule } from './announcements/announcements.module';
 import { StaffAdminModule } from './staff-admin/staff-admin.module';
+import { AccountMembersModule } from './account-members/account-members.module';
 import { QuotesModule } from './quotes/quotes.module';
 
 /**
@@ -49,6 +50,7 @@ import { QuotesModule } from './quotes/quotes.module';
     OrdersModule,
     AnnouncementsModule,
     StaffAdminModule,
+    AccountMembersModule,
     QuotesModule,
   ],
 })
