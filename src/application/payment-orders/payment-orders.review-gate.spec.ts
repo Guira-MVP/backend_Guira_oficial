@@ -71,6 +71,10 @@ describe('PaymentOrdersService — puerta de revisión de staff', () => {
         role: 'staff',
         email: 'cliente@example.com',
         full_name: 'Cliente',
+        // Crear un expediente exige la cuenta verificada
+        // (assertOnboardingApproved). Sin esto el mock devuelve undefined y
+        // la creación se rechaza antes de llegar a lo que mide este test.
+        onboarding_status: 'approved',
       },
       wallets: { id: 'wallet-1', provider_wallet_id: 'bw_1' },
       psav_accounts: {

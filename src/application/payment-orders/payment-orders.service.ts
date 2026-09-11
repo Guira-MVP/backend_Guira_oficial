@@ -570,6 +570,7 @@ export class PaymentOrdersService {
     dto: CreateInterbankOrderDto,
     reviewContext?: { clientReason: string; documentUrl?: string },
   ) {
+    await this.assertOnboardingApproved(userId);
     await this.validateRateLimit(userId);
     await this.assertFlowEnabled(userId, dto.flow_type);
 
@@ -2107,6 +2108,7 @@ export class PaymentOrdersService {
     dto: CreateWalletRampOrderDto,
     reviewContext?: { clientReason: string; documentUrl?: string },
   ) {
+    await this.assertOnboardingApproved(userId);
     await this.validateRateLimit(userId);
     await this.assertFlowEnabled(userId, dto.flow_type);
 
@@ -7069,6 +7071,37 @@ export class PaymentOrdersService {
       else enabled.delete(flow);
     }
     return enabled;
+  }
+
+  /**
+   * Barrera de seguridad: solo una cuenta con el onboarding aprobado puede
+   * originar expedientes.
+   *
+   * Hasta ahora esta regla vivía ÚNICAMENTE en el enrutado del frontend
+   * (AuthGuard mandaba a /onboarding a cualquier cliente sin aprobar), así
+   * que el backend aceptaba la orden de quien lograra llegar al endpoint.
+   * Se hizo alcanzable al permitir que un invitado sin cuenta propia entre
+   * al panel para consultar la cuenta de otra empresa.
+   *
+   * Una regla de negocio de este peso no puede depender de que la interfaz
+   * acierte con la redirección.
+   */
+  private async assertOnboardingApproved(userId: string): Promise<void> {
+    const { data, error } = await this.supabase
+      .from('profiles')
+      .select('onboarding_status')
+      .eq('id', userId)
+      .single();
+
+    if (error || !data) {
+      throw new ForbiddenException('No se pudo verificar el estado de tu cuenta.');
+    }
+
+    if (data.onboarding_status !== 'approved') {
+      throw new ForbiddenException(
+        'Tu cuenta todavía no está verificada. Completa tu registro para poder operar.',
+      );
+    }
   }
 
   /**
