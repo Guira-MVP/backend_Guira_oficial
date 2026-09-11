@@ -5,6 +5,12 @@ import { ProfilesService } from '../profiles/profiles.service';
 import { WalletsService } from '../wallets/wallets.service';
 import { ClientBankAccountsService } from '../client-bank-accounts/client-bank-accounts.service';
 import { PaymentOrdersService } from './payment-orders.service';
+import {
+  maskClientBankAccount,
+  maskOrderBankDetails,
+  maskSupplierBankDetails,
+  maskWalletAddress,
+} from '../../common/masking/mask-bank-details';
 
 /**
  * Arma el comprobante operativo en PDF de una orden.
@@ -35,6 +41,7 @@ export class OrderPdfService {
   async buildOrderPdf(
     orderId: string,
     requesterUserId: string | null,
+    options: { maskBankDetails?: boolean } = {},
   ): Promise<Buffer> {
     const order = requesterUserId
       ? await this.paymentOrdersService.getOrderById(requesterUserId, orderId)
@@ -91,6 +98,22 @@ export class OrderPdfService {
     const clientBankAccount = needsBankAccount
       ? await this.clientBankAccountsService.findPrimary(order.user_id)
       : null;
+
+    // El comprobante imprime «Cuenta Destino», routing, IBAN y CLABE. Sin
+    // esto, alguien con `orders:documents` pero sin `bank_details:full`
+    // obtendría por PDF exactamente los números que el JSON le oculta: el
+    // enmascarado tiene que alcanzar también a los documentos derivados.
+    if (options.maskBankDetails) {
+      return this.pdfService.generatePaymentPdf(
+        maskOrderBankDetails(order),
+        supplier ? maskSupplierBankDetails(supplier) : supplier,
+        client,
+        clientWallet ? maskWalletAddress(clientWallet) : clientWallet,
+        clientBankAccount
+          ? maskClientBankAccount(clientBankAccount)
+          : clientBankAccount,
+      );
+    }
 
     return this.pdfService.generatePaymentPdf(
       order,

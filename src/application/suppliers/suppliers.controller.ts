@@ -25,9 +25,12 @@ import {
 import { CurrentUser } from '../../core/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../core/guards/supabase-auth.guard';
 import {
+  LinkedAccess,
   RequiresCapability,
   TargetUserId,
 } from '../../core/decorators/linked-access.decorator';
+import type { LinkedAccessContext } from '../../core/guards/supabase-auth.guard';
+import { maskSuppliersIfNeeded } from '../../common/masking/mask-bank-details';
 
 @ApiTags('Suppliers')
 @ApiBearerAuth('supabase-jwt')
@@ -54,8 +57,12 @@ export class SuppliersController {
   @Get()
   @ApiOperation({ summary: 'Listar proveedores activos' })
   @RequiresCapability('suppliers:read')
-  findAll(@TargetUserId() targetUserId: string) {
-    return this.suppliersService.findAll(targetUserId);
+  async findAll(
+    @TargetUserId() targetUserId: string,
+    @LinkedAccess() linked: LinkedAccessContext | null,
+  ) {
+    const suppliers = await this.suppliersService.findAll(targetUserId);
+    return maskSuppliersIfNeeded(suppliers, linked);
   }
 
   @Get('check-duplicate')
@@ -72,11 +79,13 @@ export class SuppliersController {
   @Get(':id')
   @ApiOperation({ summary: 'Detalle de proveedor' })
   @RequiresCapability('suppliers:read')
-  findOne(
+  async findOne(
     @Param('id', new ParseUUIDPipe()) id: string,
     @TargetUserId() targetUserId: string,
+    @LinkedAccess() linked: LinkedAccessContext | null,
   ) {
-    return this.suppliersService.findOne(id, targetUserId);
+    const supplier = await this.suppliersService.findOne(id, targetUserId);
+    return maskSuppliersIfNeeded([supplier], linked)[0];
   }
 
   @Patch(':id')

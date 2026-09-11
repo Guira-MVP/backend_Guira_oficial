@@ -22,9 +22,12 @@ import { RolesGuard } from '../../core/guards/roles.guard';
 import { Roles } from '../../core/decorators/roles.decorator';
 import { ManualAdjustmentDto } from './dto/manual-adjustment.dto';
 import {
+  LinkedAccess,
   RequiresCapability,
   TargetUserId,
 } from '../../core/decorators/linked-access.decorator';
+import type { LinkedAccessContext } from '../../core/guards/supabase-auth.guard';
+import { maskWalletsIfNeeded } from '../../common/masking/mask-bank-details';
 
 // ─────────────────────────────────────────────────
 //  Rutas de usuario: /wallets/...
@@ -39,8 +42,12 @@ export class WalletsController {
   @Get()
   @ApiOperation({ summary: 'Listar wallets activas del usuario' })
   @RequiresCapability('balances:read')
-  findAll(@TargetUserId() targetUserId: string) {
-    return this.walletsService.findAllByUser(targetUserId);
+  async findAll(
+    @TargetUserId() targetUserId: string,
+    @LinkedAccess() linked: LinkedAccessContext | null,
+  ) {
+    const wallets = await this.walletsService.findAllByUser(targetUserId);
+    return maskWalletsIfNeeded(wallets, linked);
   }
 
   @Get('balances')

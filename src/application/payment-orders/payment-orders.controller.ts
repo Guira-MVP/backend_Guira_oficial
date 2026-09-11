@@ -43,7 +43,10 @@ import {
   TargetUserId,
 } from '../../core/decorators/linked-access.decorator';
 import type { LinkedAccessContext } from '../../core/guards/supabase-auth.guard';
-import { maskOrdersIfNeeded } from './mask-bank-details';
+import {
+  maskOrdersIfNeeded,
+  shouldMask,
+} from '../../common/masking/mask-bank-details';
 import { CreateInterbankOrderDto } from './dto/create-interbank-order.dto';
 import { CreateWalletRampOrderDto } from './dto/create-wallet-ramp-order.dto';
 import { ConfirmDepositDto } from './dto/confirm-deposit.dto';
@@ -423,9 +426,12 @@ export class PaymentOrdersController {
   async getOrderPdf(
     @Param('id', new ParseUUIDPipe()) id: string,
     @TargetUserId() targetUserId: string,
+    @LinkedAccess() linked: LinkedAccessContext | null,
     @Res({ passthrough: true }) res: any,
   ) {
-    const buffer = await this.orderPdfService.buildOrderPdf(id, targetUserId);
+    const buffer = await this.orderPdfService.buildOrderPdf(id, targetUserId, {
+      maskBankDetails: shouldMask(linked),
+    });
 
     res.set({
       'Content-Type': 'application/pdf',
