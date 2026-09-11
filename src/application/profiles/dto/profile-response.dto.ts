@@ -35,6 +35,15 @@ export class ProfileResponseDto {
   @ApiPropertyOptional({ example: 'Actividad sospechosa reportada' })
   frozen_reason: string | null;
 
+  /**
+   * Si esta persona puede consultar la cuenta de alguna empresa que la
+   * invitó a su equipo. Solo sirve para decidir a dónde enrutarla al
+   * entrar: quien no tiene empresa propia nunca completa el KYB, y sin
+   * este dato quedaría atrapado en /onboarding.
+   */
+  @ApiPropertyOptional({ example: false })
+  has_linked_accounts?: boolean;
+
   @ApiPropertyOptional({ example: 10000 })
   daily_limit_usd: number | null;
 

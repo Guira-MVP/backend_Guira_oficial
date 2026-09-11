@@ -58,7 +58,37 @@ export class ProfilesService {
     return {
       ...(data as ProfileResponseDto),
       ...(resolvedRole ? { role: resolvedRole } : {}),
+      has_linked_accounts: await this.hasLinkedAccounts(userId),
     } as ProfileResponseDto;
+  }
+
+  /**
+   * ¿Esta persona puede consultar la cuenta de alguna empresa que la invitó?
+   *
+   * Lo necesita el frontend para decidir a dónde mandarla al entrar. Sin
+   * esto, un contador o empleado invitado —que no tiene empresa propia y
+   * por tanto nunca completa el KYB— queda atrapado en /onboarding y no
+   * llega nunca al panel desde donde consultaría la cuenta a la que sí
+   * tiene acceso.
+   *
+   * Es solo un dato de enrutado: el permiso real se sigue resolviendo en
+   * cada petición contra `account_members` (ver LinkedAccessGuard).
+   */
+  private async hasLinkedAccounts(userId: string): Promise<boolean> {
+    const { count, error } = await this.supabase
+      .from('account_members')
+      .select('id', { count: 'exact', head: true })
+      .eq('member_id', userId)
+      .eq('status', 'active');
+
+    if (error) {
+      this.logger.warn(
+        `No se pudo comprobar el acceso vinculado de ${userId}: ${error.message}`,
+      );
+      return false;
+    }
+
+    return (count ?? 0) > 0;
   }
 
   /**

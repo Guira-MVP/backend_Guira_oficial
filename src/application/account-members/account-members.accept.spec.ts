@@ -143,15 +143,51 @@ describe('AccountMembersService.accept — validación de correo', () => {
     );
   });
 
-  it('invitación ya activa (reutilizada) → NotFoundException, no se revalida el correo', async () => {
+  it('reabrir el enlace tras aceptar devuelve éxito, no un error', async () => {
+    // El correo con el enlace sigue en la bandeja: volver a abrirlo es lo
+    // normal. Antes respondía "esta invitación ya no es válida", que suena
+    // a que algo se rompió cuando en realidad ya tiene el acceso.
     const supabase = mockSupabase([
-      { data: buildRow({ status: 'active' }), error: null },
+      { data: buildRow({ status: 'active', member_id: 'actor-1' }), error: null },
     ]);
     const service = buildService(supabase);
 
-    // No debe llegar ni a comparar el correo: el estado ya descarta la fila.
     await expect(
-      service.accept(actorWithEmail('cualquiera@x.com'), 'token'),
+      service.accept(actorWithEmail('invitado@empresa.com'), 'token'),
+    ).resolves.toMatchObject({ status: 'active' });
+
+    // Es idempotente: no vuelve a escribir nada.
+    expect(supabase.update).not.toHaveBeenCalled();
+  });
+
+  it('invitación ya usada por otra persona → ForbiddenException', async () => {
+    const supabase = mockSupabase([
+      { data: buildRow({ status: 'active', member_id: 'otro-usuario' }), error: null },
+    ]);
+    const service = buildService(supabase);
+
+    await expect(
+      service.accept(actorWithEmail('invitado@empresa.com'), 'token'),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('acceso ya retirado por el titular → mensaje específico, no "no válida"', async () => {
+    const supabase = mockSupabase([
+      { data: buildRow({ status: 'revoked' }), error: null },
+    ]);
+    const service = buildService(supabase);
+
+    await expect(
+      service.accept(actorWithEmail('invitado@empresa.com'), 'token'),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('token inventado → NotFoundException', async () => {
+    const supabase = mockSupabase([{ data: null, error: null }]);
+    const service = buildService(supabase);
+
+    await expect(
+      service.accept(actorWithEmail('invitado@empresa.com'), 'token-falso'),
     ).rejects.toThrow(NotFoundException);
   });
 

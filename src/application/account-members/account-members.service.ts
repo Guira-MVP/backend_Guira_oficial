@@ -396,9 +396,36 @@ export class AccountMembersService {
       );
     }
 
-    if (!row || row.status !== 'pending') {
+    if (!row) {
       throw new NotFoundException(
         'Esta invitación ya no es válida. Pide que te la reenvíen.',
+      );
+    }
+
+    // Reabrir el enlace del correo después de haber aceptado es lo más
+    // normal del mundo —el correo sigue en la bandeja—, así que no puede
+    // responder "ya no es válida" como si algo hubiera fallado. Si es la
+    // misma persona y ya tiene el acceso, se responde que sí, con lo que
+    // la pantalla muestra "invitación aceptada" en vez de un error.
+    if (row.status === 'active' && row.member_id === actor.id) {
+      return this.toResponse(row);
+    }
+
+    if (row.status === 'active') {
+      throw new ForbiddenException(
+        'Esta invitación ya fue usada por otra persona.',
+      );
+    }
+
+    if (row.status === 'revoked') {
+      throw new BadRequestException(
+        'El acceso a esta cuenta fue retirado. Pide una invitación nueva.',
+      );
+    }
+
+    if (row.status !== 'pending') {
+      throw new BadRequestException(
+        'La invitación caducó. Pide que te la reenvíen.',
       );
     }
 
@@ -444,7 +471,11 @@ export class AccountMembersService {
         member_id: actor.id,
         status: 'active',
         accepted_at: new Date().toISOString(),
-        invitation_token_hash: null, // de un solo uso
+        // El token NO se borra a propósito. El uso único ya lo garantiza el
+        // estado: arriba se rechaza cualquier fila que no esté 'pending'.
+        // Borrarlo no añadía seguridad (es un hash, irreversible) y en
+        // cambio impedía reconocer la invitación al reabrir el enlace, que
+        // es como se llegaba al mensaje "ya no es válida".
       })
       .eq('id', row.id)
       .eq('status', 'pending') // evita la carrera de dos aceptaciones
