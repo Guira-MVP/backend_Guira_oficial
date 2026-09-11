@@ -24,6 +24,10 @@ import {
 } from './dto/create-supplier.dto';
 import { CurrentUser } from '../../core/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../core/guards/supabase-auth.guard';
+import {
+  RequiresCapability,
+  TargetUserId,
+} from '../../core/decorators/linked-access.decorator';
 
 @ApiTags('Suppliers')
 @ApiBearerAuth('supabase-jwt')
@@ -49,8 +53,9 @@ export class SuppliersController {
 
   @Get()
   @ApiOperation({ summary: 'Listar proveedores activos' })
-  findAll(@CurrentUser() user: AuthenticatedUser) {
-    return this.suppliersService.findAll(user.id);
+  @RequiresCapability('suppliers:read')
+  findAll(@TargetUserId() targetUserId: string) {
+    return this.suppliersService.findAll(targetUserId);
   }
 
   @Get('check-duplicate')
@@ -66,11 +71,12 @@ export class SuppliersController {
 
   @Get(':id')
   @ApiOperation({ summary: 'Detalle de proveedor' })
+  @RequiresCapability('suppliers:read')
   findOne(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @CurrentUser() user: AuthenticatedUser,
+    @TargetUserId() targetUserId: string,
   ) {
-    return this.suppliersService.findOne(id, user.id);
+    return this.suppliersService.findOne(id, targetUserId);
   }
 
   @Patch(':id')

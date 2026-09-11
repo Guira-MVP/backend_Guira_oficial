@@ -28,6 +28,9 @@ export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
 /** Cabecera con la que el frontend pide actuar sobre la cuenta de otro. */
 export const ACTING_FOR_HEADER = 'x-guira-acting-for';
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 /**
  * Contexto de acceso vinculado: la petición no consulta la cuenta de quien
  * inició sesión, sino la de un tercero que le concedió acceso de lectura.
@@ -223,9 +226,17 @@ export class SupabaseAuthGuard implements CanActivate {
       );
     }
 
+    // Se valida el formato antes de consultar: un valor que no sea UUID hace
+    // que Postgres rechace la comparación con un error de sintaxis, que
+    // acabaría en el log como si fuera un fallo del sistema en vez de una
+    // petición mal formada.
+    if (!UUID_PATTERN.test(ownerId)) {
+      throw new ForbiddenException('Cuenta no válida.');
+    }
+
     const { data: membership, error } = await this.supabase
       .from('account_members')
-      .select('capabilities, expires_at')
+      .select('capabilities')
       .eq('owner_id', ownerId)
       .eq('member_id', user.id)
       .eq('status', 'active')

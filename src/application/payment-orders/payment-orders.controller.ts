@@ -38,9 +38,12 @@ import { SuppliersService } from '../suppliers/suppliers.service';
 import { ExportService } from '../../core/export/export.service';
 import { ProfilesService } from '../profiles/profiles.service';
 import {
+  LinkedAccess,
   RequiresCapability,
   TargetUserId,
 } from '../../core/decorators/linked-access.decorator';
+import type { LinkedAccessContext } from '../../core/guards/supabase-auth.guard';
+import { maskOrdersIfNeeded } from './mask-bank-details';
 import { CreateInterbankOrderDto } from './dto/create-interbank-order.dto';
 import { CreateWalletRampOrderDto } from './dto/create-wallet-ramp-order.dto';
 import { ConfirmDepositDto } from './dto/confirm-deposit.dto';
@@ -141,8 +144,9 @@ export class PaymentOrdersController {
   @ApiQuery({ name: 'year', required: false, type: Number })
   @ApiQuery({ name: 'month', required: false, type: Number })
   @RequiresCapability('orders:read')
-  getMyOrders(
+  async getMyOrders(
     @TargetUserId() targetUserId: string,
+    @LinkedAccess() linked: LinkedAccessContext | null,
     @Query('status') status?: string,
     @Query('flow_category') flow_category?: string,
     @Query('page') page?: string,
@@ -150,7 +154,7 @@ export class PaymentOrdersController {
     @Query('year') year?: string,
     @Query('month') month?: string,
   ) {
-    return this.paymentOrdersService.getMyOrders(targetUserId, {
+    const result = await this.paymentOrdersService.getMyOrders(targetUserId, {
       status,
       flow_category,
       page: page ? parseInt(page, 10) : undefined,
@@ -158,6 +162,8 @@ export class PaymentOrdersController {
       year: year ? parseInt(year, 10) : undefined,
       month: month ? parseInt(month, 10) : undefined,
     });
+
+    return { ...result, data: maskOrdersIfNeeded(result.data, linked) };
   }
 
   @Get('limits/:flow_type')
@@ -273,8 +279,9 @@ export class PaymentOrdersController {
     type: Number,
     description: 'Mes (1-12)',
   })
+  @RequiresCapability('reports:export')
   async exportOrders(
-    @CurrentUser() user: AuthenticatedUser,
+    @TargetUserId() targetUserId: string,
     @Query('format') format: string,
     @Query('status') status?: string,
     @Query('year') year?: string,
@@ -289,11 +296,14 @@ export class PaymentOrdersController {
     const parsedMonth = month ? parseInt(month, 10) : undefined;
 
     // Obtener órdenes filtradas (sin paginación)
-    const orders = await this.paymentOrdersService.getOrdersForExport(user.id, {
-      status,
-      year: parsedYear,
-      month: parsedMonth,
-    });
+    const orders = await this.paymentOrdersService.getOrdersForExport(
+      targetUserId,
+      {
+        status,
+        year: parsedYear,
+        month: parsedMonth,
+      },
+    );
 
     // Resolver nombres de proveedores
     const supplierIds = [
@@ -301,12 +311,13 @@ export class PaymentOrdersController {
     ];
     const suppliers = await this.suppliersService.findByIds(
       supplierIds as string[],
-      user.id,
+      targetUserId,
     );
 
-    // Obtener perfil del cliente y teléfono
-    const profile = await this.profilesService.findOne(user.id);
-    const phone = await this.profilesService.getClientPhone(user.id);
+    // Obtener perfil del cliente y teléfono. Es el del titular de la cuenta
+    // exportada, no el de quien descarga: el informe documenta esa cuenta.
+    const profile = await this.profilesService.findOne(targetUserId);
+    const phone = await this.profilesService.getClientPhone(targetUserId);
 
     const client = {
       id: profile.id,
@@ -397,11 +408,13 @@ export class PaymentOrdersController {
   @Get(':id')
   @ApiOperation({ summary: 'Detalle de una orden' })
   @RequiresCapability('orders:read')
-  getOrderById(
+  async getOrderById(
     @Param('id', new ParseUUIDPipe()) id: string,
     @TargetUserId() targetUserId: string,
+    @LinkedAccess() linked: LinkedAccessContext | null,
   ) {
-    return this.paymentOrdersService.getOrderById(targetUserId, id);
+    const order = await this.paymentOrdersService.getOrderById(targetUserId, id);
+    return maskOrdersIfNeeded([order], linked)[0];
   }
 
   @Get(':id/pdf')

@@ -115,6 +115,30 @@ describe('invariantes del acceso vinculado', () => {
     expect(offenders).toEqual([]);
   });
 
+  it('todo permiso del catálogo tiene efecto real', () => {
+    // Un permiso que no protege ningún endpoint ni recorta ninguna
+    // respuesta es una promesa vacía: la pantalla de invitación le dice al
+    // titular que esa persona "va a poder ver X", y no pasa nada. Peor aún
+    // si el dato ya era visible sin el permiso.
+    const declared = new Set<string>();
+    for (const handler of handlers) {
+      for (const match of handler.body.matchAll(/@RequiresCapability\('([^']*)'\)/g)) {
+        declared.add(match[1]);
+      }
+    }
+
+    // Excepción justificada: no protege un endpoint, decide cómo se
+    // serializa la respuesta (ver mask-bank-details.ts). Está cubierto por
+    // su propia suite.
+    const SERIALIZATION_ONLY = ['bank_details:full'];
+
+    const inert = CAPABILITIES.filter(
+      (cap) => !declared.has(cap) && !SERIALIZATION_ONLY.includes(cap),
+    );
+
+    expect(inert).toEqual([]);
+  });
+
   it('el catálogo no contiene permisos de escritura', () => {
     // La garantía de fondo: ninguna combinación de permisos permite crear,
     // modificar o cancelar nada. Si alguien añade el primer permiso de

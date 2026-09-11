@@ -404,6 +404,23 @@ export class AccountMembersService {
       );
     }
 
+    // Ya hay un índice único que impide dos vínculos activos con la misma
+    // cuenta, pero conviene comprobarlo antes: así la persona lee que ya
+    // tiene acceso en vez de recibir un error de base de datos.
+    const { data: existing } = await this.supabase
+      .from('account_members')
+      .select('id')
+      .eq('owner_id', row.owner_id)
+      .eq('member_id', actor.id)
+      .eq('status', 'active')
+      .maybeSingle();
+
+    if (existing) {
+      throw new BadRequestException(
+        'Ya tienes acceso a esta cuenta. Puedes consultarla desde el selector del panel.',
+      );
+    }
+
     const { data, error: updateError } = await this.supabase
       .from('account_members')
       .update({

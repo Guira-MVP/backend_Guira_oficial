@@ -42,3 +42,20 @@ export const TargetUserId = createParamDecorator(
     return user?.linkedAccess?.ownerId ?? user?.id ?? '';
   },
 );
+
+/**
+ * Contexto vinculado de la petición, o `null` si es el titular sobre sus
+ * propios datos.
+ *
+ * Lo necesitan los handlers que además de filtrar tienen que **recortar**
+ * lo que devuelven — el enmascarado de datos bancarios, por ejemplo. Eso
+ * no se puede resolver con `@RequiresCapability`, que decide si se entra
+ * al endpoint pero no cómo se serializa la respuesta.
+ */
+export const LinkedAccess = createParamDecorator(
+  (_data: unknown, ctx: ExecutionContext) => {
+    const request = ctx.switchToHttp().getRequest();
+    const user = request.user as AuthenticatedUser | undefined;
+    return user?.linkedAccess ?? null;
+  },
+);

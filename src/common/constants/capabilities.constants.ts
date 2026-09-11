@@ -34,8 +34,6 @@ export const CAPABILITIES = [
   'balances:read',
   /** Beneficiarios / proveedores dados de alta por el titular. */
   'suppliers:read',
-  /** Estado del KYB. Nunca los documentos de identidad. */
-  'compliance:read',
   /** Abrir y descargar los adjuntos de un expediente. */
   'orders:documents',
   /** Ver los datos bancarios sin enmascarar. Sensibilidad muy alta. */
@@ -86,10 +84,19 @@ export const PRESET_CAPABILITIES: Record<
     'activity:read',
     'balances:read',
     'suppliers:read',
-    'compliance:read',
     'orders:documents',
   ],
 };
+
+/**
+ * No existe un permiso de "estado de cumplimiento" a propósito.
+ *
+ * El endpoint que hoy devuelve el KYB (`GET /compliance/kyb`) trae
+ * `businesses(*, business_directors(*), business_ubos(*))`: datos
+ * personales de directores y beneficiarios finales. Concederlo expondría
+ * justo lo que el diseño excluye. Para ofrecerlo haría falta un endpoint
+ * nuevo que devuelva únicamente el estado, no la solicitud completa.
+ */
 
 /** Etiquetas en castellano para correos y auditoría. */
 export const PRESET_LABELS: Record<Preset, string> = {
@@ -103,7 +110,6 @@ export const CAPABILITY_LABELS: Record<Capability, string> = {
   'activity:read': 'Ver actividad e historial',
   'balances:read': 'Ver saldos',
   'suppliers:read': 'Ver beneficiarios',
-  'compliance:read': 'Ver estado de cumplimiento',
   'orders:documents': 'Abrir documentos adjuntos',
   'bank_details:full': 'Ver datos bancarios completos',
   'reports:export': 'Exportar información',

@@ -21,6 +21,10 @@ import type { AuthenticatedUser } from '../../core/guards/supabase-auth.guard';
 import { RolesGuard } from '../../core/guards/roles.guard';
 import { Roles } from '../../core/decorators/roles.decorator';
 import { ManualAdjustmentDto } from './dto/manual-adjustment.dto';
+import {
+  RequiresCapability,
+  TargetUserId,
+} from '../../core/decorators/linked-access.decorator';
 
 // ─────────────────────────────────────────────────
 //  Rutas de usuario: /wallets/...
@@ -34,23 +38,26 @@ export class WalletsController {
 
   @Get()
   @ApiOperation({ summary: 'Listar wallets activas del usuario' })
-  findAll(@CurrentUser() user: AuthenticatedUser) {
-    return this.walletsService.findAllByUser(user.id);
+  @RequiresCapability('balances:read')
+  findAll(@TargetUserId() targetUserId: string) {
+    return this.walletsService.findAllByUser(targetUserId);
   }
 
   @Get('balances')
   @ApiOperation({ summary: 'Balances del usuario (todas las monedas)' })
-  getBalances(@CurrentUser() user: AuthenticatedUser) {
-    return this.walletsService.getBalances(user.id);
+  @RequiresCapability('balances:read')
+  getBalances(@TargetUserId() targetUserId: string) {
+    return this.walletsService.getBalances(targetUserId);
   }
 
   @Get('balances/:currency')
   @ApiOperation({ summary: 'Balance de una divisa específica' })
+  @RequiresCapability('balances:read')
   getBalanceByCurrency(
-    @CurrentUser() user: AuthenticatedUser,
+    @TargetUserId() targetUserId: string,
     @Param('currency') currency: string,
   ) {
-    return this.walletsService.getBalanceByCurrency(user.id, currency);
+    return this.walletsService.getBalanceByCurrency(targetUserId, currency);
   }
 
   @Get('payin-routes')

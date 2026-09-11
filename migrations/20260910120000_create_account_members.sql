@@ -41,6 +41,9 @@ CREATE TABLE IF NOT EXISTS public.account_members (
   -- es lo que impide que el invitado reenvíe el enlace a un tercero.
   invited_email          text NOT NULL,
 
+  -- Nombre de la persona invitada, tal como lo escribió el titular.
+  full_name              text NOT NULL,
+
   -- Plantilla elegida al invitar. Etiqueta para UI y auditoría.
   preset                 text NOT NULL
     CHECK (preset IN ('operations', 'finance', 'custom')),
@@ -84,6 +87,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS account_members_unique_live
 -- Resolución del contexto en cada request: "¿de qué cuentas es miembro X?"
 CREATE INDEX IF NOT EXISTS account_members_member_idx
   ON public.account_members (member_id) WHERE status = 'active';
+
+-- Una persona no puede tener dos vínculos activos con la misma cuenta.
+-- Sin esto, alguien invitado a dos correos distintos que aceptara ambas
+-- acabaría con dos filas activas, y el guard —que resuelve el vínculo con
+-- maybeSingle()— fallaría dejándolo sin ningún acceso.
+CREATE UNIQUE INDEX IF NOT EXISTS account_members_unique_active_member
+  ON public.account_members (owner_id, member_id)
+  WHERE status = 'active' AND member_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS account_members_owner_idx
   ON public.account_members (owner_id);
