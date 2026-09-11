@@ -432,11 +432,20 @@ export class AccountMembersService {
       .eq('id', row.id)
       .eq('status', 'pending') // evita la carrera de dos aceptaciones
       .select('*')
-      .single();
+      .maybeSingle();
 
-    if (updateError) {
+    // Sin filas: otra petición ganó la carrera y ya la aceptó. Pasa con un
+    // doble clic en el botón. No es un error del sistema, así que no se
+    // responde 500: el resultado que la persona esperaba ya ocurrió.
+    if (!updateError && !data) {
+      throw new BadRequestException(
+        'Esta invitación ya fue aceptada. Recarga la página.',
+      );
+    }
+
+    if (updateError || !data) {
       this.logger.error(
-        `Error aceptando invitación ${row.id}: ${updateError.message}`,
+        `Error aceptando invitación ${row.id}: ${updateError?.message}`,
       );
       throw new InternalServerErrorException(
         'No se pudo aceptar la invitación',
