@@ -33,15 +33,32 @@ const INVITATION_TTL_DAYS = 7;
 @Injectable()
 export class AccountMembersService {
   private readonly logger = new Logger(AccountMembersService.name);
-  private readonly frontendUrl: string;
 
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly configService: ConfigService,
     private readonly emailService: EmailService,
-  ) {
-    this.frontendUrl =
-      this.configService.get<string>('app.frontendUrl') ?? '';
+  ) {}
+
+  /**
+   * `app.frontendUrl` no existe: la clave real es `app.urlFrontend` (ver
+   * `staff-admin.service.ts`, que ya la usa así). Con la clave equivocada
+   * esto siempre devolvía `undefined`, y sin el resguardo de
+   * `staff-admin.service.ts` el enlace de invitación se armaba como una
+   * URL relativa (`/invitacion-equipo?token=...`). Gmail, al no poder
+   * resolver el host, le antepone `http://` y el resultado visible es
+   * `http:///invitacion-equipo?token=...` — tres barras, dominio vacío.
+   *
+   * `URL_FRONTEND` puede traer varios orígenes separados por coma (CORS);
+   * el enlace usa el primero.
+   */
+  private get frontendUrl(): string {
+    return (
+      this.configService
+        .get<string>('app.urlFrontend')
+        ?.split(',')[0]
+        ?.trim() || 'http://localhost:3000'
+    );
   }
 
   // ═══════════════════════════════════════════════
