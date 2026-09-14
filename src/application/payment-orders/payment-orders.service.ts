@@ -85,6 +85,13 @@ import {
   getTransferMinAmount,
 } from '../../common/constants/transfer-route-catalog.constants';
 import {
+  ATTACHMENT_BUCKET,
+  ATTACHMENT_COLUMNS,
+  ATTACHMENT_URL_TTL_SECONDS,
+  resolveAttachmentPath,
+  type AttachmentKind,
+} from './order-attachments';
+import {
   GOVERNED_FLOWS,
   isGovernedFlow,
   resolveDefaultFlows,
@@ -4898,6 +4905,79 @@ export class PaymentOrdersService {
     }
 
     return this.toClientOrder(data);
+  }
+
+  /**
+   * Enlace firmado para un adjunto de una orden.
+   *
+   * Existe porque antes el navegador firmaba estos archivos por su cuenta
+   * (`useSignedUrl` en el frontend) contra Supabase Storage. Eso funciona
+   * para el titular —la policy `payment_receipts_select_own` compara
+   * `auth.uid()` con la carpeta del archivo— pero deja fuera a quien
+   * consulta la cuenta de otra empresa: su `auth.uid()` nunca coincide con
+   * la carpeta del titular, así que la RLS deniega y Storage responde
+   * "Object not found". La capacidad `orders:documents` no servía de nada
+   * porque esa ruta no pasaba por el backend.
+   *
+   * ⚠️ Aquí se firma con la service key, que IGNORA la RLS. Es la única
+   * defensa que queda, así que la validación de abajo no es cosmética:
+   * `supporting_document_url` lo escribe el propio cliente al crear la
+   * orden, de modo que firmar a ciegas lo que traiga la columna permitiría
+   * guardar `kyc-documents/<otra-persona>/pasaporte.pdf` y leer
+   * documentación ajena. Se exige bucket en lista blanca y que la carpeta
+   * sea la del dueño de la orden.
+   */
+  async getOrderAttachmentUrl(
+    userId: string,
+    orderId: string,
+    kind: AttachmentKind,
+  ): Promise<{ url: string; expires_in: number }> {
+    const column = ATTACHMENT_COLUMNS[kind];
+
+    const { data: order, error } = await this.supabase
+      .from('payment_orders')
+      .select(`id, user_id, ${column}`)
+      .eq('id', orderId)
+      .eq('user_id', userId)
+      .single();
+
+    if (error || !order) {
+      throw new NotFoundException('Orden no encontrada');
+    }
+
+    const stored = (order as Record<string, unknown>)[column];
+    if (typeof stored !== 'string' || stored.trim() === '') {
+      throw new NotFoundException('Esta orden no tiene ese documento');
+    }
+
+    let path: string;
+    try {
+      path = resolveAttachmentPath(stored, order.user_id as string);
+    } catch (err) {
+      // Una ruta rechazada puede ser un dato viejo o un intento de leer la
+      // carpeta de otra persona aprovechando que aquí se firma con la
+      // service key. En ambos casos interesa verlo en los logs.
+      this.logger.warn(
+        `Adjunto ${kind} rechazado en la orden ${orderId} (dueño ${order.user_id}): ${stored}`,
+      );
+      throw err;
+    }
+
+    const { data: signed, error: signError } = await this.supabase.storage
+      .from(ATTACHMENT_BUCKET)
+      .createSignedUrl(path, ATTACHMENT_URL_TTL_SECONDS, { download: true });
+
+    if (signError || !signed?.signedUrl) {
+      this.logger.error(
+        `No se pudo firmar el adjunto ${kind} de la orden ${orderId}: ${signError?.message}`,
+      );
+      throw new NotFoundException('No se pudo preparar el documento');
+    }
+
+    return {
+      url: signed.signedUrl,
+      expires_in: ATTACHMENT_URL_TTL_SECONDS,
+    };
   }
 
   /**

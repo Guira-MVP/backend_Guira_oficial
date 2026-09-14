@@ -47,6 +47,10 @@ import {
   maskOrdersIfNeeded,
   shouldMask,
 } from '../../common/masking/mask-bank-details';
+import {
+  ATTACHMENT_KINDS,
+  isAttachmentKind,
+} from './order-attachments';
 import { CreateInterbankOrderDto } from './dto/create-interbank-order.dto';
 import { CreateWalletRampOrderDto } from './dto/create-wallet-ramp-order.dto';
 import { ConfirmDepositDto } from './dto/confirm-deposit.dto';
@@ -440,6 +444,31 @@ export class PaymentOrdersController {
     });
 
     return new StreamableFile(buffer);
+  }
+
+  @Get(':id/attachments/:kind')
+  @ApiOperation({
+    summary: 'Enlace firmado para un documento adjunto de la orden',
+  })
+  @RequiresCapability('orders:documents')
+  async getOrderAttachment(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('kind') kind: string,
+    @TargetUserId() targetUserId: string,
+  ) {
+    // El tipo se valida aquí y no con un pipe para poder devolver los
+    // valores admitidos: es una URL fácil de escribir a mano.
+    if (!isAttachmentKind(kind)) {
+      throw new BadRequestException(
+        `Documento no reconocido. Valores admitidos: ${ATTACHMENT_KINDS.join(', ')}`,
+      );
+    }
+
+    return this.paymentOrdersService.getOrderAttachmentUrl(
+      targetUserId,
+      id,
+      kind,
+    );
   }
 
   // ── Acciones del usuario ──
