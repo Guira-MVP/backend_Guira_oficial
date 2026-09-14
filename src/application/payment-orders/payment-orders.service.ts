@@ -88,8 +88,9 @@ import {
   ATTACHMENT_BUCKET,
   ATTACHMENT_COLUMNS,
   ATTACHMENT_URL_TTL_SECONDS,
-  resolveAttachmentPath,
+  resolveAttachmentTarget,
   type AttachmentKind,
+  type ResolvedAttachment,
 } from './order-attachments';
 import {
   GOVERNED_FLOWS,
@@ -4931,12 +4932,17 @@ export class PaymentOrdersService {
     userId: string,
     orderId: string,
     kind: AttachmentKind,
-  ): Promise<{ url: string; expires_in: number }> {
-    const column = ATTACHMENT_COLUMNS[kind];
-
+  ): Promise<{ url: string; expires_in: number; external: boolean }> {
+    // Las tres columnas se piden estáticas y se elige después en memoria.
+    // Interpolar el nombre de columna en el `select` funcionaba —`kind`
+    // viene de una lista blanca— pero construir la consulta con una
+    // plantilla es justo el patrón que no conviene normalizar: basta con
+    // que alguien lo copie donde el valor sí venga del usuario.
     const { data: order, error } = await this.supabase
       .from('payment_orders')
-      .select(`id, user_id, ${column}`)
+      .select(
+        'id, user_id, supporting_document_url, deposit_proof_url, receipt_url',
+      )
       .eq('id', orderId)
       .eq('user_id', userId)
       .single();
@@ -4945,16 +4951,17 @@ export class PaymentOrdersService {
       throw new NotFoundException('Orden no encontrada');
     }
 
-    const stored = (order as Record<string, unknown>)[column];
+    const column = ATTACHMENT_COLUMNS[kind];
+    const stored = (order as unknown as Record<string, unknown>)[column];
     if (typeof stored !== 'string' || stored.trim() === '') {
       throw new NotFoundException('Esta orden no tiene ese documento');
     }
 
-    let path: string;
+    let target: ResolvedAttachment;
     try {
-      path = resolveAttachmentPath(stored, order.user_id as string);
+      target = resolveAttachmentTarget(stored, order.user_id as string, kind);
     } catch (err) {
-      // Una ruta rechazada puede ser un dato viejo o un intento de leer la
+      // Un valor rechazado puede ser un dato viejo o un intento de leer la
       // carpeta de otra persona aprovechando que aquí se firma con la
       // service key. En ambos casos interesa verlo en los logs.
       this.logger.warn(
@@ -4963,9 +4970,18 @@ export class PaymentOrdersService {
       throw err;
     }
 
+    // El CTAV suele ser un enlace al dashboard de Bridge y no un archivo
+    // subido. No hay nada que firmar: se devuelve tal cual, ya validado
+    // contra la lista de hosts.
+    if (target.type === 'external') {
+      return { url: target.url, expires_in: 0, external: true };
+    }
+
     const { data: signed, error: signError } = await this.supabase.storage
       .from(ATTACHMENT_BUCKET)
-      .createSignedUrl(path, ATTACHMENT_URL_TTL_SECONDS, { download: true });
+      .createSignedUrl(target.path, ATTACHMENT_URL_TTL_SECONDS, {
+        download: true,
+      });
 
     if (signError || !signed?.signedUrl) {
       this.logger.error(
@@ -4977,6 +4993,7 @@ export class PaymentOrdersService {
     return {
       url: signed.signedUrl,
       expires_in: ATTACHMENT_URL_TTL_SECONDS,
+      external: false,
     };
   }
 
