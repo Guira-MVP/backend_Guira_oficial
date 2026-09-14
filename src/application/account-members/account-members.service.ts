@@ -25,8 +25,10 @@ import {
   InviteMemberDto,
   LinkedAccountResponse,
   MAX_ACTIVE_MEMBERS,
+  ReopenInvitationDto,
   UpdateMemberCapabilitiesDto,
 } from './dto/account-members.dto';
+import { InvitationThrottleService } from './invitation-throttle.service';
 
 const INVITATION_TTL_DAYS = 7;
 
@@ -38,7 +40,43 @@ export class AccountMembersService {
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly configService: ConfigService,
     private readonly emailService: EmailService,
+    private readonly throttle: InvitationThrottleService,
   ) {}
+
+  /**
+   * Solo una cuenta con el onboarding aprobado puede mandar invitaciones.
+   *
+   * La pantalla `/equipo` ya exige `approved` para renderizarse, pero el
+   * endpoint no lo comprobaba: con un JWT válido, una cuenta registrada
+   * hace treinta segundos y sin KYB podía hacer que Guira enviara correos
+   * con su marca a cualquier dirección, con su propio `full_name`
+   * incrustado en el cuerpo. El tope de 20 tampoco lo frenaba, porque
+   * cuenta solo `pending + active`: cancelando se libera el hueco.
+   *
+   * Es la misma barrera que `assertOnboardingApproved` en las órdenes de
+   * pago, por el mismo motivo: la protección de la interfaz no vale para
+   * un endpoint que se puede llamar directamente.
+   */
+  private async assertCanInvite(actor: AuthenticatedUser): Promise<void> {
+    const { data: profile, error } = await this.supabase
+      .from('profiles')
+      .select('onboarding_status')
+      .eq('id', actor.id)
+      .single();
+
+    if (error || !profile) {
+      this.logger.error(
+        `No se pudo verificar el onboarding de ${actor.id}: ${error?.message}`,
+      );
+      throw new ForbiddenException('No se pudo verificar tu cuenta.');
+    }
+
+    if (profile.onboarding_status !== 'approved') {
+      throw new ForbiddenException(
+        'Termina la verificación de tu cuenta para poder invitar a tu equipo.',
+      );
+    }
+  }
 
   /**
    * `app.frontendUrl` no existe: la clave real es `app.urlFrontend` (ver
@@ -123,6 +161,11 @@ export class AccountMembersService {
       status: row.status,
       invited_at: row.created_at,
       accepted_at: row.accepted_at ?? null,
+      expires_at: row.expires_at ?? null,
+      // `member_id` y no `accepted_at`: al reabrir una invitación el
+      // `accepted_at` se sobrescribe, pero `member_id` conserva que esa
+      // persona llegó a tener cuenta vinculada alguna vez.
+      was_accepted: row.member_id != null,
     };
   }
 
@@ -159,6 +202,8 @@ export class AccountMembersService {
       throw new BadRequestException('No puedes invitarte a ti mismo.');
     }
 
+    await this.assertCanInvite(actor);
+    await this.throttle.consume(actor.id, email);
     await this.expireStale(actor.id);
 
     const { count } = await this.supabase
@@ -342,6 +387,125 @@ export class AccountMembersService {
     });
 
     return this.toResponse(data);
+  }
+
+  /**
+   * Reabre una invitación sobre la misma fila.
+   *
+   * Un solo mecanismo para los dos botones de la pantalla: «Reenviar» sobre
+   * una pendiente o caducada, y «Volver a invitar» sobre una retirada. La
+   * diferencia es si el titular manda permisos nuevos.
+   *
+   * Existe porque sin él el sistema se atasca: el índice único
+   * `account_members_unique_live` cubre (owner_id, correo) para pending y
+   * active, así que si la invitación se perdió en el correo y sigue
+   * pendiente, invitar otra vez devuelve 23505 — y la única salida era
+   * «Retirar acceso» (cuyo diálogo afirma algo falso: esa persona nunca
+   * tuvo acceso) y volver a empezar. Siete días atrapado.
+   */
+  async reopen(
+    actor: AuthenticatedUser,
+    memberRowId: string,
+    dto: ReopenInvitationDto,
+  ): Promise<{ member: AccountMemberResponse; email_sent: boolean }> {
+    const current = await this.findOwnedRow(actor.id, memberRowId);
+
+    if (current.status === 'active') {
+      throw new BadRequestException(
+        'Esa persona ya tiene acceso a tu cuenta.',
+      );
+    }
+
+    await this.assertCanInvite(actor);
+
+    // El cupo se consume ANTES de tocar la fila: si está agotado, la
+    // invitación que ya se mandó debe seguir siendo válida.
+    await this.throttle.consume(actor.id, current.invited_email as string);
+
+    // Volver a dar acceso ocupa una plaza del equipo otra vez. Se cuentan
+    // las vivas excluyendo esta fila, que ahora mismo no lo está.
+    const { count } = await this.supabase
+      .from('account_members')
+      .select('id', { count: 'exact', head: true })
+      .eq('owner_id', actor.id)
+      .in('status', ['pending', 'active'])
+      .neq('id', memberRowId);
+
+    if ((count ?? 0) >= MAX_ACTIVE_MEMBERS) {
+      throw new BadRequestException(
+        `Has alcanzado el máximo de ${MAX_ACTIVE_MEMBERS} personas en tu equipo.`,
+      );
+    }
+
+    // Sin permisos nuevos se conservan los de la invitación. Con ellos se
+    // vuelven a resolver contra el catálogo ACTUAL: si un permiso se retiró
+    // del catálogo desde que se concedió —como pasó con `compliance:read`—,
+    // reabrir a ciegas lo reintroduciría.
+    const capabilities = dto.preset
+      ? resolveCapabilities(dto.preset, dto.capabilities)
+      : resolveCapabilities(
+          current.preset as Preset,
+          (current.capabilities ?? []) as Capability[],
+        );
+
+    const token = randomBytes(32).toString('hex');
+    const expiresAt = new Date(
+      Date.now() + INVITATION_TTL_DAYS * 24 * 60 * 60 * 1000,
+    );
+
+    const { data, error } = await this.supabase
+      .from('account_members')
+      .update({
+        status: 'pending',
+        preset: dto.preset ?? current.preset,
+        capabilities,
+        // Token nuevo siempre: un enlace viejo que se hubiera filtrado deja
+        // de servir en cuanto se reabre.
+        invitation_token_hash: this.hashToken(token),
+        expires_at: expiresAt.toISOString(),
+        // Se limpia el rastro de la revocación anterior; el histórico de
+        // quién la retiró y por qué vive en audit_logs.
+        revoked_at: null,
+        revoked_by: null,
+        revoke_reason: null,
+      })
+      .eq('id', memberRowId)
+      .eq('owner_id', actor.id)
+      .select('*')
+      .single();
+
+    if (error) {
+      // 23505: mientras esta fila estaba retirada, se invitó de nuevo al
+      // mismo correo y esa invitación sigue viva.
+      if (error.code === '23505') {
+        throw new BadRequestException(
+          'Ya hay una invitación activa para ese correo.',
+        );
+      }
+      this.logger.error(`Error reabriendo ${memberRowId}: ${error.message}`);
+      throw new InternalServerErrorException(
+        'No se pudo reenviar la invitación',
+      );
+    }
+
+    const emailSent = await this.sendInvite({
+      email: data.invited_email,
+      fullName: data.full_name ?? data.invited_email,
+      token,
+      companyName: actor.profile.full_name ?? 'Una empresa',
+      preset: data.preset,
+      capabilities,
+    });
+
+    await this.audit({
+      actor,
+      action: 'TEAM_MEMBER_INVITE_REOPENED',
+      targetId: memberRowId,
+      previous: { status: current.status, capabilities: current.capabilities },
+      next: { status: 'pending', capabilities },
+    });
+
+    return { member: this.toResponse(data), email_sent: emailSent };
   }
 
   private async findOwnedRow(

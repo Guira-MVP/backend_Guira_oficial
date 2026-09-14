@@ -22,6 +22,7 @@ describe('AccountMembersService — frontendUrl', () => {
       {} as any, // supabase — no se usa en este getter
       configService,
       {} as any, // emailService — no se usa en este getter
+      {} as any, // throttle — no se usa en este getter
     );
   }
 

@@ -19,6 +19,7 @@ import { AccountMembersService } from './account-members.service';
 import {
   AcceptInvitationDto,
   InviteMemberDto,
+  ReopenInvitationDto,
   RevokeMemberDto,
   UpdateMemberCapabilitiesDto,
 } from './dto/account-members.dto';
@@ -127,6 +128,25 @@ export class AccountMembersController {
     @Body() dto: RevokeMemberDto,
   ) {
     return this.service.revoke(user, id, dto.reason);
+  }
+
+  @Post(':id/reopen')
+  @Roles('client')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Reenviar o volver a invitar sobre la misma fila',
+    description:
+      'Genera un token nuevo y renueva el plazo. Sin `preset` conserva los ' +
+      'permisos actuales (reenviar); con `preset` los reemplaza (volver a ' +
+      'invitar a alguien cuyo acceso se retiró).',
+  })
+  @ApiResponse({ status: 429, description: 'Límite de envíos alcanzado' })
+  reopen(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: ReopenInvitationDto,
+  ) {
+    return this.service.reopen(user, id, dto);
   }
 
   // ── Lado del invitado ────────────────────────

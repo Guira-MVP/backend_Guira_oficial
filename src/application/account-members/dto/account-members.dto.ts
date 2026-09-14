@@ -99,6 +99,41 @@ export class AcceptInvitationDto {
   token: string;
 }
 
+/**
+ * Reabre una invitación sobre la MISMA fila: token nuevo, plazo nuevo.
+ *
+ * Cubre los dos casos con un solo mecanismo, y la diferencia está en si
+ * llegan permisos o no:
+ *
+ *  · Reenviar (pendiente o caducada) — sin `preset`: se conservan los
+ *    permisos que ya tenía la invitación.
+ *  · Volver a invitar (retirada) — con `preset`: el titular reconfirma qué
+ *    verá esa persona. Para alguien que vuelve meses después, revisarlo no
+ *    es fricción, es el momento correcto de pensarlo.
+ *
+ * Reutilizar la fila en vez de insertar otra mantiene UNA por persona: un
+ * contador que entra y sale cuatro veces sigue siendo una línea en la
+ * lista, no cuatro.
+ */
+export class ReopenInvitationDto {
+  @ApiPropertyOptional({
+    enum: PRESETS,
+    description:
+      'Solo al volver a invitar a alguien cuyo acceso se retiró. Omitirlo ' +
+      'conserva los permisos actuales de la invitación.',
+  })
+  @IsOptional()
+  @IsIn(PRESETS, { message: 'Plantilla de permisos inválida' })
+  preset?: Preset;
+
+  @ApiPropertyOptional({ isArray: true, enum: CAPABILITIES })
+  @ValidateIf((dto: ReopenInvitationDto) => dto.preset === 'custom')
+  @IsArray()
+  @ArrayMaxSize(CAPABILITIES.length)
+  @IsIn(CAPABILITIES, { each: true, message: 'Permiso desconocido' })
+  capabilities?: Capability[];
+}
+
 export interface AccountMemberResponse {
   id: string;
   member_id: string | null;
@@ -109,6 +144,17 @@ export interface AccountMemberResponse {
   status: string;
   invited_at: string;
   accepted_at: string | null;
+  /**
+   * Cuándo caduca la invitación. La pantalla lo usa para mostrar «caduca en
+   * N días», que es el dato que decide si conviene esperar o reenviar.
+   */
+  expires_at: string | null;
+  /**
+   * Si la persona llegó a aceptar alguna vez. Distingue una invitación
+   * CANCELADA (nunca aceptó) de un acceso RETIRADO (sí aceptó y luego se le
+   * quitó) sin necesidad de un estado nuevo en la base de datos.
+   */
+  was_accepted: boolean;
 }
 
 /** Cuenta a la que un usuario tiene acceso vinculado. Alimenta el selector. */

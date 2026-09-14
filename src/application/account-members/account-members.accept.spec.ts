@@ -78,6 +78,7 @@ describe('AccountMembersService.accept — validación de correo', () => {
       supabase,
       { get: () => undefined } as any,
       {} as any, // emailService — no se usa en accept()
+      {} as any, // throttle — accept() no envía correo, no consume cupo
     );
   }
 
