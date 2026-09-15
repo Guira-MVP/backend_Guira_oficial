@@ -77,6 +77,17 @@ export interface DiditAmlResult {
   warnings: DiditVerdictWarning[];
 }
 
+export interface DiditKeyPersonResult {
+  id: string;
+  role: 'director' | 'ubo';
+  name: string;
+  position?: string;
+  percentage?: number;
+  aml: DiditAmlResult | null;
+  id_verification?: DiditIdVerificationResult | null;
+  face_match?: DiditFaceMatchResult | null;
+}
+
 export type DiditOverall = 'approved' | 'declined' | 'needs_review' | 'error';
 
 export interface DiditVerdict {
@@ -86,8 +97,11 @@ export interface DiditVerdict {
   run_by: string;
   run_count: number;
   threshold_used: number;
+  application_type?: 'kyc' | 'kyb';
   id_verification: DiditIdVerificationResult | null;
   face_match: DiditFaceMatchResult | null;
   aml: DiditAmlResult | null;
+  company_aml?: DiditAmlResult | null;
+  key_people?: DiditKeyPersonResult[];
   errors: Array<{ check: string; message: string }>;
 }

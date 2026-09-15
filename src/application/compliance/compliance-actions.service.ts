@@ -161,6 +161,7 @@ export class ComplianceActionsService {
         applicationData = this.mapKybToFormData(kyb);
         previousData = kyb.previous_data ?? null;
         onboardingType = 'company';
+        diditScreening = kyb.screening?.didit ?? null;
       }
     }
 

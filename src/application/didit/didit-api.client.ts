@@ -176,6 +176,7 @@ export class DiditApiClient {
 
   async screenAml(input: {
     fullName: string;
+    entityType?: 'person' | 'company';
     dateOfBirth?: string;
     nationality?: string;
     documentNumber?: string;
@@ -183,6 +184,7 @@ export class DiditApiClient {
   }): Promise<DiditAmlRaw> {
     return this.postJson<DiditAmlRaw>(DIDIT_AML_PATH, {
       full_name: input.fullName,
+      entity_type: input.entityType ?? 'person',
       date_of_birth: input.dateOfBirth,
       nationality: input.nationality,
       document_number: input.documentNumber,
