@@ -16,6 +16,7 @@ import { PsavService } from '../psav/psav.service';
 import { SetLimitsDto } from './dto/admin-compliance.dto';
 import { buildBridgeIssueDetails } from '../webhooks/bridge-rejection-reasons';
 import { AdminGateway } from '../admin/admin.gateway';
+import { DiditVerificationService } from '../didit/didit-verification.service';
 
 @Injectable()
 export class ComplianceActionsService {
@@ -29,7 +30,28 @@ export class ComplianceActionsService {
     private readonly emailService: EmailService,
     private readonly psavService: PsavService,
     private readonly adminGateway: AdminGateway,
+    private readonly diditVerificationService: DiditVerificationService,
   ) {}
+
+  /**
+   * Pre-verificación de identidad con Didit — capa aditiva, independiente
+   * del flujo de aprobación hacia Bridge. No cambia kyc_applications.status
+   * ni cierra el review; solo persiste el veredicto en `screening.didit`.
+   */
+  async verifyWithDidit(reviewId: string, actorId: string, actorRole: string, force = false) {
+    const result = await this.diditVerificationService.runForReview(
+      reviewId,
+      actorId,
+      actorRole,
+      force,
+    );
+    this.adminGateway.emitComplianceReviewUpdated({
+      id: reviewId,
+      updated_at: new Date().toISOString(),
+      action: 'updated',
+    });
+    return result;
+  }
 
   // ── REVIEWS (Lectura) ─────────────────────────────────────────────
 
@@ -113,6 +135,7 @@ export class ComplianceActionsService {
     let applicationData: Record<string, any> = {};
     let previousData: Record<string, any> | null = null;
     let onboardingType: 'personal' | 'company' = 'personal';
+    let diditScreening: Record<string, any> | null = null;
 
     if (review.subject_type === 'kyc_applications') {
       const { data: kyc } = await this.supabase
@@ -125,6 +148,7 @@ export class ComplianceActionsService {
         applicationData = this.mapKycToFormData(kyc);
         previousData = kyc.previous_data ?? null;
         onboardingType = 'personal';
+        diditScreening = kyc.screening?.didit ?? null;
       }
     } else if (review.subject_type === 'kyb_applications') {
       const { data: kyb } = await this.supabase
@@ -158,6 +182,7 @@ export class ComplianceActionsService {
       previous_data: previousData,
       profile: profileData,
       documents,
+      didit_screening: diditScreening,
     };
   }
 

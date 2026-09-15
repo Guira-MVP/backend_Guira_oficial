@@ -32,6 +32,7 @@ import {
   AddCommentDto,
   AssignReviewDto,
   SetLimitsDto,
+  VerifyDiditDto,
 } from './dto/admin-compliance.dto';
 import { CurrentUser } from '../../core/decorators/current-user.decorator';
 import { RolesGuard } from '../../core/guards/roles.guard';
@@ -310,6 +311,27 @@ export class AdminComplianceController {
     @CurrentUser() actor: AuthenticatedUser,
   ) {
     return this.actionsService.resendToBridge(id, actor.id);
+  }
+
+  @Post('reviews/:id/verify-didit')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({
+    summary: 'Pre-verificar identidad con Didit antes de enviar a Bridge',
+    description:
+      'Corre ID Verification + Face Match + AML de Didit sobre el expediente KYC y guarda el veredicto. ' +
+      'No cambia el estado del expediente ni bloquea el envío a Bridge — es solo una señal para el staff.',
+  })
+  verifyWithDidit(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: VerifyDiditDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ) {
+    return this.actionsService.verifyWithDidit(
+      id,
+      actor.id,
+      actor.profile.role,
+      dto.force,
+    );
   }
 
   @Post('reviews/:id/reject')

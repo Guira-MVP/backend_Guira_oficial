@@ -16,6 +16,8 @@ export interface AppConfig {
   bridgeApiKey: string;
   bridgeApiUrl: string;
   bridgeWebhookPublicKey: string;
+  diditApiKey: string;
+  diditApiUrl: string;
   binanceP2pApiUrl: string;
   zeptoMailToken: string;
   zeptoMailApiUrl: string;
@@ -37,6 +39,8 @@ export default registerAs(
     bridgeApiKey: process.env.BRIDGE_API_KEY ?? '',
     bridgeApiUrl: process.env.BRIDGE_API_URL ?? '',
     bridgeWebhookPublicKey: process.env.BRIDGE_WEBHOOK_PUBLIC_KEY ?? '',
+    diditApiKey: process.env.DIDIT_API_KEY ?? '',
+    diditApiUrl: process.env.DIDIT_API_URL ?? '',
     binanceP2pApiUrl:
       process.env.BINANCE_P2P_API_URL ??
       'https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search',

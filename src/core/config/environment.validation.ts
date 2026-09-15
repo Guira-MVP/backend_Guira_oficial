@@ -42,6 +42,15 @@ export const environmentValidationSchema = Joi.object({
     .uri()
     .allow('')
     .default('https://api.bridge.xyz'),
+
+  // Didit (pre-verificación KYC, opcional): a diferencia de Bridge, no es
+  // obligatorio en ningún tier — el flujo de Bridge debe seguir funcionando
+  // aunque Didit no esté configurado.
+  DIDIT_API_KEY: Joi.string().allow('').default(''),
+  DIDIT_API_URL: Joi.string()
+    .uri()
+    .allow('')
+    .default('https://verification.didit.me'),
   // Staging can be deployed before its sandbox webhook is registered. Until
   // configured, invalid or unsigned events are rejected by the service.
   BRIDGE_WEBHOOK_PUBLIC_KEY: Joi.when('APP_ENV', {

@@ -70,6 +70,17 @@ export class AssignReviewDto {
   staff_user_id: string;
 }
 
+export class VerifyDiditDto {
+  @ApiPropertyOptional({
+    description:
+      'Re-ejecuta la verificación aunque ya exista un veredicto guardado (consume crédito).',
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  force?: boolean;
+}
+
 export class SetLimitsDto {
   @ApiPropertyOptional()
   @IsNumber()

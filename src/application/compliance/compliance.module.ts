@@ -13,9 +13,16 @@ import { BridgeModule } from '../bridge/bridge.module';
 import { OnboardingModule } from '../onboarding/onboarding.module';
 import { PsavModule } from '../psav/psav.module';
 import { AdminModule } from '../admin/admin.module';
+import { DiditModule } from '../didit/didit.module';
 
 @Module({
-  imports: [forwardRef(() => BridgeModule), forwardRef(() => OnboardingModule), PsavModule, AdminModule],
+  imports: [
+    forwardRef(() => BridgeModule),
+    forwardRef(() => OnboardingModule),
+    PsavModule,
+    AdminModule,
+    DiditModule,
+  ],
   controllers: [
     ComplianceController,
     AdminComplianceController,
