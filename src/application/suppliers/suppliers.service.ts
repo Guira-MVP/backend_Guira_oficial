@@ -15,6 +15,8 @@ import {
 } from './dto/create-supplier.dto';
 import { BridgeService } from '../bridge/bridge.service';
 import { FIAT_RAIL_TO_CURRENCY } from '../../common/constants/fiat-rail-catalog.constants';
+import { DiditWalletScreeningService } from '../didit/didit-wallet-screening.service';
+import { WalletScreeningVerdict } from '../didit/didit.types';
 
 /**
  * Rails que NO se integran con Bridge: el proveedor se guarda solo en la DB y el
@@ -35,6 +37,7 @@ export class SuppliersService {
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly bridgeService: BridgeService,
+    private readonly walletScreening: DiditWalletScreeningService,
   ) {}
 
   /**
@@ -180,6 +183,7 @@ export class SuppliersService {
     let bridge_external_account_id: string | null = null;
     let bridge_liquidation_address_id: string | null = null;
     let beneficiary_address_valid: boolean | null = null;
+    let wallet_screening: WalletScreeningVerdict | null = null;
 
     if (isFiat) {
       const fiatCurrency =
@@ -286,6 +290,49 @@ export class SuppliersService {
 
       await this.assertCurrencyActiveForSupplier(laCurrency);
 
+      // ── Wallet Screening (AML de la dirección) ──────────────────────
+      // Va ANTES de createLiquidationAddress a propósito: si la dirección está
+      // sancionada no queremos haber creado ya una liquidation address en
+      // Bridge apuntando a ella, porque Bridge no expone DELETE para ellas y
+      // quedaría un recurso huérfano que solo se puede limpiar a mano.
+      if (dto.wallet_address) {
+        wallet_screening = await this.walletScreening.screenBeneficiaryWallet({
+          walletAddress: dto.wallet_address,
+          walletNetwork: dto.wallet_network ?? 'solana',
+          userId,
+        });
+
+        if (wallet_screening.decision === 'block') {
+          // Nada que revertir: no se ha tocado Bridge ni la DB todavía. Se deja
+          // rastro en audit_logs porque al no insertarse el proveedor este
+          // evento no quedaría registrado en ningún otro sitio.
+          await this.supabase.from('audit_logs').insert({
+            performed_by: userId,
+            role: 'client',
+            action: 'SUPPLIER_WALLET_SCREENING_BLOCKED',
+            table_name: 'suppliers',
+            record_id: null,
+            new_values: {
+              wallet_network: dto.wallet_network ?? 'solana',
+              screening: wallet_screening,
+            },
+            reason: 'Dirección cripto rechazada por screening AML',
+            source: 'api',
+          });
+
+          this.logger.warn(
+            `Creación de proveedor cripto bloqueada para usuario ${userId}: ` +
+              `sanciones=${wallet_screening.sanctions_hit ?? false}, severidad=${wallet_screening.severity ?? 'n/a'}`,
+          );
+
+          throw new BadRequestException(
+            'No se puede registrar esta dirección: la revisión de cumplimiento detectó que está ' +
+              'vinculada a sanciones o a actividad de riesgo crítico. Verifica la dirección con el ' +
+              'beneficiario o contacta con soporte.',
+          );
+        }
+      }
+
       try {
 
         const la = await this.bridgeService.createLiquidationAddress(userId, {
@@ -339,6 +386,10 @@ export class SuppliersService {
           wallet_address: dto.wallet_address,
           wallet_network: dto.wallet_network?.toLowerCase(),
           wallet_currency: dto.wallet_currency?.toLowerCase(),
+          // Veredicto del screening AML de la dirección. Incluso cuando la
+          // revisión está apagada se guarda algo (`Skipped` + motivo), así que
+          // siempre queda registrado por qué se aceptó esta dirección.
+          wallet_screening: wallet_screening ?? undefined,
         };
 
     // Para crypto, la moneda del proveedor es el token (usdc, usdt, etc.),
@@ -882,6 +933,27 @@ export class SuppliersService {
       bankFieldsToMerge.checking_or_savings = dto.checking_or_savings;
     if (dto.wallet_address !== undefined)
       bankFieldsToMerge.wallet_address = dto.wallet_address;
+
+    // Si cambia la dirección, el veredicto guardado dejó de describirla: se
+    // invalida en lugar de arrastrarlo, porque una marca de riesgo (o su
+    // ausencia) que apunta a otra dirección es peor que no tener ninguna.
+    // No se re-screenea aquí a propósito: la liquidation address de Bridge
+    // sigue apuntando a la dirección original (ver el bloque de sincronización
+    // más abajo), así que screenear la nueva daría un veredicto sobre una
+    // dirección que todavía no recibe fondos.
+    if (
+      dto.wallet_address !== undefined &&
+      dto.wallet_address !==
+        (existing.bank_details as Record<string, unknown> | null)?.wallet_address
+    ) {
+      bankFieldsToMerge.wallet_screening = {
+        schema_version: 1,
+        status: 'Skipped',
+        decision: 'allow',
+        screened_at: new Date().toISOString(),
+        skip_reason: 'La dirección se modificó después de la última revisión',
+      };
+    }
     if (dto.wallet_network !== undefined)
       bankFieldsToMerge.wallet_network = dto.wallet_network.toLowerCase();
     if (dto.wallet_currency !== undefined)

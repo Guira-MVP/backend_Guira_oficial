@@ -69,6 +69,37 @@ export interface DiditPoaRaw {
   };
 }
 
+export type DiditWalletScreeningSeverity =
+  | 'UNKNOWN'
+  | 'LOW'
+  | 'MEDIUM'
+  | 'HIGH'
+  | 'CRITICAL';
+
+export interface DiditWalletScreeningRiskFactor {
+  category?: string;
+  label?: string;
+  entity_name?: string | null;
+  exposure_type?: string;
+  percentage?: number;
+  is_high_risk?: boolean;
+  description?: string;
+}
+
+export interface DiditWalletScreeningRaw {
+  provider?: string;
+  risk_score?: number;
+  severity?: DiditWalletScreeningSeverity;
+  /** `SCREENED` | `PENDING` | `ERROR` — el proveedor puede no resolver en el momento. */
+  status?: string;
+  summary?: string;
+  wallet_address?: string;
+  blockchain?: string;
+  sanctions_hit?: boolean;
+  dominant_risk_category?: string | null;
+  risk_factors?: DiditWalletScreeningRiskFactor[];
+}
+
 // ── Veredicto consolidado, persistido en kyc_applications.screening.didit ──
 
 export interface DiditVerdictWarning {
@@ -162,4 +193,39 @@ export interface DiditVerdict {
   company_proof_of_address?: DiditPoaResult | null;
   key_people?: DiditKeyPersonResult[];
   errors: Array<{ check: string; message: string }>;
+}
+
+// ── Veredicto de Wallet Screening, persistido en suppliers.bank_details ──
+
+/**
+ * Qué hacer con el beneficiario según el resultado:
+ * - `allow`  → crear sin más (limpio, sin cobertura, deshabilitado o error).
+ * - `flag`   → crear, marcar y avisar al cliente (riesgo medio/alto).
+ * - `block`  → no crear (sanciones o riesgo crítico).
+ */
+export type WalletScreeningDecision = 'allow' | 'flag' | 'block';
+
+/**
+ * Lo que se guarda en `suppliers.bank_details.wallet_screening`. Mantiene el
+ * `risk_score` crudo además de la banda porque `severity: UNKNOWN` es la banda
+ * más baja (0-9), no un "sin datos": un score 1-9 es una señal real y no debe
+ * presentarse como limpio.
+ */
+export interface WalletScreeningVerdict {
+  schema_version: 1;
+  status: DiditCheckStatus;
+  decision: WalletScreeningDecision;
+  screened_at: string;
+  provider?: string;
+  blockchain?: string;
+  risk_score?: number;
+  severity?: DiditWalletScreeningSeverity;
+  sanctions_hit?: boolean;
+  dominant_risk_category?: string | null;
+  summary?: string;
+  risk_factors?: DiditWalletScreeningRiskFactor[];
+  /** Por qué no se screeneó: red sin cobertura, revisión apagada, sin API key. */
+  skip_reason?: string;
+  /** Mensaje del fallo cuando `status === 'Error'`. */
+  error_message?: string;
 }

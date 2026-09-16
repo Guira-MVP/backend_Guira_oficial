@@ -8,6 +8,7 @@ import {
   DIDIT_PASSIVE_LIVENESS_PATH,
   DIDIT_POA_PATH,
   DIDIT_TIMEOUT_MS,
+  DIDIT_WALLET_SCREENING_PATH,
 } from './didit.constants';
 import {
   DiditAmlRaw,
@@ -17,6 +18,7 @@ import {
   DiditIdVerificationRaw,
   DiditLivenessRaw,
   DiditPoaRaw,
+  DiditWalletScreeningRaw,
 } from './didit.types';
 
 /**
@@ -62,6 +64,7 @@ export class DiditApiClient {
       'name_on_document',
       'expected_first_name',
       'expected_last_name',
+      'wallet_address',
     ];
 
     let redacted = rawBody;
@@ -97,6 +100,17 @@ export class DiditApiClient {
     if (res.status === 403 && /credit/i.test(raw)) {
       throw new BadGatewayException(
         'Didit rechazó la verificación por saldo insuficiente. Las Standalone APIs no tienen capa gratuita: recarga crédito en business.didit.me.',
+      );
+    }
+
+    // El 409 solo lo devuelve Wallet Screening, y siempre por el mismo motivo:
+    // la Application no tiene proveedor de Transaction Monitoring configurado.
+    // Con el mensaje genérico parecería un fallo transitorio y se reintentaría
+    // en bucle, cuando lo que falta es una configuración en la consola.
+    if (res.status === 409) {
+      throw new BadGatewayException(
+        'Didit no tiene proveedor de monitoreo de transacciones configurado para esta Application. ' +
+          'Configúralo en business.didit.me → Transactions → Settings → Provider Preferences.',
       );
     }
 
@@ -254,5 +268,23 @@ export class DiditApiClient {
       },
       { document: input.document },
     );
+  }
+
+  /**
+   * Screening AML de una dirección cripto suelta, sin crear transacción.
+   *
+   * `direction` se omite a propósito: la documentación de Didit es explícita
+   * en que no altera `risk_score`, `severity` ni los desgloses de flujo de
+   * fondos — al crear un beneficiario todavía no hay transacción cuyo sentido
+   * declarar, así que el screening es neutro.
+   */
+  async screenWallet(input: {
+    walletAddress: string;
+    blockchain: string;
+  }): Promise<DiditWalletScreeningRaw> {
+    return this.postJson<DiditWalletScreeningRaw>(DIDIT_WALLET_SCREENING_PATH, {
+      wallet_address: input.walletAddress,
+      blockchain: input.blockchain,
+    });
   }
 }

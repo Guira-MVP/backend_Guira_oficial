@@ -4,6 +4,7 @@ export const DIDIT_AML_PATH = '/v3/aml/';
 export const DIDIT_DATABASE_VALIDATION_PATH = '/v3/database-validation/';
 export const DIDIT_PASSIVE_LIVENESS_PATH = '/v3/passive-liveness/';
 export const DIDIT_POA_PATH = '/v3/poa/';
+export const DIDIT_WALLET_SCREENING_PATH = '/v3/wallet-screening/';
 
 /** Timeout por llamada — las tres son síncronas, ninguna debería superar esto. */
 export const DIDIT_TIMEOUT_MS = 30_000;
@@ -122,3 +123,30 @@ export const DIDIT_POA_DOC_TYPE = 'proof_of_address';
 export const DIDIT_DATABASE_VALIDATION_SERVICES: Record<string, string> = {
   BOL: 'bol_cedula',
 };
+
+// ── Wallet Screening de beneficiarios cripto ─────────────────────────
+
+/**
+ * Red de Guira (`suppliers.bank_details.wallet_network`) → identificador de
+ * red de Didit (`blockchain`).
+ *
+ * Solo 4 de las 6 redes de ALLOWED_NETWORKS tienen cobertura: Didit acepta
+ * BTC, LIGHTNING, ETH, LTC, XRP, BCH, DOGE, TRX, SOL, MATIC, BNB, USDT y
+ * USDC, así que `base` y `stellar` quedan fuera. Una red sin mapeo NO se
+ * envía a Didit (daría 400): el beneficiario se crea con el screening en
+ * `Skipped`, igual que se hace con los países sin cobertura de Database
+ * Validation en el KYC.
+ */
+export const DIDIT_WALLET_SCREENING_NETWORKS: Record<string, string> = {
+  ethereum: 'ETH',
+  solana: 'SOL',
+  tron: 'TRX',
+  polygon: 'MATIC',
+};
+
+/**
+ * Clave de `app_settings` que habilita el screening. Apagada (o ausente) el
+ * beneficiario se crea sin llamar a Didit — el interruptor que pidió el
+ * negocio para poder anular la revisión sin desplegar.
+ */
+export const WALLET_SCREENING_ENABLED_SETTING_KEY = 'WALLET_SCREENING_ENABLED';
