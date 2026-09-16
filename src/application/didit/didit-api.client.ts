@@ -2,15 +2,21 @@ import { Injectable, BadGatewayException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   DIDIT_AML_PATH,
+  DIDIT_DATABASE_VALIDATION_PATH,
   DIDIT_FACE_MATCH_PATH,
   DIDIT_ID_VERIFICATION_PATH,
+  DIDIT_PASSIVE_LIVENESS_PATH,
+  DIDIT_POA_PATH,
   DIDIT_TIMEOUT_MS,
 } from './didit.constants';
 import {
   DiditAmlRaw,
+  DiditDatabaseValidationRaw,
   DiditFaceMatchRaw,
   DiditFile,
   DiditIdVerificationRaw,
+  DiditLivenessRaw,
+  DiditPoaRaw,
 } from './didit.types';
 
 /**
@@ -52,6 +58,10 @@ export class DiditApiClient {
       'portrait_image',
       'front_image',
       'back_image',
+      'identification_number',
+      'name_on_document',
+      'expected_first_name',
+      'expected_last_name',
     ];
 
     let redacted = rawBody;
@@ -190,5 +200,59 @@ export class DiditApiClient {
       document_number: input.documentNumber,
       vendor_data: input.vendorData,
     });
+  }
+
+  /** Confirma los datos de identidad contra el registro gubernamental del país (ej. SEGIP en Bolivia). */
+  async verifyDatabase(input: {
+    issuingState: string;
+    serviceId: string;
+    documentNumber?: string;
+    dateOfBirth?: string;
+    firstName?: string;
+    lastName?: string;
+    vendorData: string;
+  }): Promise<DiditDatabaseValidationRaw> {
+    return this.postJson<DiditDatabaseValidationRaw>(DIDIT_DATABASE_VALIDATION_PATH, {
+      issuing_state: input.issuingState,
+      services: [input.serviceId],
+      document_number: input.documentNumber,
+      date_of_birth: input.dateOfBirth,
+      first_name: input.firstName,
+      last_name: input.lastName,
+      vendor_data: input.vendorData,
+    });
+  }
+
+  /** Anti-spoofing sobre la selfie: detecta deepfake, máscara o foto-de-foto — Face Match solo no lo cubre. */
+  async checkLiveness(input: {
+    userImage: DiditFile;
+    threshold: number;
+    vendorData: string;
+  }): Promise<DiditLivenessRaw> {
+    return this.postMultipart<DiditLivenessRaw>(
+      DIDIT_PASSIVE_LIVENESS_PATH,
+      {
+        vendor_data: input.vendorData,
+        face_liveness_score_decline_threshold: input.threshold,
+      },
+      { user_image: input.userImage },
+    );
+  }
+
+  async verifyProofOfAddress(input: {
+    document: DiditFile;
+    expectedFirstName?: string;
+    expectedLastName?: string;
+    vendorData: string;
+  }): Promise<DiditPoaRaw> {
+    return this.postMultipart<DiditPoaRaw>(
+      DIDIT_POA_PATH,
+      {
+        vendor_data: input.vendorData,
+        expected_first_name: input.expectedFirstName,
+        expected_last_name: input.expectedLastName,
+      },
+      { document: input.document },
+    );
   }
 }

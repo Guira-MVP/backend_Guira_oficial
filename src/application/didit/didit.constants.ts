@@ -1,6 +1,9 @@
 export const DIDIT_ID_VERIFICATION_PATH = '/v3/id-verification/';
 export const DIDIT_FACE_MATCH_PATH = '/v3/face-match/';
 export const DIDIT_AML_PATH = '/v3/aml/';
+export const DIDIT_DATABASE_VALIDATION_PATH = '/v3/database-validation/';
+export const DIDIT_PASSIVE_LIVENESS_PATH = '/v3/passive-liveness/';
+export const DIDIT_POA_PATH = '/v3/poa/';
 
 /** Timeout por llamada — las tres son síncronas, ninguna debería superar esto. */
 export const DIDIT_TIMEOUT_MS = 30_000;
@@ -14,6 +17,16 @@ export const DIDIT_FACE_MATCH_DECLINE_THRESHOLD = 55;
 
 export const DIDIT_ID_VERIFICATION_MAX_BYTES = 10 * 1024 * 1024;
 export const DIDIT_FACE_MATCH_MAX_BYTES = 5 * 1024 * 1024;
+/** Liveness acepta las mismas extensiones y el mismo límite que face-match. */
+export const DIDIT_LIVENESS_MAX_BYTES = DIDIT_FACE_MATCH_MAX_BYTES;
+export const DIDIT_POA_MAX_BYTES = 15 * 1024 * 1024;
+
+/**
+ * El default de Didit es 30, igual de permisivo que el de face-match.
+ * Se sube por el mismo motivo: un veto más estricto sin caer en el 60+ que
+ * generaría demasiados falsos rechazos en capturas de baja calidad.
+ */
+export const DIDIT_LIVENESS_DECLINE_THRESHOLD = 50;
 
 /** face-match no acepta PDF — solo estos formatos de imagen. */
 export const DIDIT_FACE_MATCH_ACCEPTED_MIME = new Set([
@@ -97,3 +110,15 @@ export const DIDIT_FACE_MATCH_REF_PRIORITY = [
   'drivers_license_front',
 ];
 export const DIDIT_SELFIE_DOC_TYPE = 'selfie';
+export const DIDIT_POA_DOC_TYPE = 'proof_of_address';
+
+/**
+ * Servicio de Database Validation por país (alpha-3 → service_id del
+ * catálogo de Didit). Deliberadamente acotado a Bolivia: es el único país
+ * con volumen real de usuarios en Guira hoy (14/14 personas de prueba son
+ * BOL salvo 1 COL). Añadir un país nuevo es una línea — cuando haya
+ * usuarios reales de otro país, se agrega su service_id aquí.
+ */
+export const DIDIT_DATABASE_VALIDATION_SERVICES: Record<string, string> = {
+  BOL: 'bol_cedula',
+};

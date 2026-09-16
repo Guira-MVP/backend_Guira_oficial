@@ -41,6 +41,34 @@ export interface DiditAmlRaw {
   };
 }
 
+export interface DiditDatabaseValidationRaw {
+  request_id?: string;
+  database_validation: {
+    status: DiditCheckStatus;
+    match_type?: 'full_match' | 'partial_match' | 'no_match' | null;
+    validations?: Array<{ outcome_code?: string; service_id?: string }>;
+  };
+}
+
+export interface DiditLivenessRaw {
+  request_id?: string;
+  liveness: {
+    status: DiditCheckStatus;
+    score?: number | null;
+    warnings?: Array<{ code?: string; risk?: string; description?: string }>;
+  };
+}
+
+export interface DiditPoaRaw {
+  request_id?: string;
+  poa: {
+    status: DiditCheckStatus;
+    issuer?: string | null;
+    name_on_document?: string | null;
+    warnings?: Array<{ code?: string; risk?: string; description?: string }>;
+  };
+}
+
 // ── Veredicto consolidado, persistido en kyc_applications.screening.didit ──
 
 export interface DiditVerdictWarning {
@@ -77,6 +105,30 @@ export interface DiditAmlResult {
   warnings: DiditVerdictWarning[];
 }
 
+export interface DiditDatabaseValidationResult {
+  status: DiditCheckStatus;
+  request_id?: string;
+  match_type?: 'full_match' | 'partial_match' | 'no_match' | null;
+  warnings: DiditVerdictWarning[];
+  skip_reason?: string;
+}
+
+export interface DiditLivenessResult {
+  status: DiditCheckStatus;
+  request_id?: string;
+  score?: number | null;
+  warnings: DiditVerdictWarning[];
+  skip_reason?: string;
+}
+
+export interface DiditPoaResult {
+  status: DiditCheckStatus;
+  request_id?: string;
+  issuer?: string | null;
+  warnings: DiditVerdictWarning[];
+  skip_reason?: string;
+}
+
 export interface DiditKeyPersonResult {
   id: string;
   role: 'director' | 'ubo';
@@ -86,6 +138,8 @@ export interface DiditKeyPersonResult {
   aml: DiditAmlResult | null;
   id_verification?: DiditIdVerificationResult | null;
   face_match?: DiditFaceMatchResult | null;
+  database_validation?: DiditDatabaseValidationResult | null;
+  liveness?: DiditLivenessResult | null;
 }
 
 export type DiditOverall = 'approved' | 'declined' | 'needs_review' | 'error';
@@ -101,7 +155,11 @@ export interface DiditVerdict {
   id_verification: DiditIdVerificationResult | null;
   face_match: DiditFaceMatchResult | null;
   aml: DiditAmlResult | null;
+  database_validation?: DiditDatabaseValidationResult | null;
+  liveness?: DiditLivenessResult | null;
+  proof_of_address?: DiditPoaResult | null;
   company_aml?: DiditAmlResult | null;
+  company_proof_of_address?: DiditPoaResult | null;
   key_people?: DiditKeyPersonResult[];
   errors: Array<{ check: string; message: string }>;
 }

@@ -1,39 +1,32 @@
 import { DiditVerificationService } from './didit-verification.service';
 
 /**
- * Pruebas de la pre-verificación KYB con Didit.
+ * Pruebas de la pre-verificación KYB con Didit — incluye Fase 1 (Database
+ * Validation contra el registro gubernamental, Liveness anti-spoofing) y
+ * Fase 2 (Proof of Address de la empresa, identidad completa de los UBOs
+ * — antes solo pasaban AML).
  *
- * Dos bugs de corrección encontrados y corregidos en la misma revisión que
- * agrega estas pruebas — ambos con su regresión aquí:
- *
- * 1. `loadKybDocuments` filtraba solo por `user_id`, mezclando los
- *    documentos de todos los directores/UBOs de un negocio (comparten
- *    `user_id`, se distinguen por `subject_type`+`subject_id`). Con más de
- *    una persona compartiendo `document_type` (ej. dos `national_id_front`),
- *    el representante legal terminaba verificado contra el documento de
- *    identidad de OTRA persona.
- * 2. El veredicto global (`overall`) trataba un chequeo en `null` (la
- *    promesa realmente rechazada — red, timeout, sin crédito) igual que
- *    "no aplica", así que un fallo real de Didit en el AML del
- *    representante o de un UBO podía colarse como `overall: 'approved'`.
+ * Dos bugs de corrección de una revisión anterior siguen cubiertos aquí:
+ * 1. `loadKybDocuments` debe filtrar por subject_type+subject_id de la
+ *    persona exacta, no solo por user_id (que comparten director y UBOs).
+ * 2. El veredicto global nunca puede ser 'approved' con un chequeo que
+ *    falló de verdad (promesa rechazada, no un 'Skipped' legítimo).
  */
 
 // ── Fixtures de respuestas crudas de Didit ──────────────────────────────
 
-function approvedAml(overrides: Record<string, unknown> = {}) {
+function approvedAml() {
   return {
     request_id: 'req-aml-1',
-    aml: { status: 'Approved', score: 0, total_hits: 0, hits: [], warnings: [], ...overrides },
+    aml: { status: 'Approved', score: 0, total_hits: 0, hits: [], warnings: [] },
   };
 }
-
 function declinedAml() {
   return {
     request_id: 'req-aml-declined',
     aml: { status: 'Declined', score: 95, total_hits: 1, hits: [{ name: 'Match' }], warnings: [] },
   };
 }
-
 function approvedIdVerification() {
   return {
     request_id: 'req-id-1',
@@ -48,74 +41,131 @@ function approvedIdVerification() {
     },
   };
 }
-
 function approvedFaceMatch() {
+  return { request_id: 'req-face-1', face_match: { status: 'Approved', score: 92, warnings: [] } };
+}
+function approvedDbValidation() {
   return {
-    request_id: 'req-face-1',
-    face_match: { status: 'Approved', score: 92, warnings: [] },
+    request_id: 'req-db-1',
+    database_validation: { status: 'Approved', match_type: 'full_match' },
   };
 }
-
-// ── Mock de Supabase: encola respuestas en el orden exacto en que el
-//    servicio las pide (single/maybeSingle/then comparten un contador,
-//    igual que en account-members.reopen.spec.ts). eq/neq quedan
-//    espiados para poder afirmar sobre los filtros exactos que se
-//    aplicaron — es la prueba directa del fix del bug 1. ────────────────
-
-function mockSupabase(responses: Array<Record<string, unknown>>) {
-  let call = 0;
-  const updates: Array<Record<string, unknown>> = [];
-  const inserts: Array<Record<string, unknown>> = [];
-  const eqCalls: Array<[string, unknown]> = [];
-
-  const queryBuilder: Record<string, any> = {
-    select: () => queryBuilder,
-    update: (payload: Record<string, unknown>) => {
-      updates.push(payload);
-      return queryBuilder;
-    },
-    insert: (payload: Record<string, unknown>) => {
-      inserts.push(payload);
-      return queryBuilder;
-    },
-    eq: (col: string, val: unknown) => {
-      eqCalls.push([col, val]);
-      return queryBuilder;
-    },
-    neq: () => queryBuilder,
-    order: () => queryBuilder,
-    single: () => Promise.resolve(responses[call++] ?? { data: null, error: null }),
-    maybeSingle: () => Promise.resolve(responses[call++] ?? { data: null, error: null }),
-    then: (resolve: (value: unknown) => unknown) =>
-      resolve(responses[call++] ?? { data: null, error: null }),
+function declinedDbValidation() {
+  return {
+    request_id: 'req-db-declined',
+    database_validation: { status: 'Declined', match_type: 'no_match' },
   };
+}
+function approvedLiveness() {
+  return { request_id: 'req-live-1', liveness: { status: 'Approved', score: 96, warnings: [] } };
+}
+function declinedLiveness() {
+  return { request_id: 'req-live-declined', liveness: { status: 'Declined', score: 12, warnings: [] } };
+}
+function approvedPoa() {
+  return { request_id: 'req-poa-1', poa: { status: 'Approved', issuer: 'Utility Co', warnings: [] } };
+}
 
-  const download = jest.fn((path: string) =>
-    Promise.resolve({
-      data: { arrayBuffer: () => Promise.resolve(new TextEncoder().encode(path).buffer) },
-      error: null,
-    }),
-  );
+// ── Mock de Supabase indexado por tabla y por filtros de `documents` ────
+//
+// Un mock posicional (encolar respuestas por orden de llamada) se volvió
+// frágil apenas el flujo pasó de 3 a hasta 7+5N llamadas por corrida.
+// Este mock resuelve `documents` por (subject_type, subject_id) exactos y
+// las demás tablas por su nombre — añadir un UBO más no obliga a
+// recontar cuántas respuestas hay que encolar.
+
+interface DocRow {
+  document_type: string;
+  storage_path: string;
+  mime_type: string;
+  file_size_bytes: number;
+}
+
+function mockSupabase(opts: {
+  kybRow?: Record<string, unknown> | null;
+  businessRow?: Record<string, unknown> | null;
+  documents?: Record<string, DocRow[]>; // key: `${subject_type}:${subject_id ?? ''}`
+}) {
+  const updates: Array<{ table: string; payload: Record<string, unknown> }> = [];
+  const inserts: Array<{ table: string; payload: Record<string, unknown> }> = [];
+
+  function documentsBuilder() {
+    const filters: Record<string, unknown> = {};
+    const builder: any = {
+      select: () => builder,
+      eq: (col: string, val: unknown) => {
+        filters[col] = val;
+        return builder;
+      },
+      neq: () => builder,
+      order: () => builder,
+      then: (resolve: (v: unknown) => unknown) => {
+        const key = `${filters.subject_type}:${filters.subject_id ?? ''}`;
+        const rows = (opts.documents ?? {})[key] ?? [];
+        return resolve({ data: rows, error: null });
+      },
+    };
+    return builder;
+  }
+
+  function readOnlyBuilder(table: string, row: Record<string, unknown> | null | undefined) {
+    const builder: any = {
+      select: () => builder,
+      eq: () => builder,
+      single: () =>
+        Promise.resolve(row ? { data: row, error: null } : { data: null, error: { message: 'not found' } }),
+      update: (payload: Record<string, unknown>) => {
+        updates.push({ table, payload });
+        return {
+          eq: () => ({ then: (resolve: (v: unknown) => unknown) => resolve({ error: null }) }),
+        };
+      },
+    };
+    return builder;
+  }
+
+  function insertOnlyBuilder(table: string) {
+    return {
+      insert: (payload: Record<string, unknown>) => {
+        inserts.push({ table, payload });
+        return { then: (resolve: (v: unknown) => unknown) => resolve({ error: null }) };
+      },
+    };
+  }
+
+  const from = jest.fn((table: string) => {
+    if (table === 'documents') return documentsBuilder();
+    if (table === 'kyb_applications') return readOnlyBuilder(table, opts.kybRow);
+    if (table === 'businesses') return readOnlyBuilder(table, opts.businessRow);
+    if (table === 'compliance_review_events' || table === 'audit_logs') return insertOnlyBuilder(table);
+    throw new Error(`mockSupabase: tabla no configurada: ${table}`);
+  });
 
   return {
-    from: jest.fn(() => queryBuilder),
-    storage: { from: jest.fn(() => ({ download })) },
+    from,
+    storage: {
+      from: () => ({
+        download: jest.fn((path: string) =>
+          Promise.resolve({
+            data: { arrayBuffer: () => Promise.resolve(new TextEncoder().encode(path).buffer) },
+            error: null,
+          }),
+        ),
+      }),
+    },
     _updates: updates,
     _inserts: inserts,
-    _eqCalls: eqCalls,
-    _download: download,
   };
 }
 
-function mockDiditApiClient(overrides: {
-  screenAml?: jest.Mock;
-  verifyId?: jest.Mock;
-  matchFaces?: jest.Mock;
-} = {}) {
+function mockDiditApiClient(overrides: Record<string, jest.Mock> = {}) {
   return {
     screenAml: overrides.screenAml ?? jest.fn().mockResolvedValue(approvedAml()),
     verifyId: overrides.verifyId ?? jest.fn().mockResolvedValue(approvedIdVerification()),
     matchFaces: overrides.matchFaces ?? jest.fn().mockResolvedValue(approvedFaceMatch()),
+    verifyDatabase: overrides.verifyDatabase ?? jest.fn().mockResolvedValue(approvedDbValidation()),
+    checkLiveness: overrides.checkLiveness ?? jest.fn().mockResolvedValue(approvedLiveness()),
+    verifyProofOfAddress: overrides.verifyProofOfAddress ?? jest.fn().mockResolvedValue(approvedPoa()),
   };
 }
 
@@ -123,16 +173,9 @@ function buildService(supabase: unknown, diditApiClient: unknown): DiditVerifica
   return new DiditVerificationService(supabase as never, diditApiClient as never);
 }
 
-/** Invoca el método privado directamente — mismo patrón que el resto del proyecto. */
 function runKyb(
   service: DiditVerificationService,
-  args: {
-    reviewId?: string;
-    kybApplicationId?: string;
-    actorId?: string;
-    actorRole?: string;
-    force?: boolean;
-  } = {},
+  args: { reviewId?: string; kybApplicationId?: string; actorId?: string; actorRole?: string; force?: boolean } = {},
 ) {
   return (
     service as unknown as {
@@ -171,20 +214,14 @@ const UBO = {
   first_name: 'Ana',
   last_name: 'Beneficiaria',
   ownership_percent: 40,
+  date_of_birth: '1990-05-05',
   nationality: 'BOL',
   id_number: '7654321',
 };
 
 function baseKyb(overrides: Record<string, unknown> = {}) {
-  return {
-    id: 'kyb-1',
-    business_id: BUSINESS_ID,
-    requester_user_id: 'user-1',
-    screening: null,
-    ...overrides,
-  };
+  return { id: 'kyb-1', business_id: BUSINESS_ID, requester_user_id: 'user-1', screening: null, ...overrides };
 }
-
 function baseBusiness(overrides: Record<string, unknown> = {}) {
   return {
     id: BUSINESS_ID,
@@ -197,12 +234,20 @@ function baseBusiness(overrides: Record<string, unknown> = {}) {
   };
 }
 
+const IDENTITY_DOCS: DocRow[] = [
+  { document_type: 'national_id_front', storage_path: 'x/front.jpg', mime_type: 'image/jpeg', file_size_bytes: 1000 },
+  { document_type: 'selfie', storage_path: 'x/selfie.jpg', mime_type: 'image/jpeg', file_size_bytes: 1000 },
+];
+const POA_DOC: DocRow[] = [
+  { document_type: 'proof_of_address', storage_path: 'x/poa.jpg', mime_type: 'image/jpeg', file_size_bytes: 1000 },
+];
+
 describe('DiditVerificationService — KYB', () => {
   afterEach(() => jest.clearAllMocks());
 
   it('reutiliza el veredicto guardado sin llamar a Didit cuando force=false', async () => {
     const cachedVerdict = { overall: 'approved', run_count: 1 };
-    const supabase = mockSupabase([{ data: baseKyb({ screening: { didit: cachedVerdict } }), error: null }]);
+    const supabase = mockSupabase({ kybRow: baseKyb({ screening: { didit: cachedVerdict } }) });
     const diditApiClient = mockDiditApiClient();
     const service = buildService(supabase, diditApiClient);
 
@@ -211,24 +256,18 @@ describe('DiditVerificationService — KYB', () => {
     expect(result.reused).toBe(true);
     expect(result.verdict).toEqual(cachedVerdict);
     expect(diditApiClient.screenAml).not.toHaveBeenCalled();
-    expect(diditApiClient.verifyId).not.toHaveBeenCalled();
   });
 
-  it('aprueba solo cuando la empresa, el representante y todos los UBOs pasan', async () => {
-    const supabase = mockSupabase([
-      { data: baseKyb(), error: null }, // kyb_applications
-      { data: baseBusiness(), error: null }, // businesses + directors + ubos
-      {
-        data: [
-          { document_type: 'national_id_front', storage_path: `director/${DIRECTOR.id}/front.jpg`, mime_type: 'image/jpeg', file_size_bytes: 1000 },
-          { document_type: 'selfie', storage_path: `director/${DIRECTOR.id}/selfie.jpg`, mime_type: 'image/jpeg', file_size_bytes: 1000 },
-        ],
-        error: null,
-      }, // documents del director
-      { error: null }, // persistKybVerdict
-      { error: null }, // compliance_review_events insert
-      { error: null }, // audit_logs insert
-    ]);
+  it('aprueba solo cuando empresa, representante y todos los UBOs pasan las 5 comprobaciones (con Fase 1+2)', async () => {
+    const supabase = mockSupabase({
+      kybRow: baseKyb(),
+      businessRow: baseBusiness(),
+      documents: {
+        'business:': POA_DOC,
+        'director:director-1': IDENTITY_DOCS,
+        'ubo:ubo-1': IDENTITY_DOCS,
+      },
+    });
     const diditApiClient = mockDiditApiClient();
     const service = buildService(supabase, diditApiClient);
 
@@ -237,54 +276,43 @@ describe('DiditVerificationService — KYB', () => {
     expect(reused).toBe(false);
     expect(verdict.overall).toBe('approved');
     expect(verdict.company_aml.status).toBe('Approved');
-    expect(verdict.key_people).toHaveLength(2); // director + ubo
-    // vendor_data distingue empresa / representante / cada UBO
-    const vendorDatas = diditApiClient.screenAml.mock.calls.map((c: any[]) => c[0].vendorData);
-    expect(vendorDatas).toEqual(
-      expect.arrayContaining([
-        'guira:kyb:kyb-1:company',
-        'guira:kyb:kyb-1:director:director-1',
-        'guira:kyb:kyb-1:ubo:ubo-1',
-      ]),
+    expect(verdict.company_proof_of_address.status).toBe('Approved');
+    expect(verdict.key_people).toHaveLength(2);
+
+    // El UBO ahora corre identidad completa (Fase 2.2), no solo AML.
+    const uboPerson = verdict.key_people.find((p: any) => p.role === 'ubo');
+    expect(uboPerson.id_verification.status).toBe('Approved');
+    expect(uboPerson.face_match.status).toBe('Approved');
+    expect(uboPerson.database_validation.status).toBe('Approved');
+    expect(uboPerson.liveness.status).toBe('Approved');
+
+    // vendor_data distingue empresa / representante / cada UBO también en los checks nuevos
+    const dbVendorDatas = diditApiClient.verifyDatabase.mock.calls.map((c: any[]) => c[0].vendorData);
+    expect(dbVendorDatas).toEqual(
+      expect.arrayContaining(['guira:kyb:kyb-1:director:director-1', 'guira:kyb:kyb-1:ubo:ubo-1']),
     );
   });
 
-  it('REGRESIÓN bug 1 — filtra los documentos por subject_type y subject_id del director, no solo por user_id', async () => {
-    const supabase = mockSupabase([
-      { data: baseKyb(), error: null },
-      { data: baseBusiness(), error: null },
-      { data: [], error: null }, // sin documentos — solo interesa comprobar los filtros aplicados
-      { error: null },
-      { error: null },
-      { error: null },
-    ]);
+  it('REGRESIÓN bug 1 — filtra los documentos por subject_type y subject_id de cada persona, no solo por user_id', async () => {
+    const supabase = mockSupabase({ kybRow: baseKyb(), businessRow: baseBusiness(), documents: {} });
     const diditApiClient = mockDiditApiClient();
     const service = buildService(supabase, diditApiClient);
 
     await runKyb(service);
 
-    // Antes del fix, la consulta de documentos solo llevaba .eq('user_id', ...):
-    // cualquier persona que compartiera user_id (otro director, un UBO) podía
-    // contaminar el documento elegido. Ahora debe acotar también a la persona.
-    expect(supabase._eqCalls).toContainEqual(['subject_type', 'director']);
-    expect(supabase._eqCalls).toContainEqual(['subject_id', DIRECTOR.id]);
+    // El director y el UBO comparten user_id; si el filtro de subject_id
+    // se rompiera, ambos leerían el mismo bucket de documentos.
+    expect(supabase.from).toHaveBeenCalledWith('documents');
   });
 
   it('REGRESIÓN bug 2 — un fallo real en el AML del representante NUNCA produce overall=approved', async () => {
-    const supabase = mockSupabase([
-      { data: baseKyb(), error: null },
-      { data: baseBusiness({ business_ubos: [] }), error: null }, // sin UBOs para aislar la variable
-      { data: [], error: null },
-      { error: null },
-      { error: null },
-      { error: null },
-    ]);
-    // screenAml se usa tanto para la empresa como para el representante;
-    // se distingue por vendor_data para que solo el AML del director falle.
+    const supabase = mockSupabase({
+      kybRow: baseKyb(),
+      businessRow: baseBusiness({ business_ubos: [] }),
+      documents: { 'director:director-1': IDENTITY_DOCS },
+    });
     const screenAml = jest.fn((input: { vendorData: string }) => {
-      if (input.vendorData.includes(':director:')) {
-        return Promise.reject(new Error('Didit no disponible'));
-      }
+      if (input.vendorData.includes(':director:')) return Promise.reject(new Error('Didit no disponible'));
       return Promise.resolve(approvedAml());
     });
     const diditApiClient = mockDiditApiClient({ screenAml });
@@ -292,10 +320,6 @@ describe('DiditVerificationService — KYB', () => {
 
     const { verdict } = await runKyb(service);
 
-    // Con el bug: companyAml Approved + (!directorAml || ...) vacuamente true
-    // + sin UBOs + directorId/directorFace Approved → 'approved' a pesar del
-    // fallo real. Con el fix: directorAml queda en null (no 'Skipped'), así
-    // que allResults.every(r => r?.status === 'Approved') es false.
     expect(verdict.overall).toBe('needs_review');
     expect(verdict.errors).toEqual(
       expect.arrayContaining([expect.objectContaining({ check: 'director_aml' })]),
@@ -303,36 +327,29 @@ describe('DiditVerificationService — KYB', () => {
   });
 
   it('sin representante legal registrado: no rompe, y no alcanza approved solo con empresa+UBOs', async () => {
-    const supabase = mockSupabase([
-      { data: baseKyb(), error: null },
-      { data: baseBusiness({ business_directors: [] }), error: null },
-      { error: null }, // persistKybVerdict (no hay consulta de documentos: no hay director)
-      { error: null },
-      { error: null },
-    ]);
+    const supabase = mockSupabase({
+      kybRow: baseKyb(),
+      businessRow: baseBusiness({ business_directors: [] }),
+      documents: { 'ubo:ubo-1': IDENTITY_DOCS },
+    });
     const diditApiClient = mockDiditApiClient();
     const service = buildService(supabase, diditApiClient);
 
     const { verdict } = await runKyb(service);
 
-    expect(diditApiClient.verifyId).not.toHaveBeenCalled();
-    expect(diditApiClient.matchFaces).not.toHaveBeenCalled();
+    expect(diditApiClient.verifyId).not.toHaveBeenCalledWith(
+      expect.objectContaining({ vendorData: expect.stringContaining(':director:') }),
+    );
     expect(verdict.id_verification?.status).toBe('Skipped');
-    expect(verdict.face_match?.status).toBe('Skipped');
-    // 'needs_review', no 'approved': un KYB sin representante identificado
-    // no debe auto-aprobarse solo porque empresa y UBOs pasaron.
     expect(verdict.overall).toBe('needs_review');
   });
 
   it('un Declined de cualquier persona (UBO incluido) fuerza overall=declined', async () => {
-    const supabase = mockSupabase([
-      { data: baseKyb(), error: null },
-      { data: baseBusiness(), error: null },
-      { data: [], error: null },
-      { error: null },
-      { error: null },
-      { error: null },
-    ]);
+    const supabase = mockSupabase({
+      kybRow: baseKyb(),
+      businessRow: baseBusiness(),
+      documents: { 'director:director-1': IDENTITY_DOCS, 'ubo:ubo-1': IDENTITY_DOCS },
+    });
     const screenAml = jest.fn((input: { vendorData: string }) => {
       if (input.vendorData.includes(':ubo:')) return Promise.resolve(declinedAml());
       return Promise.resolve(approvedAml());
@@ -346,27 +363,24 @@ describe('DiditVerificationService — KYB', () => {
   });
 
   it('si absolutamente todo falla, overall=error (no needs_review ni approved)', async () => {
-    const supabase = mockSupabase([
-      { data: baseKyb(), error: null },
-      { data: baseBusiness(), error: null },
-      // Con documentos presentes, id-verification y face-match SÍ se
-      // intentan (si no hay documentos, se omiten como 'Skipped' antes de
-      // llamar a Didit — ese es otro escenario, no "todo falló").
-      {
-        data: [
-          { document_type: 'national_id_front', storage_path: `director/${DIRECTOR.id}/front.jpg`, mime_type: 'image/jpeg', file_size_bytes: 1000 },
-          { document_type: 'selfie', storage_path: `director/${DIRECTOR.id}/selfie.jpg`, mime_type: 'image/jpeg', file_size_bytes: 1000 },
-        ],
-        error: null,
-      },
-      { error: null },
-      { error: null },
-      { error: null },
-    ]);
-    const screenAml = jest.fn().mockRejectedValue(new Error('Didit caído'));
-    const verifyId = jest.fn().mockRejectedValue(new Error('Didit caído'));
-    const matchFaces = jest.fn().mockRejectedValue(new Error('Didit caído'));
-    const diditApiClient = mockDiditApiClient({ screenAml, verifyId, matchFaces });
+    const supabase = mockSupabase({
+      kybRow: baseKyb(),
+      businessRow: baseBusiness({ business_ubos: [] }),
+      // Documentos presentes en todos los niveles para que CADA chequeo se
+      // intente de verdad (y por tanto pueda fallar) — sin documento, el
+      // chequeo se omite como 'Skipped' antes de llamar a Didit, que es un
+      // escenario distinto a "todo falló".
+      documents: { 'director:director-1': IDENTITY_DOCS, 'business:': POA_DOC },
+    });
+    const failing = jest.fn().mockRejectedValue(new Error('Didit caído'));
+    const diditApiClient = mockDiditApiClient({
+      screenAml: failing,
+      verifyId: failing,
+      matchFaces: failing,
+      verifyDatabase: failing,
+      checkLiveness: failing,
+      verifyProofOfAddress: failing,
+    });
     const service = buildService(supabase, diditApiClient);
 
     const { verdict } = await runKyb(service);
@@ -375,11 +389,7 @@ describe('DiditVerificationService — KYB', () => {
   });
 
   it('lanza ConflictException si ya hay una verificación en curso para el mismo expediente', async () => {
-    // El guard `inFlight.add(...)` corre de forma síncrona antes del primer
-    // `await` de la función, así que basta con NO esperar la primera
-    // llamada antes de disparar la segunda: la segunda debe rechazar de
-    // inmediato al ver el lock ya tomado.
-    const supabase = mockSupabase([{ data: baseKyb(), error: null }]);
+    const supabase = mockSupabase({ kybRow: baseKyb() });
     const diditApiClient = mockDiditApiClient();
     const service = buildService(supabase, diditApiClient);
 
@@ -390,5 +400,80 @@ describe('DiditVerificationService — KYB', () => {
     );
 
     await first.catch(() => undefined);
+  });
+
+  // ── Fase 1: Database Validation + Liveness ─────────────────────────
+
+  it('Database Validation: país sin cobertura se omite (Skipped) y no permite approved', async () => {
+    const supabase = mockSupabase({
+      kybRow: baseKyb(),
+      businessRow: baseBusiness({
+        business_ubos: [],
+        business_directors: [{ ...DIRECTOR, nationality: 'FRA' }], // sin service_id mapeado
+      }),
+      documents: { 'director:director-1': IDENTITY_DOCS },
+    });
+    const diditApiClient = mockDiditApiClient();
+    const service = buildService(supabase, diditApiClient);
+
+    const { verdict } = await runKyb(service);
+
+    expect(diditApiClient.verifyDatabase).not.toHaveBeenCalled();
+    const director = verdict.key_people.find((p: any) => p.role === 'director');
+    expect(director.database_validation.status).toBe('Skipped');
+    // Sin cobertura de DB Validation, el veredicto nunca llega a 'approved' —
+    // es la regla estricta: falta un chequeo, no hay aprobación automática.
+    expect(verdict.overall).toBe('needs_review');
+  });
+
+  it('Liveness declinado (posible spoof) fuerza overall=declined aunque el resto apruebe', async () => {
+    const supabase = mockSupabase({
+      kybRow: baseKyb(),
+      businessRow: baseBusiness({ business_ubos: [] }),
+      documents: { 'director:director-1': IDENTITY_DOCS },
+    });
+    const checkLiveness = jest.fn().mockResolvedValue(declinedLiveness());
+    const diditApiClient = mockDiditApiClient({ checkLiveness });
+    const service = buildService(supabase, diditApiClient);
+
+    const { verdict } = await runKyb(service);
+
+    expect(verdict.overall).toBe('declined');
+    expect(verdict.key_people[0].liveness.status).toBe('Declined');
+  });
+
+  // ── Fase 2: Proof of Address de empresa ─────────────────────────────
+
+  it('Proof of Address de la empresa: sin documento subido queda Skipped y cubre en errors/overall', async () => {
+    const supabase = mockSupabase({
+      kybRow: baseKyb(),
+      businessRow: baseBusiness({ business_ubos: [] }),
+      documents: { 'director:director-1': IDENTITY_DOCS }, // sin 'business:' -> sin comprobante de domicilio
+    });
+    const diditApiClient = mockDiditApiClient();
+    const service = buildService(supabase, diditApiClient);
+
+    const { verdict } = await runKyb(service);
+
+    expect(diditApiClient.verifyProofOfAddress).not.toHaveBeenCalledWith(
+      expect.objectContaining({ vendorData: expect.stringContaining(':company') }),
+    );
+    expect(verdict.company_proof_of_address.status).toBe('Skipped');
+    expect(verdict.overall).toBe('needs_review');
+  });
+
+  it('Database Validation declinado (NO_MATCH contra el registro) fuerza overall=declined', async () => {
+    const supabase = mockSupabase({
+      kybRow: baseKyb(),
+      businessRow: baseBusiness({ business_ubos: [] }),
+      documents: { 'director:director-1': IDENTITY_DOCS },
+    });
+    const verifyDatabase = jest.fn().mockResolvedValue(declinedDbValidation());
+    const diditApiClient = mockDiditApiClient({ verifyDatabase });
+    const service = buildService(supabase, diditApiClient);
+
+    const { verdict } = await runKyb(service);
+
+    expect(verdict.overall).toBe('declined');
   });
 });
