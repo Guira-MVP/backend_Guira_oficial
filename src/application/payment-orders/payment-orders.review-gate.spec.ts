@@ -149,6 +149,7 @@ describe('PaymentOrdersService — puerta de revisión de staff', () => {
       // consulta. requiresReview solo se usa desde createInterbankOrder /
       // createWalletRampOrder, que estos specs no ejercitan.
       { requiresReview: jest.fn().mockResolvedValue(true) } as any,
+      { assertUsableForPayment: jest.fn() } as any, // suppliersService
     ) as any;
 
     return { service, bridgePost, sendNotification, emitOrderUpdated, sendPaymentOrderFailedEmail };

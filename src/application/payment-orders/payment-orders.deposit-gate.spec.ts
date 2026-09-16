@@ -138,6 +138,7 @@ describe('PaymentOrdersService — puerta de revisión en flujos de depósito', 
       {} as any, // emailService
       {} as any, // pdfService
       { requiresReview: jest.fn().mockResolvedValue(true) } as any,
+      { assertUsableForPayment: jest.fn() } as any, // suppliersService
     ) as any;
 
     return { service, getDepositAccountForUser, formatDepositInstructions, bridgePost };

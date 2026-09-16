@@ -150,3 +150,21 @@ export const DIDIT_WALLET_SCREENING_NETWORKS: Record<string, string> = {
  * negocio para poder anular la revisión sin desplegar.
  */
 export const WALLET_SCREENING_ENABLED_SETTING_KEY = 'WALLET_SCREENING_ENABLED';
+
+/**
+ * Claves del re-screening periódico.
+ *
+ * `WALLET_RESCREENING_ENABLED` es independiente de la de creación a
+ * propósito: son dos decisiones distintas. Se puede querer revisar altas
+ * nuevas sin barrer la cartera entera, o al revés durante una auditoría.
+ */
+export const WALLET_RESCREENING_ENABLED_SETTING_KEY =
+  'WALLET_RESCREENING_ENABLED';
+export const WALLET_RESCREENING_INTERVAL_SETTING_KEY =
+  'WALLET_RESCREENING_INTERVAL_DAYS';
+export const WALLET_RESCREENING_BATCH_SETTING_KEY =
+  'WALLET_RESCREENING_BATCH_SIZE';
+
+/** Valores por defecto si la clave falta o trae basura. */
+export const WALLET_RESCREENING_DEFAULT_INTERVAL_DAYS = 30;
+export const WALLET_RESCREENING_DEFAULT_BATCH_SIZE = 25;

@@ -42,6 +42,7 @@ import {
   FailOrderDto,
 } from './dto/admin-order-action.dto';
 import { FlowReviewSettingsService } from './flow-review-settings.service';
+import { SuppliersService } from '../suppliers/suppliers.service';
 import {
   BridgeExecContext,
   BridgeLegFailureMode,
@@ -134,6 +135,7 @@ export class PaymentOrdersService {
     private readonly emailService: EmailService,
     private readonly pdfService: PdfService,
     private readonly flowReviewSettings: FlowReviewSettingsService,
+    private readonly suppliersService: SuppliersService,
   ) {}
 
   /**
@@ -714,7 +716,9 @@ export class PaymentOrdersService {
     // resuelve el riel equivocado. Solo se cae al lookup por EA si no llegó supplier_id.
     const supplierQuery = this.supabase
       .from('suppliers')
-      .select('bank_details, bridge_liquidation_address_id, payment_rail')
+      .select(
+        'bank_details, bridge_liquidation_address_id, payment_rail, compliance_status',
+      )
       .eq('user_id', userId);
 
     const { data: supplier } = dto.supplier_id
@@ -730,6 +734,8 @@ export class PaymentOrdersService {
         'No se encontró el proveedor asociado a la cuenta de destino seleccionada.',
       );
     }
+
+    this.suppliersService.assertUsableForPayment(supplier);
 
     // Obtener tipo de cambio para la divisa destino real (BOB_EUR, BOB_USD, BOB_MXN…).
     // USDC/USDT se anclan a USD. Fallback a BOB_USD si el par aún no está configurado.
@@ -911,7 +917,7 @@ export class PaymentOrdersService {
     // ── 1. Resolver destino desde el proveedor ──
     const { data: supplier, error: supplierErr } = await this.supabase
       .from('suppliers')
-      .select('id, name, bank_details, payment_rail')
+      .select('id, name, bank_details, payment_rail, compliance_status')
       .eq('id', dto.supplier_id)
       .eq('user_id', userId)
       .single();
@@ -921,6 +927,8 @@ export class PaymentOrdersService {
         'Proveedor no encontrado o no pertenece al usuario.',
       );
     }
+
+    this.suppliersService.assertUsableForPayment(supplier);
 
     const destAddress = supplier.bank_details?.wallet_address as
       | string
@@ -1166,7 +1174,7 @@ export class PaymentOrdersService {
     // Validar que el proveedor tenga liquidation address configurada
     const { data: supplier } = await this.supabase
       .from('suppliers')
-      .select('bank_details, bridge_liquidation_address_id')
+      .select('bank_details, bridge_liquidation_address_id, compliance_status')
       .eq('id', dto.supplier_id)
       .single();
 
@@ -1176,6 +1184,8 @@ export class PaymentOrdersService {
           'Contacte al administrador para configurarla antes de crear la orden.',
       );
     }
+
+    this.suppliersService.assertUsableForPayment(supplier);
 
     const { data: liquidationAddressForFee } = await this.supabase
       .from('bridge_liquidation_addresses')
@@ -3347,7 +3357,7 @@ export class PaymentOrdersService {
     if (dto.supplier_id) {
       const { data: supplier } = await this.supabase
         .from('suppliers')
-        .select('id, bank_details')
+        .select('id, bank_details, compliance_status')
         .eq('id', dto.supplier_id)
         .eq('user_id', userId)
         .eq('is_active', true)
@@ -3358,6 +3368,8 @@ export class PaymentOrdersService {
           'El proveedor seleccionado no existe o no pertenece a tu cuenta.',
         );
       }
+
+      this.suppliersService.assertUsableForPayment(supplier);
 
       const bankDetails = supplier.bank_details as Record<string, string>;
       const supplierNet = bankDetails?.wallet_network?.toLowerCase();
@@ -3599,10 +3611,16 @@ export class PaymentOrdersService {
     }
     const { data: supplier } = await this.supabase
       .from('suppliers')
-      .select('id, name, bridge_external_account_id, bank_details, payment_rail')
+      .select(
+        'id, name, bridge_external_account_id, bank_details, payment_rail, compliance_status',
+      )
       .eq('id', dto.supplier_id)
       .eq('user_id', userId)
       .single();
+
+    // Antes de bifurcar por riel: un bloqueo manual de compliance aplica a
+    // cualquier beneficiario, no solo a los cripto del re-screening.
+    if (supplier) this.suppliersService.assertUsableForPayment(supplier);
 
     // Perú (pe_bank_transfer) no liquida por Bridge: es un flujo de dos tramos
     // idéntico a bridge_wallet_to_fiat_bo — Bridge mueve los fondos al PSAV y el
@@ -4306,10 +4324,14 @@ export class PaymentOrdersService {
     // ── 3. Proveedor y su cuenta bancaria en Bridge ──
     const { data: supplier } = await this.supabase
       .from('suppliers')
-      .select('id, name, bridge_external_account_id, bank_details, payment_rail')
+      .select(
+        'id, name, bridge_external_account_id, bank_details, payment_rail, compliance_status',
+      )
       .eq('id', dto.supplier_id)
       .eq('user_id', userId)
       .single();
+
+    if (supplier) this.suppliersService.assertUsableForPayment(supplier);
 
     if (!supplier || !supplier.bridge_external_account_id) {
       throw new NotFoundException(

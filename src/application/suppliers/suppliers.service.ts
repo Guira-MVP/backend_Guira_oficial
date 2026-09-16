@@ -17,6 +17,8 @@ import { BridgeService } from '../bridge/bridge.service';
 import { FIAT_RAIL_TO_CURRENCY } from '../../common/constants/fiat-rail-catalog.constants';
 import { DiditWalletScreeningService } from '../didit/didit-wallet-screening.service';
 import { WalletScreeningVerdict } from '../didit/didit.types';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationType } from '../notifications/dto/notifications.dto';
 
 /**
  * Rails que NO se integran con Bridge: el proveedor se guarda solo en la DB y el
@@ -38,6 +40,7 @@ export class SuppliersService {
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly bridgeService: BridgeService,
     private readonly walletScreening: DiditWalletScreeningService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /**
@@ -1092,6 +1095,145 @@ export class SuppliersService {
         notes: data.notes,
       },
     });
+
+    return data;
+  }
+
+  // ── Cumplimiento (compliance_status) ────────────────────────────────
+
+  /**
+   * Lanza si el beneficiario quedó bloqueado por la revisión AML de su
+   * dirección cripto.
+   *
+   * Existe como método compartido porque la carga del beneficiario al crear
+   * una orden está repartida en cuatro métodos distintos de
+   * PaymentOrdersService, y dos de ellos no filtran ni `is_active`. Un filtro
+   * en la query no bastaría: el bloqueo tiene que ser una comprobación
+   * explícita en cada camino, y el mensaje debe ser el mismo en todos.
+   *
+   * Solo bloquea `'blocked'`. `'pending_review'` NO impide operar: es un
+   * hallazgo sin confirmar y la política acordada es que el cliente siga
+   * trabajando mientras compliance decide.
+   */
+  assertUsableForPayment(supplier: {
+    compliance_status?: string | null;
+  }): void {
+    if (supplier?.compliance_status === 'blocked') {
+      throw new BadRequestException(
+        'Este beneficiario no está disponible para envíos por una restricción de ' +
+          'cumplimiento. Revisa la notificación en tu panel o contacta con soporte.',
+      );
+    }
+  }
+
+  /** Beneficiarios con hallazgos de cumplimiento, para la cola del staff. */
+  async listComplianceFlagged() {
+    const { data, error } = await this.supabase
+      .from('suppliers')
+      .select(
+        'id, user_id, name, currency, payment_rail, bank_details, contact_email, ' +
+          'compliance_status, compliance_reason, compliance_updated_at, is_active, created_at',
+      )
+      .not('compliance_status', 'is', null)
+      .order('compliance_updated_at', { ascending: false });
+
+    if (error) throwDbError(error);
+    return data ?? [];
+  }
+
+  /**
+   * Fija o levanta el estado de cumplimiento de un beneficiario (acción de
+   * staff). Levantar un bloqueo reactiva la liquidation address que se
+   * desactivó al bloquearlo; sin eso el beneficiario quedaría "desbloqueado"
+   * pero con el riel de pago muerto.
+   */
+  async setComplianceStatus(
+    supplierId: string,
+    dto: { status: 'blocked' | 'cleared'; reason: string },
+    actor: { id: string; role: string },
+  ) {
+    const { data: existing, error: loadError } = await this.supabase
+      .from('suppliers')
+      .select(
+        'id, user_id, name, payment_rail, bank_details, compliance_status, bridge_liquidation_address_id',
+      )
+      .eq('id', supplierId)
+      .single();
+
+    if (loadError || !existing) {
+      throw new NotFoundException('Beneficiario no encontrado');
+    }
+
+    const nextStatus = dto.status === 'blocked' ? 'blocked' : null;
+
+    const { data, error } = await this.supabase
+      .from('suppliers')
+      .update({
+        compliance_status: nextStatus,
+        compliance_reason: nextStatus ? dto.reason : null,
+        compliance_updated_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', supplierId)
+      .select()
+      .single();
+
+    if (error) throwDbError(error);
+
+    if (existing.bridge_liquidation_address_id) {
+      const { error: laError } = await this.supabase
+        .from('bridge_liquidation_addresses')
+        .update({ is_active: dto.status !== 'blocked' })
+        .eq(
+          'bridge_liquidation_address_id',
+          existing.bridge_liquidation_address_id,
+        )
+        .eq('user_id', existing.user_id);
+
+      if (laError) {
+        this.logger.error(
+          `No se pudo ${dto.status === 'blocked' ? 'desactivar' : 'reactivar'} la liquidation ` +
+            `address ${existing.bridge_liquidation_address_id} del beneficiario ${supplierId}: ` +
+            `${laError.message}. Requiere revisión manual.`,
+        );
+      }
+    }
+
+    await this.supabase.from('audit_logs').insert({
+      performed_by: actor.id,
+      role: actor.role,
+      action:
+        dto.status === 'blocked'
+          ? 'SUPPLIER_COMPLIANCE_BLOCKED_MANUAL'
+          : 'SUPPLIER_COMPLIANCE_CLEARED',
+      table_name: 'suppliers',
+      record_id: supplierId,
+      previous_values: { compliance_status: existing.compliance_status },
+      new_values: { compliance_status: nextStatus },
+      reason: dto.reason,
+      source: 'admin_panel',
+    });
+
+    // Al levantar un bloqueo se avisa al cliente: se le notificó cuando se
+    // bloqueó, así que dejarlo sin la contrapartida lo deja pensando que su
+    // beneficiario sigue inutilizable.
+    if (dto.status === 'cleared' && existing.compliance_status === 'blocked') {
+      await this.notifications.sendNotification({
+        userId: existing.user_id,
+        type: NotificationType.COMPLIANCE,
+        title: 'Beneficiario disponible de nuevo',
+        message:
+          `La cuenta de ${existing.name ?? 'tu beneficiario'} volvió a estar disponible para ` +
+          'envíos tras la revisión de nuestro equipo de cumplimiento. Ya puedes usarla con normalidad.',
+        link: '/panel/beneficiarios',
+        referenceType: 'supplier',
+        referenceId: supplierId,
+      });
+    }
+
+    this.logger.log(
+      `Beneficiario ${supplierId}: compliance_status → ${nextStatus ?? 'null'} por ${actor.id}`,
+    );
 
     return data;
   }

@@ -21,6 +21,7 @@ describe('PaymentOrdersService bridge deposit collision guard', () => {
       // consulta. requiresReview solo se usa desde createInterbankOrder /
       // createWalletRampOrder, que estos specs no ejercitan.
       { requiresReview: jest.fn().mockResolvedValue(true) } as any,
+      { assertUsableForPayment: jest.fn() } as any, // suppliersService
     );
 
   // El guard trae candidatos y decide en memoria cuál ocupa la dirección de
@@ -174,6 +175,7 @@ describe('PaymentOrdersService bridge deposit collision guard', () => {
       // consulta. requiresReview solo se usa desde createInterbankOrder /
       // createWalletRampOrder, que estos specs no ejercitan.
       { requiresReview: jest.fn().mockResolvedValue(true) } as any,
+      { assertUsableForPayment: jest.fn() } as any, // suppliersService
     ) as any;
     const guard = jest
       .spyOn(service, 'assertNoConflictingBridgeDepositOrder')

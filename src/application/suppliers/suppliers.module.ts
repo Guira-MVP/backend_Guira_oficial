@@ -1,5 +1,6 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { SuppliersController } from './suppliers.controller';
+import { AdminSuppliersController } from './admin-suppliers.controller';
 import { SuppliersService } from './suppliers.service';
 import { BridgeModule } from '../bridge/bridge.module';
 import { DiditModule } from '../didit/didit.module';
@@ -8,7 +9,7 @@ import { DiditModule } from '../didit/didit.module';
   // DiditModule no importa nada de la aplicación, así que no hace falta
   // forwardRef: no hay ciclo, a diferencia de BridgeModule.
   imports: [forwardRef(() => BridgeModule), DiditModule],
-  controllers: [SuppliersController],
+  controllers: [SuppliersController, AdminSuppliersController],
   providers: [SuppliersService],
   exports: [SuppliersService],
 })

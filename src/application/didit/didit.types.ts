@@ -228,4 +228,24 @@ export interface WalletScreeningVerdict {
   skip_reason?: string;
   /** Mensaje del fallo cuando `status === 'Error'`. */
   error_message?: string;
+  /**
+   * Sello que pone la RPC `claim_suppliers_for_rescreening` al reclamar el
+   * beneficiario para un ciclo de re-screening. Caduca en una hora para que
+   * un tick muerto no deje la fila bloqueada. Lo escribe Postgres, no el
+   * backend.
+   */
+  rescreen_claimed_at?: string;
+}
+
+/** Estado de cumplimiento de un beneficiario (`suppliers.compliance_status`). */
+export type SupplierComplianceStatus = 'pending_review' | 'blocked';
+
+/** Resultado de aplicar un re-screening a un beneficiario concreto. */
+export interface RescreeningOutcome {
+  supplierId: string;
+  supplierName: string;
+  userId: string;
+  verdict: WalletScreeningVerdict;
+  /** Estado resultante; `null` si el beneficiario sigue limpio. */
+  complianceStatus: SupplierComplianceStatus | null;
 }

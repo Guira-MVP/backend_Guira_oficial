@@ -97,6 +97,9 @@ const createService = (supabase: any, bridgeApi: any = {}) =>
     // Switch por flujo de la puerta de revisión: estos tests ejercitan
     // cancelaciones sobre expedientes ya creados, así que nunca se consulta.
     { requiresReview: jest.fn().mockResolvedValue(true) } as any,
+    // suppliersService: el guard de cumplimiento no aplica en estos tests
+    // (ningún beneficiario está bloqueado), así que es un no-op.
+    { assertUsableForPayment: jest.fn() } as any,
   );
 
 const buildOrder = (overrides: Record<string, unknown> = {}) => ({

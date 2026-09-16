@@ -136,6 +136,7 @@ describe('PaymentOrdersService — pago a Perú (PSAV + Pythas)', () => {
       // consulta. requiresReview solo se usa desde createInterbankOrder /
       // createWalletRampOrder, que estos specs no ejercitan.
       { requiresReview: jest.fn().mockResolvedValue(true) } as any,
+      { assertUsableForPayment: jest.fn() } as any, // suppliersService
     ) as any;
 
     return { service, bridgePost, calculateFee, psavService, getRate };

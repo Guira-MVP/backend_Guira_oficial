@@ -31,9 +31,25 @@ describe('PaymentOrdersService — cuenta sin verificar no puede crear expedient
 
     // Solo se ejercita la barrera, que corre antes que cualquier otra cosa:
     // el resto de colaboradores no llega a usarse.
+    //
+    // Los colaboradores van explícitos y no con un spread de Array(n).fill({}):
+    // TypeScript no acepta esparcir un array sobre parámetros fijos (TS2556),
+    // y además así el test falla al compilar si alguien cambia la firma del
+    // constructor, en vez de pasar un número de argumentos silenciosamente mal.
     const service = new PaymentOrdersService(
       supabase,
-      ...(Array(12).fill({}) as never[]),
+      {} as any, // feesService
+      {} as any, // psavService
+      {} as any, // exchangeRatesService
+      {} as any, // bridgeApi
+      {} as any, // bankAccountsService
+      {} as any, // orderReviewService
+      {} as any, // notificationsService
+      {} as any, // ordersGateway
+      {} as any, // emailService
+      {} as any, // pdfService
+      {} as any, // flowReviewSettings
+      {} as any, // suppliersService
     );
 
     return { service, supabase };
