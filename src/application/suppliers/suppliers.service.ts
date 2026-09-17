@@ -788,6 +788,132 @@ export class SuppliersService {
     return this.attachLiquidationFee(userId, suppliers);
   }
 
+  /**
+   * Agenda completa de beneficiarios de un usuario, para el panel de staff.
+   *
+   * No es lo mismo que la lista de liquidation addresses del usuario, aunque
+   * se parezcan: ahí el registro primario es la ruta de Bridge, así que los
+   * beneficiarios de rail manual (sin LA) no aparecen y los que tienen ACH y
+   * Wire salen duplicados. Aquí el registro primario es el beneficiario.
+   *
+   * A diferencia de findAll() no filtra por `is_active`: el staff necesita ver
+   * también los dados de baja para entender una orden antigua.
+   */
+  async listByUserAdmin(
+    userId: string,
+    opts: {
+      page?: number;
+      limit?: number;
+      rail?: string;
+      status?: 'active' | 'inactive' | 'blocked' | 'pending_review';
+      search?: string;
+    } = {},
+  ) {
+    const pageNum = Math.max(1, opts.page ?? 1);
+    const pageSize = Math.min(100, Math.max(1, opts.limit ?? 20));
+    const from = (pageNum - 1) * pageSize;
+
+    const applyFilters = <T extends { eq: any; or: any }>(query: T): T => {
+      let q: any = query.eq('user_id', userId);
+
+      if (opts.rail) q = q.eq('payment_rail', opts.rail);
+
+      if (opts.status === 'active') q = q.eq('is_active', true);
+      else if (opts.status === 'inactive') q = q.eq('is_active', false);
+      else if (opts.status === 'blocked')
+        q = q.eq('compliance_status', 'blocked');
+      else if (opts.status === 'pending_review')
+        q = q.eq('compliance_status', 'pending_review');
+
+      // Búsqueda en el servidor, no sobre la página ya cargada: si el
+      // beneficiario buscado está en la página 3, un filtro en cliente no lo
+      // encuentra nunca.
+      const search = opts.search?.trim();
+      if (search) {
+        const safe = search.replace(/[%,()]/g, '');
+        if (safe) q = q.or(`name.ilike.%${safe}%,contact_email.ilike.%${safe}%`);
+      }
+
+      return q as T;
+    };
+
+    const [{ data, error }, { count, error: countError }] = await Promise.all([
+      applyFilters(
+        this.supabase
+          .from('suppliers')
+          .select('*, bridge_external_accounts ( bank_name, country )'),
+      )
+        // Los que tienen hallazgos de cumplimiento primero: son los que
+        // motivan que alguien abra esta pestaña.
+        .order('compliance_status', { ascending: true, nullsFirst: false })
+        .order('name')
+        .range(from, from + pageSize - 1),
+      applyFilters(
+        this.supabase
+          .from('suppliers')
+          .select('id', { count: 'exact', head: true }),
+      ),
+    ]);
+
+    if (error) throwDbError(error);
+    if (countError) {
+      this.logger.warn(
+        `Count error en beneficiarios del usuario ${userId}: ${countError.message}`,
+      );
+    }
+
+    const suppliers = (data ?? []).map((supplier) =>
+      this.mapBridgeDetailsToBankDetails(supplier),
+    );
+    const withFee = await this.attachLiquidationFee(userId, suppliers);
+
+    // Enriquecimiento con la liquidation address referenciada. Permite
+    // distinguir en la UI tres casos que de otro modo se confunden:
+    // sin LA por ser rail manual (normal), LA inactiva, y LA referenciada
+    // que no existe en la DB local (inconsistencia real a investigar).
+    const laIds = Array.from(
+      new Set(
+        withFee
+          .map((s) => s.bridge_liquidation_address_id)
+          .filter((id): id is string => typeof id === 'string' && id.length > 0),
+      ),
+    );
+
+    const laByBridgeId = new Map<string, Record<string, unknown>>();
+    if (laIds.length > 0) {
+      const { data: las, error: laError } = await this.supabase
+        .from('bridge_liquidation_addresses')
+        .select(
+          'id, bridge_liquidation_address_id, address, chain, currency, destination_payment_rail, destination_currency, is_active',
+        )
+        .eq('user_id', userId)
+        .in('bridge_liquidation_address_id', laIds);
+
+      if (laError) {
+        this.logger.warn(
+          `No se pudieron cargar las liquidation addresses de los beneficiarios ` +
+            `del usuario ${userId}: ${laError.message}`,
+        );
+      }
+
+      for (const la of las ?? []) {
+        laByBridgeId.set(la.bridge_liquidation_address_id as string, la);
+      }
+    }
+
+    return {
+      data: withFee.map((supplier) => ({
+        ...supplier,
+        liquidation_address: supplier.bridge_liquidation_address_id
+          ? (laByBridgeId.get(supplier.bridge_liquidation_address_id) ?? null)
+          : null,
+      })),
+      total: count ?? withFee.length,
+      page: pageNum,
+      limit: pageSize,
+    };
+  }
+
   /** Detalle de un proveedor. */
   async findOne(supplierId: string, userId: string) {
     const { data, error } = await this.supabase

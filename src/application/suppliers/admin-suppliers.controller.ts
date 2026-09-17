@@ -6,6 +6,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -46,6 +47,41 @@ export class AdminSuppliersController {
   @ApiResponse({ status: 200, description: 'Listado con el veredicto de screening' })
   listFlagged() {
     return this.suppliersService.listComplianceFlagged();
+  }
+
+  /**
+   * La ruta lleva el prefijo `user/` a propósito: un `:userId` suelto
+   * colisionaría con los `:id` de compliance y rescreen de este mismo
+   * controlador.
+   */
+  @Get('user/:userId')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({
+    summary: 'Beneficiarios de un usuario (admin) — paginado',
+    description:
+      'Agenda completa, incluidos los de rail manual sin liquidation address y ' +
+      'los dados de baja. Cada fila trae su liquidation address si la tiene.',
+  })
+  @ApiResponse({ status: 200, description: 'Listado paginado de beneficiarios' })
+  listByUser(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('rail') rail?: string,
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+  ) {
+    const validStatuses = ['active', 'inactive', 'blocked', 'pending_review'];
+
+    return this.suppliersService.listByUserAdmin(userId, {
+      page: page ? parseInt(page, 10) : undefined,
+      limit: limit ? parseInt(limit, 10) : undefined,
+      rail: rail || undefined,
+      status: validStatuses.includes(status ?? '')
+        ? (status as 'active' | 'inactive' | 'blocked' | 'pending_review')
+        : undefined,
+      search: search || undefined,
+    });
   }
 
   @Patch(':id/compliance')
