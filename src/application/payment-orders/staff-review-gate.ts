@@ -154,6 +154,7 @@ export interface PeruExecContext extends ExecContextBase {
   psav_dest_currency: string;
 }
 
+/** Cripto externo → cuenta bancaria del proveedor, con importe flexible. */
 export interface WalletToWorldExecContext extends ExecContextBase {
   kind: 'wallet_to_world';
   /** Red on-chain desde la que llegará el depósito externo, en minúscula. */
@@ -161,6 +162,11 @@ export interface WalletToWorldExecContext extends ExecContextBase {
   supplier_payment_rail: string;
   external_account_local_id: string;
   destination_currency: string;
+  /**
+   * Comisión congelada como PORCENTAJE, no como importe: sin monto conocido al
+   * crear el expediente, es Bridge quien la calcula sobre lo que reciba.
+   */
+  fee_percent: string;
 }
 
 /**

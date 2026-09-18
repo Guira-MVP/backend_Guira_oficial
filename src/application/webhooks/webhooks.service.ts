@@ -2511,6 +2511,90 @@ export class WebhooksService {
     }
   }
 
+  /**
+   * Deja rastro cuando un depósito de wallet_to_world supera el límite máximo
+   * del cliente.
+   *
+   * En este flujo el importe es flexible: Bridge emite una dirección que acepta
+   * cualquier monto, así que `checkAmountLimits` no tiene nada que validar al
+   * crear el expediente. Cuando llega el depósito los fondos ya se liquidaron en
+   * la cuenta del proveedor y no hay vuelta atrás — el objetivo aquí es
+   * detección y trazabilidad para compliance, no bloqueo.
+   *
+   * Nunca lanza: un fallo registrando la alerta no debe abortar el cierre de un
+   * transfer que Bridge ya completó.
+   */
+  private async auditWalletToWorldLimitBreach(
+    paymentOrder: { id: string; user_id: string; currency: string | null },
+    depositedAmount: number | null,
+  ): Promise<void> {
+    if (depositedAmount == null || depositedAmount <= 0) return;
+
+    try {
+      const { max_usd: maxUsd } =
+        await this.paymentOrdersService.getPaymentLimits(
+          'wallet_to_world',
+          paymentOrder.user_id,
+        );
+
+      if (!maxUsd || depositedAmount <= maxUsd) return;
+
+      const currency = (paymentOrder.currency ?? 'USDC').toUpperCase();
+      const excess = parseFloat((depositedAmount - maxUsd).toFixed(2));
+
+      this.logger.warn(
+        `⚠️ [wallet_to_world] Depósito fuera de límite en la orden ${paymentOrder.id}: ` +
+          `${depositedAmount} ${currency} contra un máximo de ${maxUsd} USD (exceso ${excess}).`,
+      );
+
+      await this.supabase.from('audit_logs').insert({
+        performed_by: paymentOrder.user_id,
+        role: 'client',
+        action: 'WALLET_TO_WORLD_LIMIT_EXCEEDED',
+        table_name: 'payment_orders',
+        record_id: paymentOrder.id,
+        new_values: {
+          deposited_amount: depositedAmount,
+          currency,
+          max_usd: maxUsd,
+          excess_usd: excess,
+        },
+        reason:
+          'Depósito de importe flexible por encima del límite máximo del cliente; ' +
+          'detectado al liquidar (no reversible).',
+        source: 'webhook',
+      });
+
+      const { data: admins } = await this.supabase
+        .from('profiles')
+        .select('id')
+        .in('role', ['staff', 'admin', 'super_admin'])
+        .eq('is_active', true)
+        .limit(5);
+
+      if (admins?.length) {
+        await this.supabase.from('notifications').insert(
+          admins.map((admin) => ({
+            user_id: admin.id,
+            type: 'system',
+            title: 'Depósito sobre el límite — Wallet externa al exterior',
+            message:
+              `La orden ${paymentOrder.id} recibió ${depositedAmount} ${currency}, ` +
+              `por encima del máximo de ${maxUsd} USD del cliente (exceso ${excess}). ` +
+              `Los fondos ya se liquidaron: requiere revisión de cumplimiento.`,
+            reference_type: 'payment_order',
+            reference_id: paymentOrder.id,
+          })),
+        );
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error(
+        `❌ No se pudo registrar la alerta de límite para la orden ${paymentOrder.id}: ${message}`,
+      );
+    }
+  }
+
   // ═══════════════════════════════════════════════
   //  HANDLER: transfer.complete (REFACTORIZADO)
   //  [GAP 1 FIX] UPDATE ledger pending→settled, NO crear nuevo
@@ -2779,6 +2863,17 @@ export class WebhooksService {
               : {}),
           })
           .eq('id', paymentOrder.id);
+
+        // wallet_to_world: el límite máximo no se puede verificar al crear el
+        // expediente (importe flexible), así que se revisa aquí con el monto real.
+        if (paymentOrder.flow_type === 'wallet_to_world') {
+          await this.auditWalletToWorldLimitBreach(
+            paymentOrder,
+            receipt?.initial_amount != null
+              ? parseFloat(receipt.initial_amount as string)
+              : receiptFinalAmount,
+          );
+        }
 
         // Para on-ramp flexible (amount=0 en creación), el monto real viene
         // del receipt de Bridge — usar ese valor en el correo al cliente.
