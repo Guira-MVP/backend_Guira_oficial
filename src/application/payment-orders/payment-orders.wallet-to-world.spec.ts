@@ -10,6 +10,9 @@ import { WalletRampFlowType } from './dto/create-wallet-ramp-order.dto';
  *   2. NUNCA se inserta en ledger_entries → evita el cargo fantasma (ver el
  *      comentario extenso en createWalletToWorld).
  *   3. Sin tarifa activa se RECHAZA, en vez de crear la orden cobrando 0.
+ *   4. Con tarifa fija o mixta se RECHAZA: Bridge solo entiende un porcentaje
+ *      cuando el importe es flexible, así que fee_fixed/min_fee/max_fee se
+ *      cobrarían en cero sin que nadie se entere.
  *
  * Desde la puerta de revisión de staff el flujo tiene DOS fases:
  *   - createWalletToWorld deja el expediente en 'pending_review' SIN llamar a
@@ -20,6 +23,8 @@ import { WalletRampFlowType } from './dto/create-wallet-ramp-order.dto';
  * que usa createOrderFromReview cuando el staff ya revisó en la otra cola.
  */
 describe('PaymentOrdersService — wallet_to_world', () => {
+  // Con flexible_amount Bridge no devuelve importe: la dirección acepta lo que
+  // el cliente envíe.
   const BRIDGE_TRANSFER_RESPONSE = {
     id: 'bridge-transfer-uuid',
     state: 'awaiting_funds',
@@ -27,22 +32,25 @@ describe('PaymentOrdersService — wallet_to_world', () => {
       to_address: 'SoLaNaAddr111111111111111111111111111111111',
       payment_rail: 'solana',
       currency: 'usdc',
-      amount: '1000.00',
     },
   };
 
-  /** Contexto de ejecución tal y como lo persiste createWalletToWorld. */
+  /**
+   * Contexto de ejecución tal y como lo persiste createWalletToWorld: importes en
+   * 0 (flexible) y la comisión congelada como porcentaje.
+   */
   const EXEC_CONTEXT = {
     kind: 'wallet_to_world' as const,
     source_currency: 'USDC',
-    amount: 1000,
-    fee_amount: 30,
-    net_amount: 970,
+    amount: 0,
+    fee_amount: 0,
+    net_amount: 0,
     total_needed: 0,
     source_network: 'solana',
     supplier_payment_rail: 'ach',
     external_account_local_id: 'ext-local-1',
     destination_currency: 'usd',
+    fee_percent: '3',
   };
 
   const PENDING_ORDER = {
@@ -118,11 +126,23 @@ describe('PaymentOrdersService — wallet_to_world', () => {
     return { from, rpc, __ledgerInsert: ledgerInsert, __updates: updates };
   }
 
-  function makeService(supabase: any, opts: { bridgePost?: jest.Mock; assertFee?: jest.Mock } = {}) {
+  function makeService(
+    supabase: any,
+    opts: {
+      bridgePost?: jest.Mock;
+      assertFee?: jest.Mock;
+      feeConfigRow?: { fee_type: string; fee_percent: number; fee_fixed: number } | null;
+    } = {},
+  ) {
     const bridgePost = opts.bridgePost ?? jest.fn().mockResolvedValue(BRIDGE_TRANSFER_RESPONSE);
     const feesService = {
       calculateFee: jest.fn().mockResolvedValue({ fee_amount: 30, net_amount: 970 }),
-      getFeePercent: jest.fn(),
+      getFeePercent: jest.fn().mockResolvedValue('3'),
+      getFeeConfigRow: jest.fn().mockResolvedValue(
+        opts.feeConfigRow === undefined
+          ? { fee_type: 'percent', fee_percent: 3, fee_fixed: 0 }
+          : opts.feeConfigRow,
+      ),
       assertFeeConfigured: opts.assertFee ?? jest.fn().mockResolvedValue(undefined),
     };
     const service = new PaymentOrdersService(
@@ -146,9 +166,9 @@ describe('PaymentOrdersService — wallet_to_world', () => {
     return { service, bridgePost, feesService };
   }
 
+  // Sin `amount`: el importe es flexible y el wizard del cliente ya no lo pide.
   const validDto = {
     flow_type: WalletRampFlowType.WALLET_TO_WORLD,
-    amount: 1000,
     wallet_id: '11111111-1111-1111-1111-111111111111',
     source_network: 'solana',
     source_currency: 'usdc',
@@ -209,9 +229,13 @@ describe('PaymentOrdersService — wallet_to_world', () => {
     expect(persisted.status).toBe('waiting_deposit');
     expect(persisted.bridge_source_deposit_instructions).toMatchObject({
       address: BRIDGE_TRANSFER_RESPONSE.source_deposit_instructions.to_address,
-      amount: '1000.00',
       chain: 'solana',
     });
+    // Sin importe exigido: mostrarlo haría creer al cliente que debe enviar
+    // esa cifra exacta.
+    expect(
+      persisted.bridge_source_deposit_instructions.amount,
+    ).toBeUndefined();
   });
 
   it('la Idempotency-Key deriva del id del expediente, así que sobrevive al salto crear→aprobar', async () => {
@@ -263,7 +287,7 @@ describe('PaymentOrdersService — wallet_to_world', () => {
 
   // ── Camino sin puerta (createOrderFromReview): comportamiento histórico ──
 
-  it('envía a Bridge el payload correcto: allow_any_from_address, sin bridge_wallet_id ni flexible_amount', async () => {
+  it('envía a Bridge el payload correcto: flexible_amount + developer_fee_percent, sin amount', async () => {
     const supabase = makeSupabase();
     const { service, bridgePost } = makeService(supabase);
 
@@ -280,16 +304,35 @@ describe('PaymentOrdersService — wallet_to_world', () => {
     expect(payload.source.bridge_wallet_id).toBeUndefined();
     expect(payload.source.from_address).toBeUndefined();
 
-    // Monto fijo: developer_fee absoluto y SIN flexible_amount
-    expect(payload.amount).toBe('1000.00');
-    expect(payload.developer_fee).toBe('30.00');
-    expect(payload.features).toEqual({ allow_any_from_address: true });
-    expect(payload.features.flexible_amount).toBeUndefined();
+    // Importe flexible: sin amount ni developer_fee absoluto — la comisión va
+    // como porcentaje y Bridge la aplica sobre lo que reciba.
+    expect(payload.amount).toBeUndefined();
+    expect(payload.developer_fee).toBeUndefined();
+    expect(payload.developer_fee_percent).toBe('3');
+    expect(payload.features).toEqual({
+      flexible_amount: true,
+      allow_any_from_address: true,
+    });
 
     // Destino: cuenta del proveedor + referencia del riel
     expect(payload.destination.external_account_id).toBe('ext-bridge-1');
     expect(payload.destination.payment_rail).toBe('ach');
     expect(payload.destination.ach_reference).toBe('GUIRA');
+  });
+
+  it('el expediente nace con importes en 0: los rellena el webhook desde el receipt', async () => {
+    const supabase = makeSupabase();
+    const { service, feesService } = makeService(supabase);
+
+    const order = await service.createWalletToWorld('user-1', validDto, bypass);
+
+    expect(order.amount).toBe(0);
+    expect(order.fee_amount).toBe(0);
+    expect(order.net_amount).toBe(0);
+    // Sin monto no hay nada que convertir: la tasa real la escribe el webhook.
+    expect(order.exchange_rate_applied).toBe(1.0);
+    // calculateFee no se llama: no hay importe sobre el que calcular.
+    expect(feesService.calculateFee).not.toHaveBeenCalled();
   });
 
   it('un expediente que viene de una review ya aprobada NO pasa por pending_review', async () => {
@@ -303,7 +346,6 @@ describe('PaymentOrdersService — wallet_to_world', () => {
     expect(order.bridge_execution_context).toBeNull();
     expect(order.bridge_source_deposit_instructions).toMatchObject({
       address: BRIDGE_TRANSFER_RESPONSE.source_deposit_instructions.to_address,
-      amount: '1000.00',
       chain: 'solana',
     });
     expect(order.source_address).toBeNull();
@@ -382,6 +424,43 @@ describe('PaymentOrdersService — wallet_to_world', () => {
       BadRequestException,
     );
     // No debe haberse llamado a Bridge ni creado nada
+    expect(bridgePost).not.toHaveBeenCalled();
+  });
+
+  it.each(['fixed', 'mixed'])(
+    'rechaza una tarifa %s: con importe flexible Bridge solo entiende un porcentaje',
+    async (feeType) => {
+      const supabase = makeSupabase();
+      const { service, bridgePost } = makeService(supabase, {
+        feeConfigRow: { fee_type: feeType, fee_percent: 1.5, fee_fixed: 15 },
+      });
+
+      await expect(
+        service.createWalletToWorld('user-1', validDto, bypass),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      // Se rechaza ANTES de tocar Bridge: nada que revertir.
+      expect(bridgePost).not.toHaveBeenCalled();
+    },
+  );
+
+  it('acepta que no haya fila de tarifa: assertFeeConfigured ya es la puerta de ese caso', async () => {
+    const supabase = makeSupabase();
+    const { service, bridgePost } = makeService(supabase, { feeConfigRow: null });
+
+    await service.createWalletToWorld('user-1', validDto, bypass);
+
+    expect(bridgePost).toHaveBeenCalledTimes(1);
+  });
+
+  it('si el cliente declara un monto, lo valida contra el mínimo de la ruta', async () => {
+    const supabase = makeSupabase();
+    const { service, bridgePost } = makeService(supabase);
+
+    // El mínimo de solana/usdc es 1 en WALLET_TO_WORLD_SOURCE_ROUTES.
+    await expect(
+      service.createWalletToWorld('user-1', { ...validDto, amount: 0.5 }, bypass),
+    ).rejects.toBeInstanceOf(BadRequestException);
     expect(bridgePost).not.toHaveBeenCalled();
   });
 

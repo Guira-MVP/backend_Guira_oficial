@@ -2134,12 +2134,22 @@ export class PaymentOrdersService {
         break;
     }
 
-    const limitCheck = await this.checkAmountLimits(
-      dto.amount,
-      dto.flow_type,
-      inputCurrency,
-      userId,
-    );
+    // wallet_to_world con importe flexible no trae monto que validar: Bridge
+    // acepta cualquier cantidad, así que el límite no es verificable aquí. El
+    // control se hace post-depósito, al llegar transfer.complete con el monto
+    // real (ver handleTransferComplete en webhooks.service.ts).
+    const skipLimitCheck =
+      dto.flow_type === WalletRampFlowType.WALLET_TO_WORLD &&
+      (dto.amount ?? 0) <= 0;
+
+    const limitCheck = skipLimitCheck
+      ? { amountUsd: 0, min: 0, max: 0, exceeded: false }
+      : await this.checkAmountLimits(
+          dto.amount,
+          dto.flow_type,
+          inputCurrency,
+          userId,
+        );
 
     if (limitCheck.exceeded) {
       if (!reviewContext?.clientReason) {
@@ -4238,10 +4248,16 @@ export class PaymentOrdersService {
    *     dirección de depósito es inservible para el cliente.
    *   - El estado inicial es 'waiting_deposit', no 'created'.
    *
-   * Monto FIJO (sin features.flexible_amount): el cliente debe enviar el importe
-   * exacto. Si envía de más o de menos, Bridge no procesa y la orden queda en
-   * waiting_deposit sin webhook de cierre → requiere gestión manual con soporte
-   * Bridge. Por eso el importe exacto se muestra de forma prominente en el QR.
+   * Importe FLEXIBLE (features.flexible_amount): el cliente envía lo que quiera y
+   * Bridge liquida lo que reciba. La comisión viaja como developer_fee_percent
+   * porque al crear el expediente no hay monto sobre el que calcularla; el importe
+   * real, la comisión cobrada y la tasa aplicada los escribe el webhook
+   * transfer.complete desde el receipt de Bridge.
+   *
+   * Por eso este flujo solo admite tarifas porcentuales: fee_fixed, min_fee y
+   * max_fee no tienen forma de expresarse en la API de Bridge y se cobrarían en
+   * cero sin que nadie se entere. La creación se rechaza si la tarifa aplicable
+   * no es 'percent'.
    */
   private async createWalletToWorld(
     userId: string,
@@ -4286,10 +4302,15 @@ export class PaymentOrdersService {
       );
     }
 
+    // Importe flexible: el cliente no está obligado a declarar un monto. Si lo
+    // declara se valida contra el mínimo de la ruta, pero lo que Bridge acepte
+    // en la dirección de depósito no depende de este valor.
+    const amount = dto.amount ?? 0;
+
     const routeMin = getWalletToWorldMinAmount(sourceNetwork, sourceCurrency);
-    if (routeMin > 0 && dto.amount < routeMin) {
+    if (amount > 0 && routeMin > 0 && amount < routeMin) {
       throw new BadRequestException(
-        `El monto mínimo para ${sourceCurrency} en ${sourceNetwork} es ${routeMin}. Ingresaste ${dto.amount}.`,
+        `El monto mínimo para ${sourceCurrency} en ${sourceNetwork} es ${routeMin}. Ingresaste ${amount}.`,
       );
     }
 
@@ -4354,13 +4375,50 @@ export class PaymentOrdersService {
       supplier.payment_rail,
       destCurrency,
     );
-    const { fee_amount, net_amount } = await this.feesService.calculateFee(
+
+    // Con importe flexible la comisión la aplica Bridge como porcentaje sobre lo
+    // que reciba, así que una tarifa fija o mixta no tiene forma de expresarse:
+    // fee_fixed/min_fee/max_fee se perderían y el cobro saldría corto en silencio.
+    // Se rechaza aquí, antes de tocar Bridge, en vez de cobrar mal.
+    const feeConfigRow = await this.feesService.getFeeConfigRow(
       userId,
       'ramp_off_wallet_world',
       supplier.payment_rail,
       destCurrency,
-      dto.amount,
     );
+
+    if (feeConfigRow && feeConfigRow.fee_type !== 'percent') {
+      this.logger.warn(
+        `[wallet_to_world] Tarifa no porcentual (${feeConfigRow.fee_type}) para ` +
+          `${supplier.payment_rail}/${destCurrency} (user ${userId}): expediente rechazado.`,
+      );
+      throw new BadRequestException(
+        `El destino ${supplier.payment_rail.toUpperCase()} (${destCurrency}) tiene una comisión ` +
+          `de tipo ${feeConfigRow.fee_type === 'fixed' ? 'monto fijo' : 'mixto'}, y este servicio ` +
+          `solo admite comisiones porcentuales. Contacta a soporte para que ajusten la tarifa.`,
+      );
+    }
+
+    const feePercent = await this.feesService.getFeePercent(
+      userId,
+      'ramp_off_wallet_world',
+      supplier.payment_rail,
+      destCurrency,
+    );
+
+    // fee_amount / net_amount solo se pueden calcular si el cliente declaró un
+    // monto. Con importe flexible arrancan en 0 y el webhook los rellena desde
+    // el receipt de Bridge (ver handleTransferComplete).
+    const { fee_amount, net_amount } =
+      amount > 0
+        ? await this.feesService.calculateFee(
+            userId,
+            'ramp_off_wallet_world',
+            supplier.payment_rail,
+            destCurrency,
+            amount,
+          )
+        : { fee_amount: 0, net_amount: 0 };
 
     // ── 6. Un solo envío activo por token + proveedor ──
     await this.assertNoConflictingWalletToWorld(
@@ -4369,25 +4427,11 @@ export class PaymentOrdersService {
       dto.supplier_id,
     );
 
-    // ── 7. Validar que la tasa congelada siga vigente (destinos no-USD) ──
-    if (
-      destCurrency !== 'USD' &&
-      dto.exchange_rate_applied &&
-      dto.exchange_rate_applied > 0
-    ) {
-      const liveRate = await this.exchangeRatesService.getRate(
-        `USD_${destCurrency}`,
-      );
-      const liveBase = liveRate.effective_rate;
-      const deviation = Math.abs(dto.exchange_rate_applied - liveBase) / liveBase;
-      const MAX_RATE_DEVIATION = 0.03;
-      if (deviation > MAX_RATE_DEVIATION) {
-        throw new BadRequestException(
-          `La cotización ha variado un ${(deviation * 100).toFixed(1)}% desde que fue generada. ` +
-            `Por favor vuelve a cotizar para continuar.`,
-        );
-      }
-    }
+    // ── 7. Sin cotización congelada ──
+    // No se valida ninguna tasa al crear: sin monto no hay importe destino que
+    // cotizar. Para destinos no-USD la tasa real la fija Bridge al liquidar y el
+    // webhook transfer.complete la escribe en exchange_rate_applied junto con
+    // amount_destination (ver webhooks.service.ts).
 
     // ── 8. Wallet de referencia (solo para agrupar en la UI; NO se debita) ──
     // Lookup propio en vez de getUserWallet(): ese helper exige provider_wallet_id
@@ -4425,7 +4469,7 @@ export class PaymentOrdersService {
     const execContext: WalletToWorldExecContext = {
       kind: 'wallet_to_world',
       source_currency: sourceCurrency,
-      amount: dto.amount,
+      amount,
       fee_amount,
       net_amount,
       total_needed: 0,
@@ -4433,6 +4477,7 @@ export class PaymentOrdersService {
       supplier_payment_rail: supplier.payment_rail,
       external_account_local_id: extAccount.id,
       destination_currency: (extAccount.currency ?? 'usd').toLowerCase(),
+      fee_percent: feePercent,
     };
 
     // Fuera de la puerta de revisión (expediente que viene de una review ya
@@ -4450,8 +4495,6 @@ export class PaymentOrdersService {
           '/v0/transfers',
           {
             on_behalf_of: profile.bridge_customer_id,
-            amount: dto.amount.toFixed(2),
-            ...(fee_amount > 0 && { developer_fee: fee_amount.toFixed(2) }),
             source: {
               currency: sourceCurrency.toLowerCase(),
               payment_rail: sourceNetwork,
@@ -4462,9 +4505,13 @@ export class PaymentOrdersService {
               external_account_id: extAccount.bridge_external_account_id,
               ...railRef,
             },
+            // Sin amount → Bridge acepta cualquier monto (flexible_amount).
             // Sin from_address: el cliente puede pagar desde cualquier wallet.
-            // Sin flexible_amount: el importe debe ser exacto (decisión de producto).
-            features: { allow_any_from_address: true },
+            developer_fee_percent: feePercent,
+            features: {
+              flexible_amount: true,
+              allow_any_from_address: true,
+            },
             client_reference_id: orderId,
           },
           `po_w2w_${orderId}`,
@@ -4504,18 +4551,12 @@ export class PaymentOrdersService {
           bridgeInstr,
           sourceNetwork,
           sourceCurrency,
-          dto.amount,
         )
       : null;
 
     const transferId = (bridgeTransfer?.id ?? null) as string | null;
 
     // ── 11. Crear la orden ──
-    const isNonUsdWithRate =
-      destCurrency !== 'USD' &&
-      !!dto.exchange_rate_applied &&
-      dto.exchange_rate_applied > 0;
-
     const bankDetails = supplier.bank_details as Record<string, unknown> | null;
     const rawAccountNumber = bankDetails?.account_number as string | undefined;
     const destinationAccountNumber = rawAccountNumber
@@ -4543,19 +4584,20 @@ export class PaymentOrdersService {
         // La dirección de origen se conoce recién cuando llega el depósito;
         // el webhook la completa con el remitente real.
         source_address: null,
-        amount: dto.amount,
+        // 0 con importe flexible: el monto real lo escribe el webhook desde
+        // receipt.initial_amount al completarse el transfer.
+        amount,
         currency: sourceCurrency,
         fee_amount,
         net_amount,
         destination_type: 'external_account',
         destination_currency: extAccount.currency ?? 'USD',
-        // Para USD la conversión es 1:1. Para el resto se usa la tasa congelada
-        // por el cliente; el webhook transfer.complete la sobrescribe con
-        // receipt.exchange_rate (la tasa real de Bridge).
-        exchange_rate_applied: isNonUsdWithRate ? dto.exchange_rate_applied : 1.0,
-        amount_destination: isNonUsdWithRate
-          ? parseFloat((net_amount * dto.exchange_rate_applied!).toFixed(2))
-          : net_amount,
+        // Arranca en 1.0 incluso para destinos no-USD: sin monto no hay nada que
+        // convertir. El webhook transfer.complete lo sobrescribe con
+        // receipt.exchange_rate (la tasa real de Bridge) y amount_destination con
+        // receipt.final_amount.
+        exchange_rate_applied: 1.0,
+        amount_destination: net_amount,
         external_account_id: extAccount.id,
         supplier_id: supplier.id,
         destination_bank_name: (bankDetails?.bank_name as string) ?? null,
@@ -4585,8 +4627,10 @@ export class PaymentOrdersService {
         source_currency: sourceCurrency.toLowerCase(),
         destination_payment_rail: supplier.payment_rail,
         destination_currency: (extAccount.currency ?? 'usd').toLowerCase(),
-        amount: dto.amount,
-        developer_fee_amount: fee_amount,
+        amount,
+        // La comisión se registra como porcentaje, que es lo que se le envió a
+        // Bridge: el importe cobrado se conoce recién en el receipt.
+        developer_fee_percent: feePercent,
         net_amount,
         status: 'pending',
         bridge_state: (bridgeTransfer.state as string) ?? 'awaiting_funds',
@@ -4613,9 +4657,10 @@ export class PaymentOrdersService {
     // payment_orders, y la traza completa queda en bridge_transfers.
 
     this.logger.log(
-      `📋 Orden wallet_to_world: ${orderId} — ${dto.amount} ${sourceCurrency} (${sourceNetwork}) → ` +
-        `${supplier.name} vía ${supplier.payment_rail} (${destCurrency}) | ` +
-        `estado: ${order.status} | Bridge transfer: ${transferId ?? 'pendiente de aprobación'}`,
+      `📋 Orden wallet_to_world: ${orderId} — ${amount > 0 ? amount : 'flexible'} ${sourceCurrency} ` +
+        `(${sourceNetwork}) → ${supplier.name} vía ${supplier.payment_rail} (${destCurrency}) | ` +
+        `fee: ${feePercent}% | estado: ${order.status} | ` +
+        `Bridge transfer: ${transferId ?? 'pendiente de aprobación'}`,
     );
 
     return order;
@@ -4631,20 +4676,18 @@ export class PaymentOrdersService {
     bridgeInstr: Record<string, string> | undefined,
     sourceNetwork: string,
     sourceCurrency: string,
-    amount: number,
   ): Record<string, string> {
     const depositAddress =
       bridgeInstr?.to_address ?? bridgeInstr?.address ?? '';
 
+    // Sin clave `amount`: con flexible_amount no hay importe exigido y mostrar uno
+    // haría creer al cliente que debe enviar esa cifra exacta.
     return {
       type: 'liquidation_address',
       address: depositAddress,
       chain: bridgeInstr?.payment_rail ?? bridgeInstr?.chain ?? sourceNetwork,
       currency: bridgeInstr?.currency ?? sourceCurrency.toLowerCase(),
-      // El importe de Bridge tiene prioridad: si redondea decimales del token,
-      // el suyo es el que compara su watcher on-chain.
-      amount: bridgeInstr?.amount ?? amount.toFixed(2),
-      label: `Depósito exacto ${amount.toFixed(2)} ${sourceCurrency} (${sourceNetwork})`,
+      label: `Depósito en ${sourceCurrency} (${sourceNetwork})`,
     };
   }
 
@@ -4681,10 +4724,6 @@ export class PaymentOrdersService {
         '/v0/transfers',
         {
           on_behalf_of: bridgeCustomerId,
-          amount: ctx.amount.toFixed(2),
-          ...(ctx.fee_amount > 0 && {
-            developer_fee: ctx.fee_amount.toFixed(2),
-          }),
           source: {
             currency: sourceCurrency.toLowerCase(),
             payment_rail: ctx.source_network,
@@ -4695,9 +4734,13 @@ export class PaymentOrdersService {
             external_account_id: extAccount.bridge_external_account_id,
             ...railRef,
           },
+          // Sin amount → Bridge acepta cualquier monto (flexible_amount).
           // Sin from_address: el cliente puede pagar desde cualquier wallet.
-          // Sin flexible_amount: el importe debe ser exacto (decisión de producto).
-          features: { allow_any_from_address: true },
+          developer_fee_percent: ctx.fee_percent,
+          features: {
+            flexible_amount: true,
+            allow_any_from_address: true,
+          },
           client_reference_id: order.id,
         },
         `po_w2w_${order.id}`,
@@ -4749,7 +4792,6 @@ export class PaymentOrdersService {
         bridgeInstr,
         ctx.source_network,
         sourceCurrency,
-        ctx.amount,
       );
 
     await this.supabase
@@ -4769,7 +4811,9 @@ export class PaymentOrdersService {
       destination_payment_rail: ctx.supplier_payment_rail,
       destination_currency: ctx.destination_currency,
       amount: ctx.amount,
-      developer_fee_amount: ctx.fee_amount,
+      // Porcentaje, no importe: es lo que se le envió a Bridge y lo único que se
+      // conoce antes de que llegue el depósito.
+      developer_fee_percent: ctx.fee_percent,
       net_amount: ctx.net_amount,
       status: 'pending',
       bridge_state: (bridgeTransfer.state as string) ?? 'awaiting_funds',

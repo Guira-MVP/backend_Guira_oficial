@@ -46,9 +46,18 @@ export class CreateWalletRampOrderDto {
   @IsEnum(WalletRampFlowType)
   flow_type: WalletRampFlowType;
 
+  // Exento en los flujos de importe flexible (features.flexible_amount): Bridge
+  // emite una dirección de depósito que acepta cualquier monto, así que exigir un
+  // importe al crear el expediente sería mentirle al cliente. En esos flujos llega
+  // undefined y el servicio lo normaliza a 0; el monto real lo escribe el webhook
+  // desde el receipt de Bridge.
   @ApiProperty({ example: 500.0 })
   @IsNumber()
-  @ValidateIf((o) => o.flow_type !== WalletRampFlowType.CRYPTO_TO_BRIDGE_WALLET)
+  @ValidateIf(
+    (o) =>
+      o.flow_type !== WalletRampFlowType.CRYPTO_TO_BRIDGE_WALLET &&
+      o.flow_type !== WalletRampFlowType.WALLET_TO_WORLD,
+  )
   @Min(0.01)
   amount: number;
 
@@ -172,7 +181,7 @@ export class CreateWalletRampOrderDto {
       'bridge_wallet_to_crypto',
       'bridge_wallet_to_fiat_bo',
       'bridge_wallet_to_fiat_us',
-      'crypto_to_bridge_wallet',
+      'crypto_to_bridge_wallet',
       'wallet_to_world',
     ].includes(o.flow_type),
   )
@@ -194,7 +203,7 @@ export class CreateWalletRampOrderDto {
       'UUID del proveedor (supplier) destino. Requerido para bridge_wallet_to_fiat_us, bridge_wallet_to_crypto y wallet_to_world.',
   })
   @ValidateIf((o) =>
-    [
+    [
       'bridge_wallet_to_fiat_us',
       'bridge_wallet_to_crypto',
       'wallet_to_world',
@@ -210,7 +219,7 @@ export class CreateWalletRampOrderDto {
     [
       'bridge_wallet_to_fiat_bo',
       'bridge_wallet_to_crypto',
-      'bridge_wallet_to_fiat_us',
+      'bridge_wallet_to_fiat_us',
       'fiat_bo_to_bridge_wallet',
       'crypto_to_bridge_wallet',
       'wallet_to_world',
