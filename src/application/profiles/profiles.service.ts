@@ -270,15 +270,27 @@ export class ProfilesService {
   ) {
     const offset = (page - 1) * limit;
 
+    // `onboarding_status` acepta una lista separada por comas (p.ej. para
+    // traer perfiles "pre-registro" que nunca llegaron a enviar KYC/KYB:
+    // pending, kyc_started, kyb_started). Un solo valor mantiene el
+    // comportamiento previo (.eq), lista de varios usa .in.
+    const onboardingStatuses = (filters?.onboarding_status ?? 'approved')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+
     let query = this.supabase
       .from('profiles')
       .select(
         'id, email, full_name, role, onboarding_status, is_active, is_frozen, created_at, avatar_url, metadata, assigned_psav_id',
         { count: 'exact' },
       )
-      .eq('onboarding_status', filters?.onboarding_status ?? 'approved')
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
+
+    query = onboardingStatuses.length > 1
+      ? query.in('onboarding_status', onboardingStatuses)
+      : query.eq('onboarding_status', onboardingStatuses[0]);
 
     // Aplicar filtros opcionales
     if (filters?.role) {
