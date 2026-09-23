@@ -55,6 +55,7 @@ function mockSupabase(opts: {
   kycRow?: Record<string, unknown> | null;
   personRow?: Record<string, unknown> | null;
   documents?: DocRow[];
+  reviewRow?: Record<string, unknown> | null;
 }) {
   const updates: Array<{ table: string; payload: Record<string, unknown> }> = [];
   const inserts: Array<{ table: string; payload: Record<string, unknown> }> = [];
@@ -93,8 +94,20 @@ function mockSupabase(opts: {
     };
   }
 
+  function reviewsBuilder() {
+    const builder: any = {
+      select: () => builder,
+      eq: () => builder,
+      order: () => builder,
+      limit: () => builder,
+      maybeSingle: () => Promise.resolve({ data: opts.reviewRow ?? null, error: null }),
+    };
+    return builder;
+  }
+
   const from = jest.fn((table: string) => {
     if (table === 'documents') return documentsBuilder();
+    if (table === 'compliance_reviews') return reviewsBuilder();
     if (table === 'kyc_applications') return readOnlyBuilder(table, opts.kycRow);
     if (table === 'people') return readOnlyBuilder(table, opts.personRow);
     if (table === 'compliance_review_events' || table === 'audit_logs') return insertOnlyBuilder(table);
@@ -439,5 +452,57 @@ describe('DiditVerificationService — KYC', () => {
     const { verdict } = await runKyc(service);
 
     expect(verdict.overall).toBe('error');
+  });
+
+  describe('runForApplication (desde el detalle de usuario)', () => {
+    it('con review: registra el resultado en su historial y en audit_logs', async () => {
+      const supabase = mockSupabase({
+        kycRow: baseKyc(),
+        personRow: basePerson(),
+        documents: ALL_DOCS,
+        reviewRow: { id: 'review-9' },
+      });
+      const service = buildService(supabase, mockDiditApiClient());
+
+      const result = await service.runForApplication('kyc', 'kyc-1', 'actor-1', 'staff');
+
+      expect(result.reused).toBe(false);
+      expect(result.reviewId).toBe('review-9');
+      const event = supabase._inserts.find((i) => i.table === 'compliance_review_events');
+      expect(event?.payload.review_id).toBe('review-9');
+      expect(supabase._inserts.some((i) => i.table === 'audit_logs')).toBe(true);
+    });
+
+    it('sin review: guarda el veredicto y audita, sin tocar compliance_review_events', async () => {
+      const supabase = mockSupabase({
+        kycRow: baseKyc(),
+        personRow: basePerson(),
+        documents: ALL_DOCS,
+        reviewRow: null,
+      });
+      const service = buildService(supabase, mockDiditApiClient());
+
+      const result = await service.runForApplication('kyc', 'kyc-1', 'actor-1', 'staff');
+
+      expect(result.reviewId).toBeNull();
+      expect(result.verdict.overall).toBe('approved');
+      expect(supabase._inserts.some((i) => i.table === 'compliance_review_events')).toBe(false);
+      expect(supabase._inserts.some((i) => i.table === 'audit_logs')).toBe(true);
+      const update = supabase._updates.find((u) => u.table === 'kyc_applications');
+      expect((update?.payload.screening as any)?.didit?.overall).toBe('approved');
+    });
+
+    it('con veredicto previo y sin force: lo reutiliza sin llamar a Didit', async () => {
+      const cachedVerdict = { overall: 'needs_review', run_count: 1 };
+      const supabase = mockSupabase({ kycRow: baseKyc({ screening: { didit: cachedVerdict } }) });
+      const diditApiClient = mockDiditApiClient();
+      const service = buildService(supabase, diditApiClient);
+
+      const result = await service.runForApplication('kyc', 'kyc-1', 'actor-1', 'staff');
+
+      expect(result.reused).toBe(true);
+      expect(result.verdict).toEqual(cachedVerdict);
+      expect(diditApiClient.verifyId).not.toHaveBeenCalled();
+    });
   });
 });

@@ -194,6 +194,72 @@ export class ComplianceActionsService {
    * aprobado, cuyo review original ya fue cerrado y no aparece en la cola.
    */
   async getOnboardingByUserId(userId: string) {
+    const app = await this.resolveLatestApplication(userId);
+
+    const onboardingType: 'personal' | 'company' =
+      app.kind === 'kyc' ? 'personal' : 'company';
+    const applicationData =
+      app.kind === 'kyc'
+        ? this.mapKycToFormData(app.row)
+        : this.mapKybToFormData(app.row);
+
+    const [profileData, documents] = await Promise.all([
+      this.getProfileSummary(userId),
+      this.getSignedDocumentsForUser(userId),
+    ]);
+
+    return {
+      id: app.row.id,
+      status: app.row.status,
+      user_id: userId,
+      onboarding_type: onboardingType,
+      application_data: applicationData,
+      previous_data: app.row.previous_data ?? null,
+      profile: profileData,
+      documents,
+      didit_screening: app.row.screening?.didit ?? null,
+      created_at: app.row.created_at,
+      updated_at: app.row.updated_at,
+    };
+  }
+
+  /**
+   * Pre-verificación con Didit del expediente más reciente de un usuario,
+   * sin depender de un review abierto. Pensado para clientes aprobados
+   * antes de que existiera Didit.
+   */
+  async verifyUserWithDidit(
+    userId: string,
+    actorId: string,
+    actorRole: string,
+    force = false,
+  ) {
+    const app = await this.resolveLatestApplication(userId);
+    const { reviewId, ...result } =
+      await this.diditVerificationService.runForApplication(
+        app.kind,
+        app.row.id,
+        actorId,
+        actorRole,
+        force,
+      );
+    if (reviewId) {
+      this.adminGateway.emitComplianceReviewUpdated({
+        id: reviewId,
+        updated_at: new Date().toISOString(),
+        action: 'updated',
+      });
+    }
+    return result;
+  }
+
+  /**
+   * Expediente KYC o KYB más reciente de un usuario. Si existen ambos (caso
+   * raro), gana el de `created_at` más nuevo.
+   */
+  private async resolveLatestApplication(
+    userId: string,
+  ): Promise<{ kind: 'kyc' | 'kyb'; row: Record<string, any> }> {
     const { data: kyc } = await this.supabase
       .from('kyc_applications')
       .select('*, people (*)')
@@ -228,30 +294,7 @@ export class ComplianceActionsService {
       );
     }
 
-    const onboardingType: 'personal' | 'company' =
-      app.kind === 'kyc' ? 'personal' : 'company';
-    const applicationData =
-      app.kind === 'kyc'
-        ? this.mapKycToFormData(app.row)
-        : this.mapKybToFormData(app.row);
-
-    const [profileData, documents] = await Promise.all([
-      this.getProfileSummary(userId),
-      this.getSignedDocumentsForUser(userId),
-    ]);
-
-    return {
-      id: app.row.id,
-      status: app.row.status,
-      user_id: userId,
-      onboarding_type: onboardingType,
-      application_data: applicationData,
-      previous_data: app.row.previous_data ?? null,
-      profile: profileData,
-      documents,
-      created_at: app.row.created_at,
-      updated_at: app.row.updated_at,
-    };
+    return app;
   }
 
   // ── BORRADORES DE ONBOARDING (formulario aún no enviado) ──────────

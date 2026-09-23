@@ -163,10 +163,41 @@ export class DiditVerificationService {
     );
   }
 
+  /**
+   * Pre-verificación a partir del expediente, sin exigir un review. Usado
+   * desde el detalle de usuario para clientes aprobados antes de Didit:
+   * su review puede estar cerrado o no existir. Si hay review, el resultado
+   * se registra también en su historial; si no, queda solo en audit_logs.
+   */
+  async runForApplication(
+    kind: 'kyc' | 'kyb',
+    applicationId: string,
+    actorId: string,
+    actorRole: string,
+    force = false,
+  ): Promise<{ verdict: DiditVerdict; reused: boolean; reviewId: string | null }> {
+    const { data: review } = await this.supabase
+      .from('compliance_reviews')
+      .select('id')
+      .eq('subject_type', kind === 'kyc' ? 'kyc_applications' : 'kyb_applications')
+      .eq('subject_id', applicationId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const reviewId: string | null = review?.id ?? null;
+    const result =
+      kind === 'kyc'
+        ? await this.runForKycReview(reviewId, applicationId, actorId, actorRole, force)
+        : await this.runForKybReview(reviewId, applicationId, actorId, actorRole, force);
+
+    return { ...result, reviewId };
+  }
+
   // ── KYC (Personas) ───────────────────────────────────────────────────
 
   private async runForKycReview(
-    reviewId: string,
+    reviewId: string | null,
     kycApplicationId: string,
     actorId: string,
     actorRole: string,
@@ -1050,18 +1081,22 @@ export class DiditVerificationService {
   }
 
   private async logOutcome(
-    reviewId: string,
+    reviewId: string | null,
     kycApplicationId: string,
     actorId: string,
     actorRole: string,
     verdict: DiditVerdict,
   ): Promise<void> {
-    await this.supabase.from('compliance_review_events').insert({
-      review_id: reviewId,
-      actor_id: actorId,
-      decision: 'DIDIT_VERIFIED',
-      reason: `Resultado Didit: ${verdict.overall}`,
-    });
+    // Sin review (verificación lanzada desde el detalle de usuario) no hay
+    // historial donde anotarlo; la traza queda en audit_logs.
+    if (reviewId) {
+      await this.supabase.from('compliance_review_events').insert({
+        review_id: reviewId,
+        actor_id: actorId,
+        decision: 'DIDIT_VERIFIED',
+        reason: `Resultado Didit: ${verdict.overall}`,
+      });
+    }
 
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
@@ -1077,7 +1112,7 @@ export class DiditVerificationService {
   // ── KYB (Empresas) ──────────────────────────────────────────────────
 
   private async runForKybReview(
-    reviewId: string,
+    reviewId: string | null,
     kybApplicationId: string,
     actorId: string,
     actorRole: string,
@@ -1349,18 +1384,22 @@ export class DiditVerificationService {
   }
 
   private async logKybOutcome(
-    reviewId: string,
+    reviewId: string | null,
     kybApplicationId: string,
     actorId: string,
     actorRole: string,
     verdict: DiditVerdict,
   ): Promise<void> {
-    await this.supabase.from('compliance_review_events').insert({
-      review_id: reviewId,
-      actor_id: actorId,
-      decision: 'DIDIT_VERIFIED',
-      reason: `Resultado Didit KYB: ${verdict.overall}`,
-    });
+    // Sin review (verificación lanzada desde el detalle de usuario) no hay
+    // historial donde anotarlo; la traza queda en audit_logs.
+    if (reviewId) {
+      await this.supabase.from('compliance_review_events').insert({
+        review_id: reviewId,
+        actor_id: actorId,
+        decision: 'DIDIT_VERIFIED',
+        reason: `Resultado Didit KYB: ${verdict.overall}`,
+      });
+    }
 
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,

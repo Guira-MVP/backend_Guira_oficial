@@ -195,6 +195,27 @@ export class AdminComplianceController {
     return this.actionsService.getOnboardingByUserId(userId);
   }
 
+  @Post('users/:userId/verify-didit')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({
+    summary: 'Pre-verificar con Didit el expediente más reciente de un usuario',
+    description:
+      'Igual que reviews/:id/verify-didit pero sin exigir un review abierto: sirve para clientes ' +
+      'aprobados antes de Didit. No cambia el estado del expediente — es solo una señal para el staff.',
+  })
+  verifyUserWithDidit(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Body() dto: VerifyDiditDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ) {
+    return this.actionsService.verifyUserWithDidit(
+      userId,
+      actor.id,
+      actor.profile.role,
+      dto.force,
+    );
+  }
+
   @Get('onboarding-drafts')
   @Roles('staff', 'admin', 'super_admin')
   @ApiOperation({
