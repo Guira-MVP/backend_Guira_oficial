@@ -107,7 +107,19 @@ export class AdminProfilesController {
   @ApiQuery({
     name: 'onboarding_status',
     required: false,
-    enum: ['pending', 'in_review', 'approved', 'rejected'],
+    description:
+      'Uno o varios valores separados por coma (p.ej. "pending,kyc_started,kyb_started"). Sin filtro, default: approved.',
+    enum: [
+      'pending',
+      'kyc_started',
+      'kyb_started',
+      'in_review',
+      'pending_bridge',
+      'kyc_issues',
+      'bridge_rejected',
+      'approved',
+      'rejected',
+    ],
   })
   @ApiQuery({ name: 'is_frozen', required: false, type: Boolean })
   @ApiResponse({ status: 200, description: 'Lista paginada de perfiles' })

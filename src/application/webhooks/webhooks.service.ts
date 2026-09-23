@@ -419,6 +419,10 @@ export class WebhooksService {
           await this.handleTransferComplete(payload, undefined, context);
         } else if (state === 'failed' || state === 'returned') {
           await this.handleTransferFailed(payload);
+        } else if (state === 'refund_in_flight') {
+          await this.handleTransferRefundInFlight(payload);
+        } else if (state === 'refunded') {
+          await this.handleTransferRefunded(payload);
         } else {
           this.logger.log(
             `transfer status_transitioned a ${state} - actualizando bridge_state`,
@@ -555,6 +559,13 @@ export class WebhooksService {
         break;
       case 'liquidation_address.drain.updated.status_transitioned':
         await this.handleDrainUpdated(payload);
+        break;
+
+      // Movimiento dentro de la wallet operativa de Bridge (ej. el crypto que
+      // vuelve cuando un transfer se reembolsa). Solo trazabilidad — el ajuste
+      // real de la orden lo hace handleTransferRefunded vía transfer.updated.
+      case 'bridge_wallet.activity.created':
+        this.handleBridgeWalletActivityCreated(payload);
         break;
 
       default:
@@ -3351,6 +3362,245 @@ export class WebhooksService {
         `⚠️ handleTransferFailed: notificación omitida para ${bridgeTransferId} — bridge_transfer no encontrada en DB.`,
       );
     }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  //  HANDLER: transfer.updated.status_transitioned → refund_in_flight
+  //  El destino (banco o red) devolvió los fondos y Bridge está revirtiendo
+  //  el transfer. Estado transitorio: todavía no hay nada que corregir en
+  //  saldo, solo avisar. El evento terminal es 'refunded'.
+  // ═══════════════════════════════════════════════════════════
+  private async handleTransferRefundInFlight(
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    const data = (payload?.event_object ?? payload?.data) as Record<
+      string,
+      unknown
+    >;
+    const bridgeTransferId = data?.id as string;
+    if (!bridgeTransferId) {
+      throw new Error('transfer refund_in_flight sin transfer ID');
+    }
+
+    await this.supabase
+      .from('bridge_transfers')
+      .update({
+        bridge_state: 'refund_in_flight',
+        bridge_raw_response: data,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('bridge_transfer_id', bridgeTransferId);
+
+    const { data: order } = await this.supabase
+      .from('payment_orders')
+      .select('id, user_id, amount, currency, flow_type, status')
+      .eq('bridge_transfer_id', bridgeTransferId)
+      .maybeSingle();
+
+    if (!order) {
+      this.logger.warn(
+        `transfer refund_in_flight: no se encontró payment_order para transfer ${bridgeTransferId}`,
+      );
+      return;
+    }
+
+    this.logger.warn(
+      `⚠️ Transfer ${bridgeTransferId} (order ${order.id}, ${order.flow_type}) entró en refund_in_flight`,
+    );
+
+    await this.supabase.from('notifications').insert({
+      user_id: order.user_id,
+      type: 'financial',
+      title: 'Reembolso en Proceso',
+      message: `El destino de tu pago de ${order.amount} ${order.currency} devolvió los fondos. Bridge está procesando la devolución — te avisaremos cuando se confirme.`,
+      reference_type: 'payment_order',
+      reference_id: order.id,
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  //  HANDLER: transfer.updated.status_transitioned → refunded
+  //  Reembolso terminal: el destino no pudo recibir los fondos (cuenta no
+  //  localizada, rechazo del banco, etc.) y Bridge los devolvió a la wallet
+  //  de origen. Si el egreso ya había debitado saldo interno (flujos off-ramp
+  //  wallet), se revierte con un credit — igual que handleVaRefunded revierte
+  //  un ingreso ya acreditado. wallet_to_world nunca reserva saldo interno
+  //  (los fondos llegan on-chain desde una wallet externa, ver creación de la
+  //  orden en payment-orders.service.ts), así que ahí solo se marca la orden
+  //  y se avisa a soporte para gestionar la devolución manualmente.
+  // ═══════════════════════════════════════════════════════════
+  private async handleTransferRefunded(
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    const data = (payload?.event_object ?? payload?.data) as Record<
+      string,
+      unknown
+    >;
+    if (!data)
+      throw new Error('transfer refunded: payload sin event_object/data');
+
+    const bridgeTransferId = data.id as string;
+    if (!bridgeTransferId) throw new Error('transfer refunded sin transfer ID');
+
+    const returnDetails = data.return_details as
+      | Record<string, unknown>
+      | undefined;
+    const returnReason =
+      (returnDetails?.reason as string | undefined) ??
+      'Sin motivo informado por Bridge';
+
+    await this.supabase
+      .from('bridge_transfers')
+      .update({
+        bridge_state: 'refunded',
+        status: 'refunded',
+        bridge_raw_response: data,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('bridge_transfer_id', bridgeTransferId);
+
+    const { data: order } = await this.supabase
+      .from('payment_orders')
+      .select('id, user_id, wallet_id, amount, currency, flow_type, status')
+      .eq('bridge_transfer_id', bridgeTransferId)
+      .maybeSingle();
+
+    if (!order) {
+      this.logger.warn(
+        `transfer refunded: no se encontró payment_order para transfer ${bridgeTransferId}`,
+      );
+      return;
+    }
+
+    if (order.status === 'refunded') {
+      this.logger.warn(
+        `transfer refunded: order ${order.id} ya estaba marcada refunded — webhook duplicado, omitiendo`,
+      );
+      return;
+    }
+
+    // Off-ramp wallet: el egreso sí debitó saldo interno al completarse
+    // (ledger debit → settled). Revertir con un credit settled.
+    const offRampWalletFlows = [
+      'bridge_wallet_to_crypto',
+      'bridge_wallet_to_fiat_us',
+    ];
+    const isOffRampWalletFlow = offRampWalletFlows.includes(order.flow_type);
+    // wallet_to_world: los fondos llegan on-chain desde una wallet externa y
+    // nunca tocan el saldo Guira — no hay nada que acreditar de vuelta, el
+    // crypto reembolsado quedó en la wallet operativa de Bridge.
+    const noReservationFlows = ['wallet_to_world'];
+    const isNoReservationFlow = noReservationFlows.includes(order.flow_type);
+
+    if (order.status === 'completed' && isOffRampWalletFlow) {
+      const amount = parseFloat(String(order.amount ?? '0'));
+      await this.supabase.from('ledger_entries').insert({
+        wallet_id: order.wallet_id,
+        type: 'credit',
+        amount,
+        currency: order.currency,
+        status: 'settled',
+        reference_type: 'payment_order',
+        reference_id: order.id,
+        description:
+          'Reversa de egreso — transferencia reembolsada por el destino',
+        metadata: {
+          reason: 'transfer_refunded',
+          bridge_transfer_id: bridgeTransferId,
+          return_reason: returnReason,
+        },
+      });
+
+      this.logger.warn(
+        `⚠️ Reversa de ${amount} ${order.currency} aplicada a wallet ${order.wallet_id} (order ${order.id} reembolsada por Bridge)`,
+      );
+    }
+
+    await this.supabase
+      .from('payment_orders')
+      .update({
+        status: 'refunded',
+        failure_reason: `Bridge devolvió el pago: ${returnReason}`,
+      })
+      .eq('id', order.id);
+
+    this.ordersGateway.emitOrderUpdated(order.user_id, {
+      id: order.id,
+      user_id: order.user_id,
+      status: 'refunded',
+      flow_type: order.flow_type,
+      updated_at: new Date().toISOString(),
+    });
+
+    const userMessage = isNoReservationFlow
+      ? `El banco destino devolvió tu pago de ${order.amount} ${order.currency} (motivo: ${returnReason}). Contacta a soporte para coordinar la devolución de tus fondos.`
+      : `El banco destino devolvió tu pago de ${order.amount} ${order.currency} (motivo: ${returnReason}). El saldo ha sido devuelto a tu cuenta.`;
+
+    await this.supabase.from('notifications').insert({
+      user_id: order.user_id,
+      type: 'alert',
+      title: 'Pago Reembolsado',
+      message: userMessage,
+      reference_type: 'payment_order',
+      reference_id: order.id,
+    });
+
+    // Flujos sin reserva interna: el crypto volvió a la wallet operativa de
+    // Bridge y no hay forma automática de devolverlo a la wallet externa del
+    // cliente. Requiere gestión manual de staff.
+    if (isNoReservationFlow) {
+      const { data: admins } = await this.supabase
+        .from('profiles')
+        .select('id')
+        .in('role', ['staff', 'admin', 'super_admin'])
+        .eq('is_active', true)
+        .limit(5);
+
+      if (admins?.length) {
+        await this.supabase.from('notifications').insert(
+          admins.map((admin) => ({
+            user_id: admin.id,
+            type: 'system',
+            title: 'Reembolso requiere gestión manual',
+            message: `Order ${order.id} (${order.flow_type}): Bridge devolvió ${order.amount} ${order.currency} (motivo: ${returnReason}). Los fondos están en la wallet operativa de Bridge — coordinar devolución manual al cliente.`,
+            reference_type: 'payment_order',
+            reference_id: order.id,
+          })),
+        );
+      }
+    }
+
+    await this.supabase.from('activity_logs').insert({
+      user_id: order.user_id,
+      action: 'TRANSFER_REFUNDED',
+      description: `Transfer ${bridgeTransferId} reembolsado por Bridge (motivo: ${returnReason})`,
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  //  HANDLER: bridge_wallet.activity.created
+  //  Movimiento dentro de la wallet operativa de Bridge (ej. el crypto que
+  //  vuelve cuando un transfer se reembolsa). Bridge es custodio y Guira no
+  //  espeja el balance de la wallet, así que este evento es solo trazabilidad
+  //  — el ajuste real de la orden ya lo hace handleTransferRefunded vía
+  //  transfer.updated.status_transitioned.
+  // ═══════════════════════════════════════════════════════════
+  private handleBridgeWalletActivityCreated(
+    payload: Record<string, unknown>,
+  ): void {
+    const data = (payload?.event_object ?? payload?.data) as Record<
+      string,
+      unknown
+    >;
+    const paymentRoute = data?.payment_route as
+      | Record<string, unknown>
+      | undefined;
+
+    this.logger.log(
+      `bridge_wallet.activity.created: type=${(data?.type as string) ?? 'n/a'} ` +
+        `amount=${(data?.amount as string) ?? 'n/a'} route=${(paymentRoute?.type as string) ?? 'n/a'} ` +
+        `transfer=${(paymentRoute?.transfer_id as string) ?? 'n/a'}`,
+    );
   }
 
   // ═══════════════════════════════════════════════

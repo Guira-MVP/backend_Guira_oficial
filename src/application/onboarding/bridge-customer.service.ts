@@ -381,6 +381,7 @@ export class BridgeCustomerService {
     PER: 'ruc',
     SUR: 'other',
     URY: 'rut',
+    USA: 'ein',
   };
 
 
