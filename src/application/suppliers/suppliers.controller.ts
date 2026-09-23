@@ -76,6 +76,19 @@ export class SuppliersController {
     return this.suppliersService.getExistingRailsForEmail(user.id, email);
   }
 
+  @Get(':id/deletion-check')
+  @ApiOperation({ summary: 'Consultar si el proveedor se puede eliminar' })
+  @ApiResponse({
+    status: 200,
+    description: 'deletable=false si la cuenta (o su par ACH/Wire) ya tiene transacciones',
+  })
+  deletionCheck(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.suppliersService.getDeletionStatus(id, user.id);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Detalle de proveedor' })
   @RequiresCapability('suppliers:read')

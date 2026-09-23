@@ -1405,9 +1405,122 @@ export class SuppliersService {
     return data;
   }
 
+  /**
+   * IDs cuyas transacciones impiden borrar este beneficiario: él mismo y, si
+   * es ACH o Wire, su hermano del otro riel. Los dos son la misma cuenta
+   * bancaria de EE. UU. (normalmente la misma external account de Bridge), así
+   * que un pago por uno cuenta como historial de ambos.
+   *
+   * El hermano se reconoce por external account o por email: el par creado de
+   * una vez comparte los dos, el armado con "Añadir método" solo el email.
+   */
+  private async getLinkedSupplierRails(
+    supplier: {
+      id: string;
+      payment_rail: string;
+      contact_email?: string | null;
+      bridge_external_account_id?: string | null;
+    },
+    userId: string,
+  ): Promise<Map<string, string>> {
+    const rails = new Map([[supplier.id, supplier.payment_rail]]);
+    if (supplier.payment_rail !== 'ach' && supplier.payment_rail !== 'wire') {
+      return rails;
+    }
+
+    const eaId = supplier.bridge_external_account_id ?? null;
+    const email = this.normalizeEmail(supplier.contact_email);
+    if (!eaId && !email) return rails;
+
+    // Se filtra en memoria en vez de con .or(): así el email no se interpola
+    // en la sintaxis de filtros de PostgREST.
+    const { data, error } = await this.supabase
+      .from('suppliers')
+      .select('id, payment_rail, contact_email, bridge_external_account_id')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .in('payment_rail', ['ach', 'wire']);
+
+    if (error) throwDbError(error);
+
+    for (const row of (data ?? []) as Array<{
+      id: string;
+      payment_rail: string;
+      contact_email: string | null;
+      bridge_external_account_id: string | null;
+    }>) {
+      const sameEa = !!eaId && row.bridge_external_account_id === eaId;
+      const sameEmail = !!email && this.normalizeEmail(row.contact_email) === email;
+      if (sameEa || sameEmail) rails.set(row.id, row.payment_rail);
+    }
+    return rails;
+  }
+
+  /**
+   * Devuelve el id de un beneficiario (de la lista) con alguna orden o payout,
+   * en cualquier estado, o null si ninguno tiene. Si la consulta falla se
+   * lanza el error: ante la duda no se borra.
+   */
+  private async findSupplierWithTransactions(
+    supplierIds: string[],
+    userId: string,
+  ): Promise<string | null> {
+    const [orders, payouts] = await Promise.all(
+      ['payment_orders', 'payout_requests'].map((table) =>
+        this.supabase
+          .from(table)
+          .select('supplier_id')
+          .eq('user_id', userId)
+          .in('supplier_id', supplierIds)
+          .limit(1),
+      ),
+    );
+
+    if (orders.error) throwDbError(orders.error);
+    if (payouts.error) throwDbError(payouts.error);
+
+    const hit = (orders.data?.[0] ?? payouts.data?.[0]) as
+      | { supplier_id: string }
+      | undefined;
+    return hit?.supplier_id ?? null;
+  }
+
+  /**
+   * Indica si el beneficiario se puede eliminar. Una cuenta que ya recibió
+   * transacciones se conserva por trazabilidad; si el cliente necesita otra,
+   * la registra como un método nuevo.
+   */
+  async getDeletionStatus(supplierId: string, userId: string) {
+    const existing = await this.findOne(supplierId, userId);
+    const rails = await this.getLinkedSupplierRails(existing, userId);
+    const hitId = await this.findSupplierWithTransactions([...rails.keys()], userId);
+
+    if (!hitId) {
+      return { deletable: true, reason: null, linked_rail: null };
+    }
+    return {
+      deletable: false,
+      reason: 'HAS_TRANSACTIONS' as const,
+      // Riel hermano que tiene los movimientos, si no es esta misma cuenta.
+      linked_rail: hitId === supplierId ? null : (rails.get(hitId) ?? null),
+    };
+  }
+
   /** Desactiva (soft delete) un proveedor. */
   async remove(supplierId: string, userId: string) {
     const existing = await this.findOne(supplierId, userId);
+
+    const rails = await this.getLinkedSupplierRails(existing, userId);
+    const hitId = await this.findSupplierWithTransactions([...rails.keys()], userId);
+    if (hitId) {
+      throw new ConflictException({
+        code: 'SUPPLIER_HAS_TRANSACTIONS',
+        linked_rail: hitId === supplierId ? null : (rails.get(hitId) ?? null),
+        message:
+          'Esta cuenta del beneficiario ya tiene transacciones registradas y no se puede eliminar. ' +
+          'Si necesitas otra cuenta, regístrala como un método nuevo.',
+      });
+    }
 
     await this.supabase
       .from('suppliers')
