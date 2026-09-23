@@ -299,6 +299,130 @@ describe('DiditVerificationService — KYC', () => {
     );
   });
 
+  // ── Re-ejecución forzada: no volver a pagar lo ya aprobado ──────────
+
+  async function firstRun(overrides: Record<string, jest.Mock> = {}, documents = ALL_DOCS) {
+    const supabase = mockSupabase({ kycRow: baseKyc(), personRow: basePerson(), documents });
+    const { verdict } = await runKyc(buildService(supabase, mockDiditApiClient(overrides)));
+    return verdict;
+  }
+
+  function totalCalls(client: ReturnType<typeof mockDiditApiClient>) {
+    return Object.values(client).reduce((sum, fn) => sum + fn.mock.calls.length, 0);
+  }
+
+  it('force=true reutiliza las comprobaciones Approved con las mismas entradas sin llamar a Didit', async () => {
+    const previous = await firstRun();
+    expect(previous.aml.input_fingerprint).toEqual(expect.any(String));
+
+    const supabase = mockSupabase({
+      kycRow: baseKyc({ screening: { didit: previous } }),
+      personRow: basePerson(),
+      documents: ALL_DOCS,
+    });
+    const client = mockDiditApiClient();
+    const { verdict, reused } = await runKyc(buildService(supabase, client), { force: true });
+
+    expect(reused).toBe(false);
+    expect(totalCalls(client)).toBe(0);
+    expect(verdict.overall).toBe('approved');
+    expect(verdict.run_count).toBe(2);
+    expect(verdict.aml.reused).toBe(true);
+    // La fecha de la llamada real se conserva: la ventana no se renueva sola.
+    expect(verdict.aml.checked_at).toBe(previous.aml.checked_at);
+  });
+
+  it('force=true vuelve a correr solo lo que no salió Approved', async () => {
+    const previous = await firstRun({ checkLiveness: jest.fn().mockResolvedValue(declinedLiveness()) });
+
+    const supabase = mockSupabase({
+      kycRow: baseKyc({ screening: { didit: previous } }),
+      personRow: basePerson(),
+      documents: ALL_DOCS,
+    });
+    const client = mockDiditApiClient();
+    const { verdict } = await runKyc(buildService(supabase, client), { force: true });
+
+    expect(client.checkLiveness).toHaveBeenCalledTimes(1);
+    expect(totalCalls(client)).toBe(1);
+    expect(verdict.liveness.status).toBe('Approved');
+    expect(verdict.liveness.reused).toBeUndefined();
+    expect(verdict.overall).toBe('approved');
+  });
+
+  it('una selfie re-subida invalida face match y liveness, pero no el resto', async () => {
+    const previous = await firstRun();
+    const newSelfie = ALL_DOCS.map((d) =>
+      d.document_type === 'selfie' ? { ...d, storage_path: 'p/selfie-v2.jpg' } : d,
+    );
+
+    const supabase = mockSupabase({
+      kycRow: baseKyc({ screening: { didit: previous } }),
+      personRow: basePerson(),
+      documents: newSelfie,
+    });
+    const client = mockDiditApiClient();
+    await runKyc(buildService(supabase, client), { force: true });
+
+    expect(client.matchFaces).toHaveBeenCalledTimes(1);
+    expect(client.checkLiveness).toHaveBeenCalledTimes(1);
+    expect(totalCalls(client)).toBe(2);
+  });
+
+  it('datos de la persona corregidos invalidan AML, Database Validation e ID (por los mismatches)', async () => {
+    const previous = await firstRun();
+
+    const supabase = mockSupabase({
+      kycRow: baseKyc({ screening: { didit: previous } }),
+      personRow: basePerson({ date_of_birth: '1998-02-02' }),
+      documents: ALL_DOCS,
+    });
+    const client = mockDiditApiClient();
+    await runKyc(buildService(supabase, client), { force: true });
+
+    expect(client.screenAml).toHaveBeenCalledTimes(1);
+    expect(client.verifyDatabase).toHaveBeenCalledTimes(1);
+    expect(client.verifyId).toHaveBeenCalledTimes(1);
+    expect(client.matchFaces).not.toHaveBeenCalled();
+    expect(client.checkLiveness).not.toHaveBeenCalled();
+    expect(client.verifyProofOfAddress).not.toHaveBeenCalled();
+  });
+
+  it('una comprobación Approved de hace más de 30 días se vuelve a correr', async () => {
+    const previous = await firstRun();
+    const old = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();
+    const aged = { ...previous, aml: { ...previous.aml, checked_at: old } };
+
+    const supabase = mockSupabase({
+      kycRow: baseKyc({ screening: { didit: aged } }),
+      personRow: basePerson(),
+      documents: ALL_DOCS,
+    });
+    const client = mockDiditApiClient();
+    await runKyc(buildService(supabase, client), { force: true });
+
+    expect(client.screenAml).toHaveBeenCalledTimes(1);
+    expect(totalCalls(client)).toBe(1);
+  });
+
+  it('un veredicto antiguo sin huellas se vuelve a correr completo', async () => {
+    const legacy = {
+      overall: 'approved',
+      run_count: 1,
+      aml: { status: 'Approved', warnings: [], hits_summary: [] },
+      liveness: { status: 'Approved', warnings: [] },
+    };
+    const supabase = mockSupabase({
+      kycRow: baseKyc({ screening: { didit: legacy } }),
+      personRow: basePerson(),
+      documents: ALL_DOCS,
+    });
+    const client = mockDiditApiClient();
+    await runKyc(buildService(supabase, client), { force: true });
+
+    expect(totalCalls(client)).toBe(6);
+  });
+
   it('si absolutamente todo falla, overall=error', async () => {
     const supabase = mockSupabase({ kycRow: baseKyc(), personRow: basePerson(), documents: ALL_DOCS });
     const failing = jest.fn().mockRejectedValue(new Error('Didit caído'));

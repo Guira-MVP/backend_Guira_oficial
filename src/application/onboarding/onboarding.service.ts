@@ -17,6 +17,7 @@ import { CreateDirectorDto, CreateUboDto } from './dto/create-director-ubo.dto';
 import { BridgeApiClient } from '../bridge/bridge-api.client';
 import { OrdersGateway } from '../orders/orders.gateway';
 import { AdminGateway } from '../admin/admin.gateway';
+import { OnboardingDraftService } from './onboarding-draft.service';
 import * as crypto from 'crypto';
 import type { MobileDocumentTargetDto } from './dto/create-mobile-token.dto';
 import {
@@ -32,6 +33,9 @@ const ALLOWED_MIME_TYPES = [
 ];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 const STORAGE_BUCKET = 'kyc-documents';
+const ALLOWED_SUBJECT_TYPES = ['person', 'business', 'director', 'ubo'];
+/** draft_key de documentos de UBOs que aún no existen en business_ubos. */
+const UBO_DRAFT_KEY = /^ubo:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 @Injectable()
 export class OnboardingService {
@@ -43,6 +47,7 @@ export class OnboardingService {
     private readonly ordersGateway: OrdersGateway,
     private readonly adminGateway: AdminGateway,
     private readonly config: ConfigService,
+    private readonly draftService: OnboardingDraftService,
   ) {}
 
   /**
@@ -440,6 +445,10 @@ export class OnboardingService {
     // Notificar al staff
     await this.notifyStaff(userId, 'Nueva solicitud KYC pendiente de revisión');
 
+    // Cierra el borrador: documentos pasan a "enviados" y se borra la copia
+    // de los datos del formulario (ya viven en people/businesses).
+    await this.draftService.markSubmitted(userId);
+
     this.logger.log(`KYC application ${app.id} submitted by user ${userId}`);
     return data;
   }
@@ -550,17 +559,12 @@ export class OnboardingService {
       director = data;
     }
 
-    // El panel de subida por QR (Step 5) sube el documento del representante
-    // legal antes de que este registro exista, así que queda con
-    // subject_id=null. Al crear/actualizar el director, reclamamos esos
-    // documentos huérfanos para que buildIdentifyingInformation los encuentre.
-    await this.supabase
-      .from('documents')
-      .update({ subject_id: director.id })
-      .eq('user_id', userId)
-      .eq('subject_type', 'director')
-      .is('subject_id', null)
-      .eq('status', 'pending');
+    // El panel de subida por QR y la subida inmediata del borrador suben el
+    // documento del representante legal antes de que este registro exista,
+    // así que queda con subject_id=null. Al crear/actualizar el director
+    // reclamamos esos documentos huérfanos para que
+    // buildIdentifyingInformation los encuentre.
+    await this.claimDraftDocuments(userId, 'director', director.id as string, null);
 
     return director;
   }
@@ -595,7 +599,18 @@ export class OnboardingService {
    * el representante legal, para conservar la misma fila y su
    * `bridge_associated_person_id` entre reenvíos.
    */
-  async upsertUbo(userId: string, dto: CreateUboDto) {
+  async upsertUbo(userId: string, input: CreateUboDto) {
+    // client_uid no es columna de business_ubos: solo sirve para reclamar los
+    // documentos que el cliente subió para este UBO durante el borrador.
+    const { client_uid: clientUid, ...dto } = input;
+    const ubo = await this.upsertUboRow(userId, dto);
+    if (clientUid) {
+      await this.claimDraftDocuments(userId, 'ubo', ubo.id as string, `ubo:${clientUid}`);
+    }
+    return ubo;
+  }
+
+  private async upsertUboRow(userId: string, dto: Omit<CreateUboDto, 'client_uid'>) {
     const biz = await this.getUserBusiness(userId);
 
     const existing = await this.findExistingUbos(biz.id, dto);
@@ -653,7 +668,7 @@ export class OnboardingService {
    * pueden declarar el mismo correo de contacto y fusionarlos borraría un UBO
    * del expediente; exigir además el nombre evita esa colisión.
    */
-  private async findExistingUbos(businessId: string, dto: CreateUboDto) {
+  private async findExistingUbos(businessId: string, dto: Omit<CreateUboDto, 'client_uid'>) {
     const { data, error } = await this.supabase
       .from('business_ubos')
       .select(
@@ -1148,6 +1163,10 @@ export class OnboardingService {
 
     await this.notifyStaff(userId, 'Nueva solicitud KYB pendiente de revisión');
 
+    // Cierra el borrador: documentos pasan a "enviados" y se borra la copia
+    // de los datos del formulario (ya viven en people/businesses).
+    await this.draftService.markSubmitted(userId);
+
     this.logger.log(`KYB application ${app.id} submitted by user ${userId}`);
     return data;
   }
@@ -1176,13 +1195,23 @@ export class OnboardingService {
   //  Documentos / Storage
   // ───────────────────────────────────────────────
 
-  /** Sube un documento a Supabase Storage y registra en la tabla documents. */
+  /**
+   * Sube un documento a Supabase Storage y registra en la tabla documents.
+   *
+   * Desde el borrador persistente, el formulario sube cada archivo en cuanto
+   * el cliente lo elige (no al "Enviar Solicitud"). Todo documento subido por
+   * el cliente nace con is_draft=true hasta que envía la solicitud.
+   * Reemplazo del documento previo del mismo tipo y persona:
+   *  - previo is_draft=true  → se borra (Storage + fila): nadie lo revisó.
+   *  - previo ya enviado     → se marca 'superseded' (historial de compliance).
+   */
   async uploadDocument(
     userId: string,
     file: Express.Multer.File,
     documentType: string,
     subjectType: string,
     subjectId?: string,
+    draftKey?: string,
   ) {
     if (!file) {
       throw new BadRequestException('El archivo no se encontró o está vacío');
@@ -1198,6 +1227,18 @@ export class OnboardingService {
     // Validar tamaño
     if (file.size > MAX_FILE_SIZE) {
       throw new BadRequestException('El archivo excede el límite de 10 MB');
+    }
+
+    if (!ALLOWED_SUBJECT_TYPES.includes(subjectType)) {
+      throw new BadRequestException('subject_type inválido');
+    }
+    if (!/^[a-z0-9_]{2,64}$/.test(documentType)) {
+      throw new BadRequestException('document_type inválido');
+    }
+    // draft_key solo tiene sentido para un UBO que todavía no existe en DB.
+    const normalizedDraftKey = subjectId ? null : (draftKey ?? null);
+    if (normalizedDraftKey && (subjectType !== 'ubo' || !UBO_DRAFT_KEY.test(normalizedDraftKey))) {
+      throw new BadRequestException('draft_key inválido');
     }
 
     // Generar path en storage
@@ -1221,35 +1262,6 @@ export class OnboardingService {
       );
     }
 
-    // ── Soft-Delete: marcar documentos previos del mismo tipo como 'superseded' ──
-    // Esto evita la acumulación de registros duplicados manteniendo historial de auditoría.
-    // Debe filtrar por subject_id: un mismo user_id puede tener varios UBOs/directores
-    // (subject_type='ubo'/'director') compartiendo document_type, y sin este filtro se
-    // supersedía por error el documento de una persona distinta.
-    let previousDocsQuery = this.supabase
-      .from('documents')
-      .select('id, storage_path')
-      .eq('user_id', userId)
-      .eq('document_type', documentType)
-      .eq('subject_type', subjectType)
-      .eq('status', 'pending');
-    previousDocsQuery = subjectId
-      ? previousDocsQuery.eq('subject_id', subjectId)
-      : previousDocsQuery.is('subject_id', null);
-    const { data: previousDocs } = await previousDocsQuery;
-
-    if (previousDocs && previousDocs.length > 0) {
-      const prevIds = previousDocs.map((d) => d.id);
-      await this.supabase
-        .from('documents')
-        .update({ status: 'superseded' })
-        .in('id', prevIds);
-
-      this.logger.log(
-        `Marked ${prevIds.length} previous '${documentType}' document(s) as superseded for user ${userId}`,
-      );
-    }
-
     // Registrar en tabla documents
     const { data, error } = await this.supabase
       .from('documents')
@@ -1257,6 +1269,8 @@ export class OnboardingService {
         user_id: userId,
         subject_type: subjectType,
         subject_id: subjectId ?? null,
+        draft_key: normalizedDraftKey,
+        is_draft: true,
         document_type: documentType,
         storage_path: storagePath,
         file_name: file.originalname,
@@ -1267,9 +1281,155 @@ export class OnboardingService {
       .select()
       .single();
 
-    if (error) throwDbError(error);
+    if (error) {
+      // Sin fila no queda rastro del objeto: se limpia para no dejar huérfanos.
+      await this.supabase.storage.from(STORAGE_BUCKET).remove([storagePath]);
+      throwDbError(error);
+    }
+
+    // Reemplazo del documento previo, después de insertar el nuevo para no
+    // quedar sin ninguno si algo falla a mitad. Debe filtrar por subject_id y
+    // draft_key: un mismo user_id puede tener varios UBOs/directores
+    // (subject_type='ubo'/'director') compartiendo document_type, y sin este
+    // filtro se reemplazaba por error el documento de una persona distinta.
+    let previousDocsQuery = this.supabase
+      .from('documents')
+      .select('id, storage_path, is_draft')
+      .eq('user_id', userId)
+      .eq('document_type', documentType)
+      .eq('subject_type', subjectType)
+      .eq('status', 'pending')
+      .neq('id', data.id);
+    previousDocsQuery = subjectId
+      ? previousDocsQuery.eq('subject_id', subjectId)
+      : previousDocsQuery.is('subject_id', null);
+    previousDocsQuery = normalizedDraftKey
+      ? previousDocsQuery.eq('draft_key', normalizedDraftKey)
+      : previousDocsQuery.is('draft_key', null);
+    const { data: previousDocs } = await previousDocsQuery;
+
+    await this.replacePreviousDocuments(previousDocs ?? [], documentType, userId);
 
     return data;
+  }
+
+  /**
+   * Retira documentos reemplazados: los de borrador se borran de verdad y los
+   * ya enviados se marcan 'superseded'. Un fallo al borrar un borrador no
+   * debe tumbar la subida que ya se hizo: se degrada a 'superseded'.
+   */
+  private async replacePreviousDocuments(
+    previousDocs: { id: string; storage_path: string | null; is_draft: boolean }[],
+    documentType: string,
+    userId: string,
+  ) {
+    if (previousDocs.length === 0) return;
+
+    const drafts = previousDocs.filter((d) => d.is_draft);
+    const submitted = previousDocs.filter((d) => !d.is_draft);
+
+    if (drafts.length > 0) {
+      try {
+        await this.draftService.hardDeleteDocuments(drafts);
+      } catch {
+        submitted.push(...drafts);
+      }
+    }
+
+    if (submitted.length > 0) {
+      await this.supabase
+        .from('documents')
+        .update({ status: 'superseded' })
+        .in('id', submitted.map((d) => d.id));
+    }
+
+    this.logger.log(
+      `Reemplazo '${documentType}' de ${userId}: ${drafts.length} borrador(es) borrado(s), ${submitted.length} marcado(s) superseded`,
+    );
+  }
+
+  /**
+   * Asigna a una persona recién guardada (director o UBO) los documentos que
+   * el cliente subió para ella antes de que existiera su fila. Si esa persona
+   * ya tenía un documento activo del mismo tipo (reenvío tras needs_review),
+   * el anterior se retira con la misma regla que en uploadDocument.
+   */
+  private async claimDraftDocuments(
+    userId: string,
+    subjectType: 'director' | 'ubo',
+    subjectId: string,
+    draftKey: string | null,
+  ) {
+    let orphansQuery = this.supabase
+      .from('documents')
+      .select('id, document_type')
+      .eq('user_id', userId)
+      .eq('subject_type', subjectType)
+      .is('subject_id', null)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false });
+    orphansQuery = draftKey
+      ? orphansQuery.eq('draft_key', draftKey)
+      : orphansQuery.is('draft_key', null);
+    const { data: orphans, error } = await orphansQuery;
+    if (error) throwDbError(error);
+    if (!orphans?.length) return;
+
+    const orphanIds = orphans.map((o) => o.id as string);
+    const orphanTypes = [...new Set(orphans.map((o) => o.document_type as string))];
+
+    const { data: previous, error: prevError } = await this.supabase
+      .from('documents')
+      .select('id, storage_path, is_draft, document_type')
+      .eq('user_id', userId)
+      .eq('subject_type', subjectType)
+      .eq('subject_id', subjectId)
+      .eq('status', 'pending')
+      .in('document_type', orphanTypes);
+    if (prevError) throwDbError(prevError);
+
+    for (const docType of orphanTypes) {
+      await this.replacePreviousDocuments(
+        (previous ?? []).filter((d) => d.document_type === docType) as {
+          id: string;
+          storage_path: string | null;
+          is_draft: boolean;
+        }[],
+        docType,
+        userId,
+      );
+    }
+
+    const { error: claimError } = await this.supabase
+      .from('documents')
+      .update({ subject_id: subjectId, draft_key: null })
+      .in('id', orphanIds);
+    if (claimError) throwDbError(claimError);
+  }
+
+  /**
+   * Quita un documento del borrador (Storage + fila). Solo el dueño y solo si
+   * todavía no fue enviado: lo ya enviado se reemplaza, nunca se borra.
+   */
+  async deleteDraftDocument(userId: string, documentId: string) {
+    const { data: doc, error } = await this.supabase
+      .from('documents')
+      .select('id, storage_path, is_draft, status')
+      .eq('id', documentId)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error) throwDbError(error);
+    if (!doc) throw new NotFoundException('Documento no encontrado');
+    if (!doc.is_draft || doc.status !== 'pending') {
+      throw new ConflictException(
+        'Este documento ya fue enviado a revisión; solo puedes reemplazarlo subiendo uno nuevo.',
+      );
+    }
+
+    await this.draftService.hardDeleteDocuments([
+      { id: doc.id as string, storage_path: doc.storage_path as string | null },
+    ]);
+    return { deleted: true };
   }
 
   /** Lista documentos del usuario. */
@@ -1277,7 +1437,7 @@ export class OnboardingService {
     let query = this.supabase
       .from('documents')
       .select(
-        'id, document_type, subject_type, subject_id, file_name, mime_type, file_size_bytes, status, created_at',
+        'id, document_type, subject_type, subject_id, draft_key, is_draft, file_name, mime_type, file_size_bytes, status, created_at',
       )
       .eq('user_id', userId)
       .eq('status', 'pending') // Solo documentos activos (excluye superseded)

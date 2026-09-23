@@ -462,6 +462,88 @@ describe('DiditVerificationService — KYB', () => {
     expect(verdict.overall).toBe('needs_review');
   });
 
+  // ── Representante que también es UBO ────────────────────────────────
+
+  it('un UBO que es el propio representante no se verifica (ni se paga) dos veces', async () => {
+    const directorAsUbo = { ...UBO, first_name: 'Carlos', last_name: 'Director', id_number: '123-4567' };
+    const supabase = mockSupabase({
+      kybRow: baseKyb(),
+      businessRow: baseBusiness({ business_ubos: [directorAsUbo] }),
+      documents: { 'business:': POA_DOC, 'director:director-1': IDENTITY_DOCS, 'ubo:ubo-1': IDENTITY_DOCS },
+    });
+    const diditApiClient = mockDiditApiClient();
+    const service = buildService(supabase, diditApiClient);
+
+    const { verdict } = await runKyb(service);
+
+    // Una sola corrida de identidad (la del representante) + el AML de la empresa.
+    expect(diditApiClient.verifyId).toHaveBeenCalledTimes(1);
+    expect(diditApiClient.matchFaces).toHaveBeenCalledTimes(1);
+    expect(diditApiClient.checkLiveness).toHaveBeenCalledTimes(1);
+    expect(diditApiClient.verifyDatabase).toHaveBeenCalledTimes(1);
+    expect(diditApiClient.screenAml).toHaveBeenCalledTimes(2);
+
+    const uboPerson = verdict.key_people.find((p: any) => p.role === 'ubo');
+    expect(uboPerson.same_person_as).toBe('director-1');
+    expect(uboPerson.aml.status).toBe('Approved');
+    expect(verdict.overall).toBe('approved');
+  });
+
+  it('un UBO distinto del representante sigue con sus propias 5 comprobaciones', async () => {
+    const supabase = mockSupabase({
+      kybRow: baseKyb(),
+      businessRow: baseBusiness(),
+      documents: { 'director:director-1': IDENTITY_DOCS, 'ubo:ubo-1': IDENTITY_DOCS },
+    });
+    const diditApiClient = mockDiditApiClient();
+    const service = buildService(supabase, diditApiClient);
+
+    const { verdict } = await runKyb(service);
+
+    expect(diditApiClient.verifyId).toHaveBeenCalledTimes(2);
+    const uboPerson = verdict.key_people.find((p: any) => p.role === 'ubo');
+    expect(uboPerson.same_person_as).toBeUndefined();
+  });
+
+  it('mismo nombre pero distinto documento: NO se deduplica', async () => {
+    const homonym = { ...UBO, first_name: 'Carlos', last_name: 'Director', date_of_birth: '1980-01-01' };
+    const supabase = mockSupabase({
+      kybRow: baseKyb(),
+      businessRow: baseBusiness({ business_ubos: [homonym] }),
+      documents: { 'director:director-1': IDENTITY_DOCS, 'ubo:ubo-1': IDENTITY_DOCS },
+    });
+    const diditApiClient = mockDiditApiClient();
+
+    await runKyb(buildService(supabase, diditApiClient));
+
+    expect(diditApiClient.verifyId).toHaveBeenCalledTimes(2);
+  });
+
+  it('force=true en KYB reutiliza empresa, representante y UBOs ya aprobados', async () => {
+    const docs = { 'business:': POA_DOC, 'director:director-1': IDENTITY_DOCS, 'ubo:ubo-1': IDENTITY_DOCS };
+    const first = await runKyb(
+      buildService(mockSupabase({ kybRow: baseKyb(), businessRow: baseBusiness(), documents: docs }), mockDiditApiClient()),
+    );
+
+    const client = mockDiditApiClient();
+    const { verdict } = await runKyb(
+      buildService(
+        mockSupabase({
+          kybRow: baseKyb({ screening: { didit: first.verdict } }),
+          businessRow: baseBusiness(),
+          documents: docs,
+        }),
+        client,
+      ),
+      { force: true },
+    );
+
+    const calls = Object.values(client).reduce((sum, fn) => sum + fn.mock.calls.length, 0);
+    expect(calls).toBe(0);
+    expect(verdict.overall).toBe('approved');
+    expect(verdict.company_aml.reused).toBe(true);
+  });
+
   it('Database Validation declinado (NO_MATCH contra el registro) fuerza overall=declined', async () => {
     const supabase = mockSupabase({
       kybRow: baseKyb(),

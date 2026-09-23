@@ -7,6 +7,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
+import { createHash } from 'crypto';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
 import { DiditApiClient } from './didit-api.client';
 import {
@@ -23,22 +24,28 @@ import {
   DIDIT_LIVENESS_MAX_BYTES,
   DIDIT_POA_DOC_TYPE,
   DIDIT_POA_MAX_BYTES,
+  DIDIT_REUSE_APPROVED_MAX_AGE_DAYS,
   DIDIT_SELFIE_DOC_TYPE,
 } from './didit.constants';
 import {
   DiditAmlRaw,
+  DiditAmlResult,
+  DiditCheckMeta,
   DiditCheckStatus,
   DiditDatabaseValidationRaw,
   DiditDatabaseValidationResult,
   DiditFaceMatchRaw,
+  DiditFaceMatchResult,
   DiditFile,
   DiditIdVerificationRaw,
+  DiditIdVerificationResult,
   DiditKeyPersonResult,
   DiditLivenessRaw,
   DiditLivenessResult,
   DiditPoaRaw,
   DiditPoaResult,
   DiditVerdict,
+  DiditVerdictWarning,
 } from './didit.types';
 
 const STORAGE_BUCKET = 'kyc-documents';
@@ -68,6 +75,54 @@ interface PersonCheckBundle {
   database_validation: DiditDatabaseValidationResult | null;
   liveness: DiditLivenessResult | null;
   errors: Array<{ check: string; message: string }>;
+}
+
+type Skipped = { skipped: string };
+/** Resultado copiado de la corrida anterior, sin volver a llamar a Didit. */
+type Reused<R> = { reused: R };
+type Outcome<Raw, R> = Raw | Skipped | Reused<R>;
+
+type IdOutcome = Outcome<DiditIdVerificationRaw, DiditIdVerificationResult>;
+type FaceOutcome = Outcome<DiditFaceMatchRaw, DiditFaceMatchResult>;
+type AmlOutcome = Outcome<DiditAmlRaw, DiditAmlResult>;
+type DbOutcome = Outcome<DiditDatabaseValidationRaw, DiditDatabaseValidationResult>;
+type LivenessOutcome = Outcome<DiditLivenessRaw, DiditLivenessResult>;
+type PoaOutcome = Outcome<DiditPoaRaw, DiditPoaResult>;
+
+/** Resultados de una persona en la corrida anterior (veredicto KYC o entrada de key_people). */
+interface PersonPrevious {
+  id_verification?: DiditIdVerificationResult | null;
+  face_match?: DiditFaceMatchResult | null;
+  aml?: DiditAmlResult | null;
+  database_validation?: DiditDatabaseValidationResult | null;
+  liveness?: DiditLivenessResult | null;
+}
+
+interface PersonFingerprints {
+  id: string;
+  face: string;
+  aml: string;
+  db: string;
+  liveness: string;
+}
+
+/** Las 5 comprobaciones de una persona, ya lanzadas. */
+interface PersonChecksLaunch {
+  fingerprints: PersonFingerprints | null;
+  id: Promise<IdOutcome>;
+  face: Promise<FaceOutcome>;
+  aml: Promise<AmlOutcome>;
+  db: Promise<DbOutcome>;
+  liveness: Promise<LivenessOutcome>;
+}
+
+interface PersonChecksSettled {
+  fingerprints: PersonFingerprints | null;
+  idResult: PromiseSettledResult<IdOutcome>;
+  faceResult: PromiseSettledResult<FaceOutcome>;
+  amlResult: PromiseSettledResult<AmlOutcome>;
+  dbResult: PromiseSettledResult<DbOutcome>;
+  livenessResult: PromiseSettledResult<LivenessOutcome>;
 }
 
 @Injectable()
@@ -157,25 +212,30 @@ export class DiditVerificationService {
       const documents = await this.loadPersonDocuments(kyc.user_id);
       const vendorData = `guira:${kycApplicationId}`;
 
-      const [idResult, faceResult, amlResult, dbResult, livenessResult, poaResult] =
-        await Promise.allSettled([
-          this.runIdVerification(documents, vendorData),
-          this.runFaceMatch(documents, vendorData),
-          this.runAml(person, vendorData),
-          this.runDatabaseValidation(person, vendorData),
-          this.runLiveness(documents, vendorData),
-          this.runProofOfAddress(documents, person, vendorData),
-        ]);
+      // En una re-ejecución forzada, lo que ya salió Approved con las mismas
+      // entradas se reutiliza en lugar de volver a pagarlo (ver canReuse).
+      const personChecks = this.launchPersonChecks(
+        documents,
+        person,
+        vendorData,
+        existingDidit ?? null,
+      );
+      const poaFingerprint = this.poaFingerprint(documents, person);
+      const poaPromise = this.reuseOr(existingDidit?.proof_of_address, poaFingerprint, () =>
+        this.runProofOfAddress(documents, person, vendorData),
+      );
+
+      const [checks, poaResult] = await Promise.all([
+        this.settlePersonChecks(personChecks),
+        this.settle(poaPromise),
+      ]);
 
       const verdict = this.buildVerdict({
         actorId,
         runCount: (existingDidit?.run_count ?? 0) + 1,
-        idResult,
-        faceResult,
-        amlResult,
-        dbResult,
-        livenessResult,
+        checks,
         poaResult,
+        poaFingerprint,
         person,
       });
 
@@ -485,35 +545,297 @@ export class DiditVerificationService {
     });
   }
 
+  // ── Reutilización en re-ejecuciones forzadas ─────────────────────────
+
+  /**
+   * Huella de las entradas de una comprobación. Si la huella guardada
+   * coincide, Didit recibiría exactamente lo mismo que la vez anterior.
+   */
+  private fingerprint(parts: unknown[]): string {
+    return createHash('sha256').update(JSON.stringify(parts)).digest('hex');
+  }
+
+  /**
+   * Rutas de los documentos que alimentan una comprobación. Un documento
+   * re-subido tiene otra `storage_path`, así que cambia la huella.
+   */
+  private docPaths(
+    documents: Map<string, StoredDocument>,
+    types: string[],
+  ): Array<string | null> {
+    return types.map((type) => documents.get(type)?.storage_path ?? null);
+  }
+
+  private normalize(value: unknown): string {
+    return (value ?? '').toString().trim().toLowerCase();
+  }
+
+  private personKey(person: PersonLike | null): string[] {
+    const p: PersonLike = person ?? {};
+    return [
+      p.first_name,
+      p.middle_name,
+      p.last_name,
+      p.date_of_birth,
+      p.nationality,
+      p.id_number,
+    ].map((v) => this.normalize(v));
+  }
+
+  private personFingerprints(
+    documents: Map<string, StoredDocument>,
+    person: PersonLike,
+  ): PersonFingerprints {
+    const who = this.personKey(person);
+    return {
+      // id_verification depende también de la persona: los mismatches se
+      // calculan contra sus datos, y reutilizarlos con datos nuevos mentiría.
+      id: this.fingerprint([
+        'id_verification',
+        this.docPaths(documents, [
+          ...DIDIT_DOC_TYPE_FRONT_PRIORITY,
+          ...Object.values(DIDIT_DOC_TYPE_BACK_MAP),
+        ]),
+        who,
+      ]),
+      face: this.fingerprint([
+        'face_match',
+        this.docPaths(documents, [DIDIT_SELFIE_DOC_TYPE, ...DIDIT_FACE_MATCH_REF_PRIORITY]),
+        DIDIT_FACE_MATCH_DECLINE_THRESHOLD,
+      ]),
+      aml: this.fingerprint(['aml', who]),
+      db: this.fingerprint(['database_validation', who]),
+      liveness: this.fingerprint([
+        'liveness',
+        this.docPaths(documents, [DIDIT_SELFIE_DOC_TYPE]),
+        DIDIT_LIVENESS_DECLINE_THRESHOLD,
+      ]),
+    };
+  }
+
+  private poaFingerprint(
+    documents: Map<string, StoredDocument>,
+    person: PersonLike | null,
+  ): string {
+    return this.fingerprint([
+      'proof_of_address',
+      this.docPaths(documents, [DIDIT_POA_DOC_TYPE]),
+      person ? [this.normalize(person.first_name), this.normalize(person.last_name)] : null,
+    ]);
+  }
+
+  private companyAmlFingerprint(business: Record<string, unknown>): string {
+    return this.fingerprint([
+      'company_aml',
+      [
+        business.legal_name,
+        business.trade_name,
+        business.tax_id,
+        business.registration_number,
+        business.country,
+        business.country_of_incorporation,
+        business.incorporation_date,
+      ].map((v) => this.normalize(v)),
+    ]);
+  }
+
+  /**
+   * Una comprobación se reutiliza solo si salió 'Approved', con exactamente
+   * las mismas entradas y dentro de la ventana de antigüedad. Lo que salió
+   * Declined, In Review o falló se vuelve a correr siempre: es justo lo que
+   * el staff quiere re-evaluar al forzar.
+   */
+  private canReuse(
+    previous: (DiditCheckMeta & { status: DiditCheckStatus }) | null | undefined,
+    fingerprint: string,
+  ): boolean {
+    if (!previous || previous.status !== 'Approved') return false;
+    if (!previous.input_fingerprint || previous.input_fingerprint !== fingerprint) {
+      return false;
+    }
+    const checkedAt = Date.parse(previous.checked_at ?? '');
+    if (!Number.isFinite(checkedAt)) return false;
+    return Date.now() - checkedAt <= DIDIT_REUSE_APPROVED_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+  }
+
+  /**
+   * Devuelve el resultado anterior si es reutilizable; si no, llama a Didit.
+   *
+   * La promesa lleva un catch vacío adjunto: se lanzan varias en paralelo y
+   * se esperan más tarde (tras otras lecturas de la DB), y una que rechace
+   * antes de llegar al allSettled no debe contar como rechazo no manejado.
+   * El rechazo sigue llegando intacto a quien la espera.
+   */
+  private reuseOr<Raw, R extends DiditCheckMeta & { status: DiditCheckStatus }>(
+    previous: R | null | undefined,
+    fingerprint: string,
+    run: () => Promise<Raw | Skipped>,
+  ): Promise<Outcome<Raw, R>> {
+    const promise: Promise<Outcome<Raw, R>> = this.canReuse(previous, fingerprint)
+      ? Promise.resolve({ reused: { ...(previous as R), reused: true } })
+      : run();
+    promise.catch(() => undefined);
+    return promise;
+  }
+
+  private settle<T>(promise: Promise<T>): Promise<PromiseSettledResult<T>> {
+    return Promise.allSettled([promise]).then(([result]) => result);
+  }
+
+  /** Lanza las 5 comprobaciones de una persona, reutilizando lo reutilizable. */
+  private launchPersonChecks(
+    documents: Map<string, StoredDocument>,
+    person: PersonLike,
+    vendorData: string,
+    previous: PersonPrevious | null,
+  ): PersonChecksLaunch {
+    const fp = this.personFingerprints(documents, person);
+    return {
+      fingerprints: fp,
+      id: this.reuseOr(previous?.id_verification, fp.id, () =>
+        this.runIdVerification(documents, vendorData),
+      ),
+      face: this.reuseOr(previous?.face_match, fp.face, () =>
+        this.runFaceMatch(documents, vendorData),
+      ),
+      aml: this.reuseOr(previous?.aml, fp.aml, () => this.runAml(person, vendorData)),
+      db: this.reuseOr(previous?.database_validation, fp.db, () =>
+        this.runDatabaseValidation(person, vendorData),
+      ),
+      liveness: this.reuseOr(previous?.liveness, fp.liveness, () =>
+        this.runLiveness(documents, vendorData),
+      ),
+    };
+  }
+
+  private skippedPersonChecks(reason: string): PersonChecksLaunch {
+    const skipped = Promise.resolve({ skipped: reason });
+    return {
+      fingerprints: null,
+      id: skipped,
+      face: skipped,
+      aml: skipped,
+      db: skipped,
+      liveness: skipped,
+    };
+  }
+
+  private async settlePersonChecks(launch: PersonChecksLaunch): Promise<PersonChecksSettled> {
+    const [idResult, faceResult, amlResult, dbResult, livenessResult] = await Promise.allSettled([
+      launch.id,
+      launch.face,
+      launch.aml,
+      launch.db,
+      launch.liveness,
+    ]);
+    return {
+      fingerprints: launch.fingerprints,
+      idResult,
+      faceResult,
+      amlResult,
+      dbResult,
+      livenessResult,
+    };
+  }
+
+  /**
+   * Misma persona registrada como representante y como UBO (caso habitual en
+   * empresas pequeñas: el dueño es también el gerente). Se compara por número
+   * de documento; sin documento en alguno de los dos, por nombre + apellido +
+   * fecha de nacimiento completos. Ante la duda NO se deduplica: un falso
+   * "misma persona" dejaría a un UBO sin verificar, un falso "distinta" solo
+   * cuesta una verificación de más.
+   */
+  private isSamePerson(a: PersonLike, b: PersonLike): boolean {
+    const doc = (p: PersonLike) => this.normalize(p.id_number).replace(/[\s.\-]/g, '');
+    const docA = doc(a);
+    const docB = doc(b);
+    if (docA && docB) {
+      if (docA !== docB) return false;
+      const natA = this.normalize(a.nationality);
+      const natB = this.normalize(b.nationality);
+      return !natA || !natB || natA === natB;
+    }
+
+    const fields = (p: PersonLike) =>
+      [p.first_name, p.last_name, p.date_of_birth].map((v) => this.normalize(v));
+    const fa = fields(a);
+    const fb = fields(b);
+    return fa.every(Boolean) && fa.every((v, i) => v === fb[i]);
+  }
+
   // ── Construcción de resultados compartida (KYC + KYB) ────────────────
 
   /**
-   * Mapea los 5 resultados crudos de una persona (id_verification, face_match,
+   * Resuelve una comprobación: rechazo → error, reutilizada → tal cual,
+   * omitida → Skipped, respuesta de Didit → mapeada y sellada con su huella
+   * para poder reutilizarla en la próxima re-ejecución forzada.
+   */
+  private resolveCheck<Raw, R extends DiditCheckMeta & { status: DiditCheckStatus }>(
+    settled: PromiseSettledResult<Outcome<Raw, R>>,
+    checkName: string,
+    errors: Array<{ check: string; message: string }>,
+    fingerprint: string | undefined,
+    onSkipped: (reason: string) => R,
+    onRaw: (raw: Raw) => R,
+  ): R | null {
+    if (settled.status === 'rejected') {
+      errors.push({ check: checkName, message: settled.reason?.message ?? 'Error desconocido' });
+      return null;
+    }
+
+    const value = settled.value as object;
+    if ('reused' in value) return (value as Reused<R>).reused;
+    if ('skipped' in value) return onSkipped((value as Skipped).skipped);
+
+    const mapped = onRaw(value as Raw);
+    return fingerprint
+      ? { ...mapped, input_fingerprint: fingerprint, checked_at: new Date().toISOString() }
+      : mapped;
+  }
+
+  private mapWarnings(
+    warnings: Array<{ code?: string; description?: string }> | undefined,
+  ): DiditVerdictWarning[] {
+    return (warnings ?? []).map((w) => ({ code: w.code, description: w.description }));
+  }
+
+  private mapAml(value: DiditAmlRaw): DiditAmlResult {
+    const v = value.aml;
+    return {
+      status: v.status,
+      request_id: value.request_id,
+      score: v.score,
+      total_hits: v.total_hits,
+      hits_summary: (v.hits ?? []).map((h) => ({ name: h.name, type: h.type, source: h.source })),
+      warnings: this.mapWarnings(v.warnings),
+    };
+  }
+
+  /**
+   * Mapea los 5 resultados de una persona (id_verification, face_match,
    * aml, database_validation, liveness) al formato del veredicto, con los
    * mismatches de id_verification contra los datos que Guira ya tiene.
    * Usado tanto para la persona de KYC como para el representante y cada
-   * UBO de KYB — antes esta lógica estaba triplicada.
+   * UBO de KYB.
    */
   private buildPersonResult(input: {
     checkPrefix: string;
-    idResult: PromiseSettledResult<DiditIdVerificationRaw | { skipped: string }>;
-    faceResult: PromiseSettledResult<DiditFaceMatchRaw | { skipped: string }>;
-    amlResult: PromiseSettledResult<DiditAmlRaw | { skipped: string }>;
-    dbResult: PromiseSettledResult<DiditDatabaseValidationRaw | { skipped: string }>;
-    livenessResult: PromiseSettledResult<DiditLivenessRaw | { skipped: string }>;
+    checks: PersonChecksSettled;
     referencePerson: PersonLike | null;
   }): PersonCheckBundle {
     const errors: Array<{ check: string; message: string }> = [];
     const prefix = input.checkPrefix;
     const ref = input.referencePerson;
+    const fp = input.checks.fingerprints;
 
-    // id_verification
-    let idVerification: DiditVerdict['id_verification'] = null;
-    if (input.idResult.status === 'fulfilled') {
-      const value = input.idResult.value;
-      if ('skipped' in value) {
-        idVerification = { status: 'Skipped', warnings: [], mismatches: [] };
-      } else {
+    const idVerification = this.resolveCheck<DiditIdVerificationRaw, DiditIdVerificationResult>(
+      input.checks.idResult,
+      `${prefix}id_verification`,
+      errors,
+      fp?.id,
+      () => ({ status: 'Skipped', warnings: [], mismatches: [] }),
+      (value) => {
         const v = value.id_verification;
         const mismatches: string[] = [];
         if (
@@ -541,7 +863,7 @@ export class DiditVerificationService {
           mismatches.push('document_number');
         }
 
-        idVerification = {
+        return {
           status: v.status,
           request_id: value.request_id,
           document_number_last4: v.document_number ? v.document_number.slice(-4) : undefined,
@@ -549,130 +871,95 @@ export class DiditVerificationService {
           last_name: v.last_name,
           date_of_birth: v.date_of_birth,
           nationality: v.nationality,
-          warnings: (v.warnings ?? []).map((w) => ({ code: w.code, description: w.description })),
+          warnings: this.mapWarnings(v.warnings),
           mismatches,
         };
-      }
-    } else {
-      errors.push({
-        check: `${prefix}id_verification`,
-        message: input.idResult.reason?.message ?? 'Error desconocido',
-      });
-    }
+      },
+    );
 
-    // face_match
-    let faceMatch: DiditVerdict['face_match'] = null;
-    if (input.faceResult.status === 'fulfilled') {
-      const value = input.faceResult.value;
-      if ('skipped' in value) {
-        faceMatch = { status: 'Skipped', warnings: [], skip_reason: value.skipped };
-      } else {
-        const v = value.face_match;
-        faceMatch = {
-          status: v.status,
-          request_id: value.request_id,
-          score: v.score,
-          warnings: (v.warnings ?? []).map((w) => ({ code: w.code, description: w.description })),
-        };
-      }
-    } else {
-      errors.push({
-        check: `${prefix}face_match`,
-        message: input.faceResult.reason?.message ?? 'Error desconocido',
-      });
-    }
+    const faceMatch = this.resolveCheck<DiditFaceMatchRaw, DiditFaceMatchResult>(
+      input.checks.faceResult,
+      `${prefix}face_match`,
+      errors,
+      fp?.face,
+      (reason) => ({ status: 'Skipped', warnings: [], skip_reason: reason }),
+      (value) => ({
+        status: value.face_match.status,
+        request_id: value.request_id,
+        score: value.face_match.score,
+        warnings: this.mapWarnings(value.face_match.warnings),
+      }),
+    );
 
-    // aml
-    let aml: DiditVerdict['aml'] = null;
-    if (input.amlResult.status === 'fulfilled') {
-      const value = input.amlResult.value;
-      if ('skipped' in value) {
-        aml = { status: 'Skipped', warnings: [], hits_summary: [] };
-      } else {
-        const v = value.aml;
-        aml = {
-          status: v.status,
-          request_id: value.request_id,
-          score: v.score,
-          total_hits: v.total_hits,
-          hits_summary: (v.hits ?? []).map((h) => ({ name: h.name, type: h.type, source: h.source })),
-          warnings: (v.warnings ?? []).map((w) => ({ code: w.code, description: w.description })),
-        };
-      }
-    } else {
-      errors.push({
-        check: `${prefix}aml`,
-        message: input.amlResult.reason?.message ?? 'Error desconocido',
-      });
-    }
+    const aml = this.resolveCheck<DiditAmlRaw, DiditAmlResult>(
+      input.checks.amlResult,
+      `${prefix}aml`,
+      errors,
+      fp?.aml,
+      () => ({ status: 'Skipped', warnings: [], hits_summary: [] }),
+      (value) => this.mapAml(value),
+    );
 
-    // database_validation
-    let databaseValidation: DiditDatabaseValidationResult | null = null;
-    if (input.dbResult.status === 'fulfilled') {
-      const value = input.dbResult.value;
-      if ('skipped' in value) {
-        databaseValidation = { status: 'Skipped', warnings: [], skip_reason: value.skipped };
-      } else {
-        const v = value.database_validation;
-        databaseValidation = {
-          status: v.status,
-          request_id: value.request_id,
-          match_type: v.match_type,
-          warnings: [],
-        };
-      }
-    } else {
-      errors.push({
-        check: `${prefix}database_validation`,
-        message: input.dbResult.reason?.message ?? 'Error desconocido',
-      });
-    }
+    const databaseValidation = this.resolveCheck<
+      DiditDatabaseValidationRaw,
+      DiditDatabaseValidationResult
+    >(
+      input.checks.dbResult,
+      `${prefix}database_validation`,
+      errors,
+      fp?.db,
+      (reason) => ({ status: 'Skipped', warnings: [], skip_reason: reason }),
+      (value) => ({
+        status: value.database_validation.status,
+        request_id: value.request_id,
+        match_type: value.database_validation.match_type,
+        warnings: [],
+      }),
+    );
 
-    // liveness
-    let liveness: DiditLivenessResult | null = null;
-    if (input.livenessResult.status === 'fulfilled') {
-      const value = input.livenessResult.value;
-      if ('skipped' in value) {
-        liveness = { status: 'Skipped', warnings: [], skip_reason: value.skipped };
-      } else {
-        const v = value.liveness;
-        liveness = {
-          status: v.status,
-          request_id: value.request_id,
-          score: v.score,
-          warnings: (v.warnings ?? []).map((w) => ({ code: w.code, description: w.description })),
-        };
-      }
-    } else {
-      errors.push({
-        check: `${prefix}liveness`,
-        message: input.livenessResult.reason?.message ?? 'Error desconocido',
-      });
-    }
+    const liveness = this.resolveCheck<DiditLivenessRaw, DiditLivenessResult>(
+      input.checks.livenessResult,
+      `${prefix}liveness`,
+      errors,
+      fp?.liveness,
+      (reason) => ({ status: 'Skipped', warnings: [], skip_reason: reason }),
+      (value) => ({
+        status: value.liveness.status,
+        request_id: value.request_id,
+        score: value.liveness.score,
+        warnings: this.mapWarnings(value.liveness.warnings),
+      }),
+    );
 
-    return { id_verification: idVerification, face_match: faceMatch, aml, database_validation: databaseValidation, liveness, errors };
+    return {
+      id_verification: idVerification,
+      face_match: faceMatch,
+      aml,
+      database_validation: databaseValidation,
+      liveness,
+      errors,
+    };
   }
 
   private mapPoaResult(
-    result: PromiseSettledResult<DiditPoaRaw | { skipped: string }>,
+    result: PromiseSettledResult<PoaOutcome>,
     checkName: string,
     errors: Array<{ check: string; message: string }>,
+    fingerprint: string,
   ): DiditPoaResult | null {
-    if (result.status === 'fulfilled') {
-      const value = result.value;
-      if ('skipped' in value) {
-        return { status: 'Skipped', warnings: [], skip_reason: value.skipped };
-      }
-      const v = value.poa;
-      return {
-        status: v.status,
+    return this.resolveCheck<DiditPoaRaw, DiditPoaResult>(
+      result,
+      checkName,
+      errors,
+      fingerprint,
+      (reason) => ({ status: 'Skipped', warnings: [], skip_reason: reason }),
+      (value) => ({
+        status: value.poa.status,
         request_id: value.request_id,
-        issuer: v.issuer,
-        warnings: (v.warnings ?? []).map((w) => ({ code: w.code, description: w.description })),
-      };
-    }
-    errors.push({ check: checkName, message: result.reason?.message ?? 'Error desconocido' });
-    return null;
+        issuer: value.poa.issuer,
+        warnings: this.mapWarnings(value.poa.warnings),
+      }),
+    );
   }
 
   /**
@@ -698,26 +985,24 @@ export class DiditVerificationService {
   private buildVerdict(input: {
     actorId: string;
     runCount: number;
-    idResult: PromiseSettledResult<DiditIdVerificationRaw | { skipped: string }>;
-    faceResult: PromiseSettledResult<DiditFaceMatchRaw | { skipped: string }>;
-    amlResult: PromiseSettledResult<DiditAmlRaw | { skipped: string }>;
-    dbResult: PromiseSettledResult<DiditDatabaseValidationRaw | { skipped: string }>;
-    livenessResult: PromiseSettledResult<DiditLivenessRaw | { skipped: string }>;
-    poaResult: PromiseSettledResult<DiditPoaRaw | { skipped: string }>;
+    checks: PersonChecksSettled;
+    poaResult: PromiseSettledResult<PoaOutcome>;
+    poaFingerprint: string;
     person: PersonLike;
   }): DiditVerdict {
     const bundle = this.buildPersonResult({
       checkPrefix: '',
-      idResult: input.idResult,
-      faceResult: input.faceResult,
-      amlResult: input.amlResult,
-      dbResult: input.dbResult,
-      livenessResult: input.livenessResult,
+      checks: input.checks,
       referencePerson: input.person,
     });
 
     const errors = [...bundle.errors];
-    const proofOfAddress = this.mapPoaResult(input.poaResult, 'proof_of_address', errors);
+    const proofOfAddress = this.mapPoaResult(
+      input.poaResult,
+      'proof_of_address',
+      errors,
+      input.poaFingerprint,
+    );
 
     const allResults = [
       bundle.id_verification,
@@ -833,14 +1118,27 @@ export class DiditVerificationService {
 
       if (!business) throw new NotFoundException('Datos de la empresa no encontrados');
 
+      // Resultados de la corrida anterior, por persona, para reutilizar en force.
+      const previousPeople = existingDidit?.key_people ?? [];
+      const previousFor = (role: 'director' | 'ubo', id: string): PersonPrevious | null =>
+        previousPeople.find((p) => p.role === role && p.id === id) ?? null;
+
       const companyVendorData = `guira:kyb:${kybApplicationId}:company`;
 
       // 1. Empresa: AML + Proof of Address (el comprobante de domicilio del
       // negocio, subject_type='business' — sin subject_id porque solo hay
       // una empresa por solicitante).
-      const companyAmlPromise = this.runCompanyAml(business, companyVendorData);
+      const companyAmlFingerprint = this.companyAmlFingerprint(business);
+      const companyAmlPromise = this.reuseOr(existingDidit?.company_aml, companyAmlFingerprint, () =>
+        this.runCompanyAml(business, companyVendorData),
+      );
       const companyDocuments = await this.loadKybDocuments(kyb.requester_user_id, 'business');
-      const companyPoaPromise = this.runProofOfAddress(companyDocuments, null, companyVendorData);
+      const companyPoaFingerprint = this.poaFingerprint(companyDocuments, null);
+      const companyPoaPromise = this.reuseOr(
+        existingDidit?.company_proof_of_address,
+        companyPoaFingerprint,
+        () => this.runProofOfAddress(companyDocuments, null, companyVendorData),
+      );
 
       // 2. Representante legal: las 5 comprobaciones, igual que una persona
       // de KYC. Un negocio puede tener varios directores compartiendo
@@ -848,100 +1146,62 @@ export class DiditVerificationService {
       const directors = (business.business_directors ?? []) as any[];
       const primaryDirector = directors.find((d: any) => d.is_signer) ?? directors[0] ?? null;
 
-      const directorDocuments = primaryDirector
-        ? await this.loadKybDocuments(kyb.requester_user_id, 'director', primaryDirector.id)
-        : new Map<string, StoredDocument>();
+      const directorChecks = primaryDirector
+        ? this.launchPersonChecks(
+            await this.loadKybDocuments(kyb.requester_user_id, 'director', primaryDirector.id),
+            primaryDirector,
+            `guira:kyb:${kybApplicationId}:director:${primaryDirector.id}`,
+            previousFor('director', primaryDirector.id),
+          )
+        : this.skippedPersonChecks('Sin representante legal registrado');
 
-      let directorAmlPromise: Promise<DiditAmlRaw | { skipped: string }> = Promise.resolve({
-        skipped: 'Sin representante legal registrado',
-      });
-      let directorIdPromise: Promise<DiditIdVerificationRaw | { skipped: string }> = Promise.resolve({
-        skipped: 'Sin representante legal registrado',
-      });
-      let directorFacePromise: Promise<DiditFaceMatchRaw | { skipped: string }> = Promise.resolve({
-        skipped: 'Sin representante legal registrado',
-      });
-      let directorDbPromise: Promise<DiditDatabaseValidationRaw | { skipped: string }> = Promise.resolve({
-        skipped: 'Sin representante legal registrado',
-      });
-      let directorLivenessPromise: Promise<DiditLivenessRaw | { skipped: string }> = Promise.resolve({
-        skipped: 'Sin representante legal registrado',
-      });
-
-      if (primaryDirector) {
-        const directorVendorData = `guira:kyb:${kybApplicationId}:director:${primaryDirector.id}`;
-        directorAmlPromise = this.runAml(primaryDirector, directorVendorData);
-        directorIdPromise = this.runIdVerification(directorDocuments, directorVendorData);
-        directorFacePromise = this.runFaceMatch(directorDocuments, directorVendorData);
-        directorDbPromise = this.runDatabaseValidation(primaryDirector, directorVendorData);
-        directorLivenessPromise = this.runLiveness(directorDocuments, directorVendorData);
-      }
-
-      // 3. Cada UBO: las mismas 5 comprobaciones que el representante — ya
-      // no solo AML. Guira recolecta selfie + documento de cada UBO
-      // (subject_type='ubo' + su propio subject_id); antes ese material se
-      // subía y nunca se usaba para nada más que el screening de sanciones.
+      // 3. Cada UBO: las mismas 5 comprobaciones que el representante. Si el
+      // UBO es el propio representante, se reutilizan sus comprobaciones en
+      // curso en lugar de pagarlas dos veces.
       const ubos = (business.business_ubos ?? []) as any[];
-      const ubosDocuments = await Promise.all(
-        ubos.map((ubo) => this.loadKybDocuments(kyb.requester_user_id, 'ubo', ubo.id)),
+      const uboLaunches = await Promise.all(
+        ubos.map(async (ubo) => {
+          if (primaryDirector && this.isSamePerson(ubo, primaryDirector)) {
+            return { ubo, checks: directorChecks, samePersonAs: primaryDirector.id as string };
+          }
+          const uboDocuments = await this.loadKybDocuments(kyb.requester_user_id, 'ubo', ubo.id);
+          return {
+            ubo,
+            checks: this.launchPersonChecks(
+              uboDocuments,
+              ubo,
+              `guira:kyb:${kybApplicationId}:ubo:${ubo.id}`,
+              previousFor('ubo', ubo.id),
+            ),
+            samePersonAs: undefined,
+          };
+        }),
       );
 
-      const uboChecksPromises = ubos.flatMap((ubo, index) => {
-        const uboVendorData = `guira:kyb:${kybApplicationId}:ubo:${ubo.id}`;
-        const uboDocuments = ubosDocuments[index];
-        return [
-          this.runAml(ubo, uboVendorData),
-          this.runIdVerification(uboDocuments, uboVendorData),
-          this.runFaceMatch(uboDocuments, uboVendorData),
-          this.runDatabaseValidation(ubo, uboVendorData),
-          this.runLiveness(uboDocuments, uboVendorData),
-        ];
-      });
-
-      // Ejecutar todo en paralelo: empresa (2) + representante (5) + N UBOs (5 c/u).
-      const [
-        companyAmlResult,
-        companyPoaResult,
-        directorAmlResult,
-        directorIdResult,
-        directorFaceResult,
-        directorDbResult,
-        directorLivenessResult,
-        ...uboChecksSettled
-      ] = await Promise.allSettled([
-        companyAmlPromise,
-        companyPoaPromise,
-        directorAmlPromise,
-        directorIdPromise,
-        directorFacePromise,
-        directorDbPromise,
-        directorLivenessPromise,
-        ...uboChecksPromises,
+      // Todo ya está corriendo en paralelo; aquí solo se espera.
+      const [companyAmlResult, companyPoaResult] = await Promise.all([
+        this.settle(companyAmlPromise),
+        this.settle(companyPoaPromise),
       ]);
-
-      // Reagrupar los 5 resultados de cada UBO (mismo orden en que se lanzaron).
-      const ubosSettledGroups = ubos.map((ubo, index) => ({
-        ubo,
-        amlResult: uboChecksSettled[index * 5] as PromiseSettledResult<DiditAmlRaw | { skipped: string }>,
-        idResult: uboChecksSettled[index * 5 + 1] as PromiseSettledResult<DiditIdVerificationRaw | { skipped: string }>,
-        faceResult: uboChecksSettled[index * 5 + 2] as PromiseSettledResult<DiditFaceMatchRaw | { skipped: string }>,
-        dbResult: uboChecksSettled[index * 5 + 3] as PromiseSettledResult<DiditDatabaseValidationRaw | { skipped: string }>,
-        livenessResult: uboChecksSettled[index * 5 + 4] as PromiseSettledResult<DiditLivenessRaw | { skipped: string }>,
-      }));
+      const directorSettled = await this.settlePersonChecks(directorChecks);
+      const ubosSettled = await Promise.all(
+        uboLaunches.map(async (launch) => ({
+          ubo: launch.ubo,
+          samePersonAs: launch.samePersonAs,
+          checks: await this.settlePersonChecks(launch.checks),
+        })),
+      );
 
       const verdict = this.buildKybVerdict({
         actorId,
         runCount: (existingDidit?.run_count ?? 0) + 1,
         companyAmlResult,
+        companyAmlFingerprint,
         companyPoaResult,
-        directorAmlResult,
-        directorIdResult,
-        directorFaceResult,
-        directorDbResult,
-        directorLivenessResult,
-        ubosSettledGroups,
+        companyPoaFingerprint,
+        director: directorSettled,
+        ubos: ubosSettled,
         primaryDirector,
-        business,
       });
 
       await this.persistKybVerdict(kybApplicationId, kyb.screening ?? {}, verdict);
@@ -956,61 +1216,38 @@ export class DiditVerificationService {
   private buildKybVerdict(input: {
     actorId: string;
     runCount: number;
-    companyAmlResult: PromiseSettledResult<DiditAmlRaw | { skipped: string }>;
-    companyPoaResult: PromiseSettledResult<DiditPoaRaw | { skipped: string }>;
-    directorAmlResult: PromiseSettledResult<DiditAmlRaw | { skipped: string }>;
-    directorIdResult: PromiseSettledResult<DiditIdVerificationRaw | { skipped: string }>;
-    directorFaceResult: PromiseSettledResult<DiditFaceMatchRaw | { skipped: string }>;
-    directorDbResult: PromiseSettledResult<DiditDatabaseValidationRaw | { skipped: string }>;
-    directorLivenessResult: PromiseSettledResult<DiditLivenessRaw | { skipped: string }>;
-    ubosSettledGroups: Array<{
-      ubo: any;
-      amlResult: PromiseSettledResult<DiditAmlRaw | { skipped: string }>;
-      idResult: PromiseSettledResult<DiditIdVerificationRaw | { skipped: string }>;
-      faceResult: PromiseSettledResult<DiditFaceMatchRaw | { skipped: string }>;
-      dbResult: PromiseSettledResult<DiditDatabaseValidationRaw | { skipped: string }>;
-      livenessResult: PromiseSettledResult<DiditLivenessRaw | { skipped: string }>;
-    }>;
+    companyAmlResult: PromiseSettledResult<AmlOutcome>;
+    companyAmlFingerprint: string;
+    companyPoaResult: PromiseSettledResult<PoaOutcome>;
+    companyPoaFingerprint: string;
+    director: PersonChecksSettled;
+    ubos: Array<{ ubo: any; samePersonAs?: string; checks: PersonChecksSettled }>;
     primaryDirector: any | null;
-    business: any;
   }): DiditVerdict {
     const errors: Array<{ check: string; message: string }> = [];
 
     // 1. Empresa: AML
-    let companyAml: DiditVerdict['aml'] = null;
-    if (input.companyAmlResult.status === 'fulfilled') {
-      const value = input.companyAmlResult.value;
-      if ('skipped' in value) {
-        companyAml = { status: 'Skipped', warnings: [], hits_summary: [] };
-      } else {
-        const v = value.aml;
-        companyAml = {
-          status: v.status,
-          request_id: value.request_id,
-          score: v.score,
-          total_hits: v.total_hits,
-          hits_summary: (v.hits ?? []).map((h) => ({ name: h.name, type: h.type, source: h.source })),
-          warnings: (v.warnings ?? []).map((w) => ({ code: w.code, description: w.description })),
-        };
-      }
-    } else {
-      errors.push({
-        check: 'company_aml',
-        message: input.companyAmlResult.reason?.message ?? 'Error desconocido',
-      });
-    }
+    const companyAml = this.resolveCheck<DiditAmlRaw, DiditAmlResult>(
+      input.companyAmlResult,
+      'company_aml',
+      errors,
+      input.companyAmlFingerprint,
+      () => ({ status: 'Skipped', warnings: [], hits_summary: [] }),
+      (value) => this.mapAml(value),
+    );
 
     // 2. Empresa: Proof of Address
-    const companyPoa = this.mapPoaResult(input.companyPoaResult, 'company_proof_of_address', errors);
+    const companyPoa = this.mapPoaResult(
+      input.companyPoaResult,
+      'company_proof_of_address',
+      errors,
+      input.companyPoaFingerprint,
+    );
 
     // 3. Representante legal — las 5 comprobaciones vía el builder compartido
     const directorBundle = this.buildPersonResult({
       checkPrefix: 'director_',
-      idResult: input.directorIdResult,
-      faceResult: input.directorFaceResult,
-      amlResult: input.directorAmlResult,
-      dbResult: input.directorDbResult,
-      livenessResult: input.directorLivenessResult,
+      checks: input.director,
       referencePerson: input.primaryDirector,
     });
     errors.push(...directorBundle.errors);
@@ -1032,25 +1269,24 @@ export class DiditVerificationService {
 
     // 4. Cada UBO — mismas 5 comprobaciones
     const uboBundles: PersonCheckBundle[] = [];
-    for (const group of input.ubosSettledGroups) {
+    for (const { ubo, samePersonAs, checks } of input.ubos) {
       const bundle = this.buildPersonResult({
-        checkPrefix: `ubo_${group.ubo.id}_`,
-        idResult: group.idResult,
-        faceResult: group.faceResult,
-        amlResult: group.amlResult,
-        dbResult: group.dbResult,
-        livenessResult: group.livenessResult,
-        referencePerson: group.ubo,
+        checkPrefix: `ubo_${ubo.id}_`,
+        checks,
+        referencePerson: ubo,
       });
-      errors.push(...bundle.errors);
+      // Un UBO deduplicado comparte las comprobaciones del representante: sus
+      // errores ya están registrados con el prefijo director_.
+      if (!samePersonAs) errors.push(...bundle.errors);
       uboBundles.push(bundle);
 
       keyPeople.push({
-        id: group.ubo.id,
+        id: ubo.id,
         role: 'ubo',
-        name: [group.ubo.first_name, group.ubo.last_name].filter(Boolean).join(' ') || 'Beneficiario Final',
-        position: group.ubo.position,
-        percentage: typeof group.ubo.ownership_percent === 'number' ? group.ubo.ownership_percent : Number(group.ubo.ownership_percent) || undefined,
+        name: [ubo.first_name, ubo.last_name].filter(Boolean).join(' ') || 'Beneficiario Final',
+        position: ubo.position,
+        percentage: typeof ubo.ownership_percent === 'number' ? ubo.ownership_percent : Number(ubo.ownership_percent) || undefined,
+        same_person_as: samePersonAs,
         aml: bundle.aml,
         id_verification: bundle.id_verification,
         face_match: bundle.face_match,

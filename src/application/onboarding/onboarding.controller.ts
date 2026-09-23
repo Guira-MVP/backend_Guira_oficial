@@ -3,6 +3,7 @@ import {
   Post,
   Get,
   Patch,
+  Put,
   Delete,
   Body,
   Param,
@@ -13,6 +14,7 @@ import {
   ParseUUIDPipe,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { Throttle } from '@nestjs/throttler';
 import {
   ApiTags,
   ApiBearerAuth,
@@ -22,6 +24,8 @@ import {
   ApiBody,
 } from '@nestjs/swagger';
 import { OnboardingService } from './onboarding.service';
+import { OnboardingDraftService } from './onboarding-draft.service';
+import { SaveOnboardingDraftDto } from './dto/save-onboarding-draft.dto';
 import { CreatePersonDto } from './dto/create-person.dto';
 import { CreateBusinessDto } from './dto/create-business.dto';
 import { CreateDirectorDto, CreateUboDto } from './dto/create-director-ubo.dto';
@@ -39,7 +43,42 @@ import { NotStaffGuard } from '../../core/guards/not-staff.guard';
 // (tokens móviles) no pasan por aquí porque no hay usuario que evaluar.
 @UseGuards(NotStaffGuard)
 export class OnboardingController {
-  constructor(private readonly onboardingService: OnboardingService) {}
+  constructor(
+    private readonly onboardingService: OnboardingService,
+    private readonly draftService: OnboardingDraftService,
+  ) {}
+
+  // ───────────────── Borrador (autoguardado) ─────────────────
+
+  @Get('draft')
+  @ApiOperation({ summary: 'Obtener el borrador del formulario de onboarding' })
+  getDraft(@CurrentUser() user: AuthenticatedUser) {
+    return this.draftService.getDraft(user.id);
+  }
+
+  // El formulario guarda tras pausas de escritura y al cambiar de paso (unas
+  // pocas peticiones por minuto como mucho); el límite es una red de seguridad.
+  @Put('draft')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @ApiOperation({
+    summary: 'Guardar el borrador (no envía la solicitud a revisión)',
+  })
+  @ApiResponse({ status: 409, description: 'La solicitud ya fue enviada' })
+  saveDraft(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: SaveOnboardingDraftDto,
+  ) {
+    return this.draftService.saveDraft(user.id, dto);
+  }
+
+  @Delete('draft')
+  @ApiOperation({
+    summary:
+      'Descartar el borrador y los documentos aún no enviados (p. ej. al cambiar de tipo)',
+  })
+  deleteDraft(@CurrentUser() user: AuthenticatedUser) {
+    return this.draftService.deleteDraft(user.id, { withDocuments: true });
+  }
 
   // ───────────────── KYC — Persona Natural ─────────────────
 
@@ -226,6 +265,7 @@ export class OnboardingController {
   // ───────────────── Documentos / Storage ─────────────────
 
   @Post('documents/upload')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @UseInterceptors(FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Subir documento de identidad o empresa' })
@@ -252,6 +292,10 @@ export class OnboardingController {
           enum: ['person', 'business', 'director', 'ubo'],
         },
         subject_id: { type: 'string', format: 'uuid' },
+        draft_key: {
+          type: 'string',
+          description: "UBO aún no guardado: 'ubo:<client_uid>'",
+        },
       },
       required: ['file', 'document_type', 'subject_type'],
     },
@@ -265,15 +309,33 @@ export class OnboardingController {
     @CurrentUser() user: AuthenticatedUser,
     @UploadedFile() file: Express.Multer.File,
     @Body()
-    body: { document_type: string; subject_type: string; subject_id?: string },
+    body: {
+      document_type: string;
+      subject_type: string;
+      subject_id?: string;
+      draft_key?: string;
+    },
   ) {
     return this.onboardingService.uploadDocument(
       user.id,
       file,
       body.document_type,
       body.subject_type,
-      body.subject_id,
+      body.subject_id || undefined,
+      body.draft_key || undefined,
     );
+  }
+
+  @Delete('documents/:id')
+  @ApiOperation({
+    summary: 'Quitar un documento del borrador (solo si aún no fue enviado)',
+  })
+  @ApiResponse({ status: 409, description: 'El documento ya fue enviado' })
+  deleteDraftDocument(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.onboardingService.deleteDraftDocument(user.id, id);
   }
 
   @Get('documents')

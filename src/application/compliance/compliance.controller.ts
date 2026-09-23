@@ -195,6 +195,35 @@ export class AdminComplianceController {
     return this.actionsService.getOnboardingByUserId(userId);
   }
 
+  @Get('onboarding-drafts')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({
+    summary:
+      'Clientes con el formulario de onboarding a medias (borrador aún no enviado)',
+  })
+  @ApiQuery({ name: 'limit', required: false, description: 'Máx 200' })
+  @ApiQuery({ name: 'offset', required: false })
+  listOnboardingDrafts(
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    const parsedLimit = limit ? Math.min(parseInt(limit, 10) || 200, 200) : 200;
+    const parsedOffset = offset ? Math.max(parseInt(offset, 10) || 0, 0) : 0;
+    return this.actionsService.listOnboardingDrafts(parsedLimit, parsedOffset);
+  }
+
+  @Get('users/:userId/onboarding-draft')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({
+    summary:
+      'Borrador del formulario de onboarding de un usuario: datos cargados, faltantes y documentos',
+  })
+  getOnboardingDraftByUser(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+  ) {
+    return this.actionsService.getOnboardingDraftByUserId(userId);
+  }
+
   @Get('users/:userId/onboarding/export-zip')
   @Roles('staff', 'admin', 'super_admin')
   @ApiOperation({

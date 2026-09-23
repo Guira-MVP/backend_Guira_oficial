@@ -1063,25 +1063,66 @@ export class SuppliersService {
     if (dto.wallet_address !== undefined)
       bankFieldsToMerge.wallet_address = dto.wallet_address;
 
-    // Si cambia la dirección, el veredicto guardado dejó de describirla: se
-    // invalida en lugar de arrastrarlo, porque una marca de riesgo (o su
-    // ausencia) que apunta a otra dirección es peor que no tener ninguna.
-    // No se re-screenea aquí a propósito: la liquidation address de Bridge
-    // sigue apuntando a la dirección original (ver el bloque de sincronización
-    // más abajo), así que screenear la nueva daría un veredicto sobre una
-    // dirección que todavía no recibe fondos.
+    // Si cambia la dirección o la red, se screenea la nueva AHORA, con la
+    // misma regla que al crear. No puede esperar al re-screening periódico:
+    // wallet_to_wallet paga directamente a `bank_details.wallet_address`, así
+    // que la dirección nueva recibe fondos desde el momento en que se guarda.
+    // Esperar al cron dejaba una ventana de hasta un intervalo completo para
+    // registrar una wallet limpia y cambiarla después por una sancionada.
+    const existingBankDetails =
+      (existing.bank_details as Record<string, unknown> | null) ?? {};
+    const previousAddress = existingBankDetails.wallet_address as string | undefined;
+    const previousNetwork = (
+      (existingBankDetails.wallet_network as string | undefined) ?? 'solana'
+    ).toLowerCase();
+    const nextAddress = dto.wallet_address ?? previousAddress;
+    const nextNetwork = (dto.wallet_network ?? previousNetwork).toLowerCase();
+
     if (
-      dto.wallet_address !== undefined &&
-      dto.wallet_address !==
-        (existing.bank_details as Record<string, unknown> | null)?.wallet_address
+      existing.payment_rail === 'crypto' &&
+      nextAddress &&
+      (nextAddress !== previousAddress || nextNetwork !== previousNetwork)
     ) {
-      bankFieldsToMerge.wallet_screening = {
-        schema_version: 1,
-        status: 'Skipped',
-        decision: 'allow',
-        screened_at: new Date().toISOString(),
-        skip_reason: 'La dirección se modificó después de la última revisión',
-      };
+      const screening = await this.walletScreening.screenBeneficiaryWallet({
+        walletAddress: nextAddress,
+        walletNetwork: nextNetwork,
+        userId,
+      });
+
+      if (screening.decision === 'block') {
+        // Nada que revertir: todavía no se escribió nada. Se deja rastro
+        // porque el intento no quedaría registrado en ningún otro sitio.
+        await this.supabase.from('audit_logs').insert({
+          performed_by: userId,
+          role: 'client',
+          action: 'SUPPLIER_WALLET_SCREENING_BLOCKED',
+          table_name: 'suppliers',
+          record_id: supplierId,
+          new_values: { wallet_network: nextNetwork, screening },
+          reason: 'Cambio de dirección cripto rechazado por screening AML',
+          source: 'api',
+        });
+
+        this.logger.warn(
+          `Cambio de dirección cripto bloqueado para el proveedor ${supplierId} (usuario ${userId}): ` +
+            `sanciones=${screening.sanctions_hit ?? false}, severidad=${screening.severity ?? 'n/a'}`,
+        );
+
+        throw new BadRequestException(
+          'No se puede registrar esta dirección: la revisión de cumplimiento detectó que está ' +
+            'vinculada a sanciones o a actividad de riesgo crítico. Verifica la dirección con el ' +
+            'beneficiario o contacta con soporte.',
+        );
+      }
+
+      // El veredicto anterior se conserva aparte, igual que en el
+      // re-screening, para que compliance vea qué dirección se reemplazó.
+      if (existingBankDetails.wallet_screening) {
+        const { rescreen_claimed_at: _claim, ...cleanPrevious } =
+          existingBankDetails.wallet_screening as WalletScreeningVerdict;
+        bankFieldsToMerge.wallet_screening_previous = cleanPrevious;
+      }
+      bankFieldsToMerge.wallet_screening = screening;
     }
     if (dto.wallet_network !== undefined)
       bankFieldsToMerge.wallet_network = dto.wallet_network.toLowerCase();

@@ -75,6 +75,14 @@ export interface ComplianceReviewUpdatedPayload {
   action: 'updated';
 }
 
+export interface OnboardingDraftUpdatedPayload {
+  user_id: string;
+  type: 'personal' | 'company' | null;
+  progress_pct: number | null;
+  updated_at: string;
+  action: 'saved' | 'deleted';
+}
+
 // ── Gateway ───────────────────────────────────────────────────────
 
 @WebSocketGateway({
@@ -199,6 +207,14 @@ export class AdminGateway
     this.logger.log(
       `WS emitido: compliance_review_created (id: ${payload.id}, subject_type: ${payload.subject_type})`,
     );
+  }
+
+  /**
+   * Borrador de onboarding guardado o descartado. Sin PII: el staff vuelve a
+   * pedir el detalle por REST si tiene abierta la ficha de ese usuario.
+   */
+  emitOnboardingDraftUpdated(payload: OnboardingDraftUpdatedPayload) {
+    this.server.to('staff').emit('onboarding_draft_updated', payload);
   }
 
   /** Caso de compliance actualizado (asignación, escalado, cierre, etc.). */

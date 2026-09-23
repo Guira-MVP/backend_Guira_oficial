@@ -29,6 +29,15 @@ export const DIDIT_POA_MAX_BYTES = 15 * 1024 * 1024;
  */
 export const DIDIT_LIVENESS_DECLINE_THRESHOLD = 50;
 
+/**
+ * Antigüedad máxima de una comprobación 'Approved' para reutilizarla en una
+ * re-ejecución forzada. Además de la antigüedad se exige que las entradas
+ * (documentos y datos de la persona) sean idénticas. El tope existe sobre
+ * todo por el AML: las listas de sanciones cambian, y un "limpio" de hace
+ * meses no debe seguir pasando por nuevo.
+ */
+export const DIDIT_REUSE_APPROVED_MAX_AGE_DAYS = 30;
+
 /** face-match no acepta PDF — solo estos formatos de imagen. */
 export const DIDIT_FACE_MATCH_ACCEPTED_MIME = new Set([
   'image/tiff',

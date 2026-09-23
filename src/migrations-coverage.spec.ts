@@ -25,6 +25,9 @@ const REQUIRED_DB_OBJECTS: Array<{ object: string; pattern: RegExp }> = [
   { object: 'setting WALLET_RESCREENING_BATCH_SIZE', pattern: /'WALLET_RESCREENING_BATCH_SIZE'/ },
   { object: 'tabla private.corporate_signup_allowlist', pattern: /create table[^;]*corporate_signup_allowlist/i },
   { object: 'columna profiles.phone en handle_new_user', pattern: /function public\.handle_new_user[\s\S]*raw_user_meta_data ->> 'phone'/i },
+  { object: 'tabla onboarding_drafts', pattern: /create table[^;]*onboarding_drafts/i },
+  { object: 'columna documents.draft_key', pattern: /alter table public\.documents add column[^;]*draft_key/i },
+  { object: 'columna documents.is_draft', pattern: /alter table public\.documents add column[^;]*is_draft/i },
 ];
 
 describe('migrations/ cubre los objetos de base de datos que usa el backend', () => {

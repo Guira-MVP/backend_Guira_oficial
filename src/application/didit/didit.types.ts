@@ -107,7 +107,22 @@ export interface DiditVerdictWarning {
   description?: string;
 }
 
-export interface DiditIdVerificationResult {
+/**
+ * Metadatos comunes a cada comprobación, para poder reutilizarla en una
+ * re-ejecución forzada sin volver a pagarla (ver `reuseOr` en
+ * DiditVerificationService). Los veredictos anteriores a estos campos no los
+ * traen, y en ese caso la comprobación simplemente se vuelve a correr.
+ */
+export interface DiditCheckMeta {
+  /** Huella (sha256) de las entradas que se enviaron: documentos + datos de la persona. */
+  input_fingerprint?: string;
+  /** Cuándo se llamó de verdad a Didit. Un resultado reutilizado conserva la fecha original. */
+  checked_at?: string;
+  /** `true` si este resultado se copió de una corrida anterior en lugar de volver a llamar a Didit. */
+  reused?: boolean;
+}
+
+export interface DiditIdVerificationResult extends DiditCheckMeta {
   status: DiditCheckStatus;
   request_id?: string;
   document_number_last4?: string;
@@ -119,7 +134,7 @@ export interface DiditIdVerificationResult {
   mismatches: string[];
 }
 
-export interface DiditFaceMatchResult {
+export interface DiditFaceMatchResult extends DiditCheckMeta {
   status: DiditCheckStatus;
   request_id?: string;
   score?: number | null;
@@ -127,7 +142,7 @@ export interface DiditFaceMatchResult {
   skip_reason?: string;
 }
 
-export interface DiditAmlResult {
+export interface DiditAmlResult extends DiditCheckMeta {
   status: DiditCheckStatus;
   request_id?: string;
   score?: number | null;
@@ -136,7 +151,7 @@ export interface DiditAmlResult {
   warnings: DiditVerdictWarning[];
 }
 
-export interface DiditDatabaseValidationResult {
+export interface DiditDatabaseValidationResult extends DiditCheckMeta {
   status: DiditCheckStatus;
   request_id?: string;
   match_type?: 'full_match' | 'partial_match' | 'no_match' | null;
@@ -144,7 +159,7 @@ export interface DiditDatabaseValidationResult {
   skip_reason?: string;
 }
 
-export interface DiditLivenessResult {
+export interface DiditLivenessResult extends DiditCheckMeta {
   status: DiditCheckStatus;
   request_id?: string;
   score?: number | null;
@@ -152,7 +167,7 @@ export interface DiditLivenessResult {
   skip_reason?: string;
 }
 
-export interface DiditPoaResult {
+export interface DiditPoaResult extends DiditCheckMeta {
   status: DiditCheckStatus;
   request_id?: string;
   issuer?: string | null;
@@ -166,6 +181,11 @@ export interface DiditKeyPersonResult {
   name: string;
   position?: string;
   percentage?: number;
+  /**
+   * Id del representante legal cuando este UBO es la misma persona. Sus
+   * resultados son los del representante: no se pagan dos veces.
+   */
+  same_person_as?: string;
   aml: DiditAmlResult | null;
   id_verification?: DiditIdVerificationResult | null;
   face_match?: DiditFaceMatchResult | null;

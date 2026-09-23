@@ -176,6 +176,17 @@ export class CreateDirectorDto {
 }
 
 export class CreateUboDto {
+  /**
+   * Identificador estable del UBO en el formulario del cliente (no es una
+   * columna de business_ubos). Los documentos que subió durante el borrador,
+   * antes de que existiera esta fila, quedaron con draft_key='ubo:<client_uid>'
+   * y se reclaman al guardar el UBO.
+   */
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  client_uid?: string;
+
   @ApiProperty({ example: 'Ana' })
   @Transform(trimString)
   @IsString()

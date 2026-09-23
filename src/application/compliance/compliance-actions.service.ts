@@ -254,6 +254,117 @@ export class ComplianceActionsService {
     };
   }
 
+  // ── BORRADORES DE ONBOARDING (formulario aún no enviado) ──────────
+
+  /**
+   * Clientes con un formulario de onboarding a medias, para que el staff los
+   * guíe. Sin datos del formulario: solo progreso y contacto.
+   */
+  async listOnboardingDrafts(limit = 200, offset = 0) {
+    const { data, error, count } = await this.supabase
+      .from('onboarding_drafts')
+      .select(
+        'user_id, type, step, progress_pct, missing_fields, updated_at, created_at, profiles!inner(id, email, full_name, phone, onboarding_status)',
+        { count: 'exact' },
+      )
+      .order('updated_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+    if (error) throw new BadRequestException(error.message);
+
+    return {
+      data: (data ?? []).map((row: any) => ({
+        user_id: row.user_id,
+        type: row.type,
+        step: row.step,
+        progress_pct: row.progress_pct,
+        missing_count: Array.isArray(row.missing_fields) ? row.missing_fields.length : 0,
+        updated_at: row.updated_at,
+        created_at: row.created_at,
+        profile: row.profiles ?? null,
+      })),
+      total: count ?? 0,
+    };
+  }
+
+  /**
+   * Borrador del formulario de un usuario, con el mismo formato de
+   * `application_data` que el expediente enviado para reutilizar la vista.
+   */
+  async getOnboardingDraftByUserId(userId: string) {
+    const { data: draft, error } = await this.supabase
+      .from('onboarding_drafts')
+      .select('user_id, type, step, data, missing_fields, progress_pct, created_at, updated_at')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error) throw new BadRequestException(error.message);
+    if (!draft) {
+      throw new NotFoundException('Este usuario no tiene un borrador de onboarding.');
+    }
+
+    const formData = (draft.data ?? {}) as Record<string, any>;
+    const applicationData =
+      draft.type === 'personal'
+        ? this.mapKycToFormData({ people: formData })
+        : this.mapKybToFormData({ businesses: this.draftToBusinessRow(formData) });
+
+    const [profile, documents] = await Promise.all([
+      this.getProfileSummaryWithPhone(userId),
+      this.getSignedDocumentsForUser(userId, { activeOnly: true }),
+    ]);
+
+    return {
+      user_id: userId,
+      onboarding_type: draft.type as 'personal' | 'company',
+      step: draft.step,
+      progress_pct: draft.progress_pct,
+      missing_fields: draft.missing_fields ?? [],
+      application_data: applicationData,
+      profile,
+      documents: documents.map((doc: any) => ({
+        ...doc,
+        // Los UBOs del borrador aún no tienen fila: se identifican por draft_key,
+        // que coincide con el `id` que les asigna draftToBusinessRow.
+        subject_id: doc.subject_id ?? doc.draft_key ?? null,
+      })),
+      created_at: draft.created_at,
+      updated_at: draft.updated_at,
+    };
+  }
+
+  /** Adapta las claves planas del formulario KYB a la forma de la fila de businesses. */
+  private draftToBusinessRow(d: Record<string, any>) {
+    const ubos = Array.isArray(d.ubos) ? d.ubos : [];
+    return {
+      ...d,
+      business_directors: [
+        {
+          first_name: d.legal_rep_first_name,
+          last_name: d.legal_rep_last_name,
+          position: d.legal_rep_position,
+          id_type: d.legal_rep_id_type,
+          id_number: d.legal_rep_id_number,
+          email: d.legal_rep_email,
+          nationality: d.legal_rep_nationality,
+          is_pep: d.legal_rep_is_pep,
+          state: d.legal_rep_state,
+        },
+      ],
+      business_ubos: ubos.map((u: any) => ({
+        ...u,
+        id: u?.client_uid ? `ubo:${u.client_uid}` : undefined,
+      })),
+    };
+  }
+
+  private async getProfileSummaryWithPhone(userId: string) {
+    const { data: prof } = await this.supabase
+      .from('profiles')
+      .select('id, email, full_name, phone, onboarding_status')
+      .eq('id', userId)
+      .maybeSingle();
+    return prof;
+  }
+
   /** Perfil resumido usado por getReviewDetail y getOnboardingByUserId. */
   private async getProfileSummary(userId: string) {
     const { data: prof } = await this.supabase
@@ -268,12 +379,17 @@ export class ComplianceActionsService {
    * Documentos más recientes por tipo, con signed URLs — usado por
    * getReviewDetail y getOnboardingByUserId.
    */
-  private async getSignedDocumentsForUser(userId: string) {
-    const { data: docs } = await this.supabase
+  private async getSignedDocumentsForUser(
+    userId: string,
+    opts: { activeOnly?: boolean } = {},
+  ) {
+    let query = this.supabase
       .from('documents')
       .select('*')
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
+    if (opts.activeOnly) query = query.eq('status', 'pending');
+    const { data: docs } = await query;
 
     // La clave incluye subject_type + subject_id: representante legal y cada
     // UBO comparten user_id (quien sube es siempre el solicitante) y pueden
@@ -282,7 +398,8 @@ export class ComplianceActionsService {
     // personas en uno solo, ocultando los de los UBOs en el panel de staff.
     const latestDocsMap = new Map<string, any>();
     for (const doc of docs ?? []) {
-      const typeKey = `${doc.subject_type ?? 'self'}:${doc.subject_id ?? 'none'}:${doc.document_type || doc.description || 'unknown_document'}`;
+      // draft_key distingue a los UBOs del borrador que todavía no tienen fila.
+      const typeKey = `${doc.subject_type ?? 'self'}:${doc.subject_id ?? doc.draft_key ?? 'none'}:${doc.document_type || doc.description || 'unknown_document'}`;
       if (!latestDocsMap.has(typeKey)) latestDocsMap.set(typeKey, doc);
     }
 
