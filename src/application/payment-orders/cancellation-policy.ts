@@ -60,6 +60,12 @@ const FIAT_IN_BO_FLOWS = [
   'fiat_bo_to_bridge_wallet',
 ] as const;
 
+/**
+ * Flujos donde el cliente deposita en una cuenta PSAV: son los que tienen plazo
+ * de depósito con cancelación automática (payment_orders.deposit_expires_at).
+ */
+export const PSAV_DEPOSIT_FLOWS: readonly string[] = FIAT_IN_BO_FLOWS;
+
 const CRYPTO_IN_FLOWS = [
   'wallet_to_wallet',
   'wallet_to_world',

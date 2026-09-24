@@ -701,6 +701,16 @@ export class AdminPaymentOrdersController {
     return this.paymentOrdersService.approveOrder(id, user.id, dto);
   }
 
+  @Get(':id/margin-estimate')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({
+    summary:
+      'Margen estimado de un bolivia_to_world con las tasas actuales (antes de aprobar)',
+  })
+  getMarginEstimate(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.paymentOrdersService.getBoliviaToWorldMarginEstimate(id);
+  }
+
   // ── Puerta de revisión de staff (pending_review) ──
   // Rutas propias en vez de extender :id/approve, que exige status
   // 'deposit_received' Y requires_psav — condiciones que 3 de los 4 flujos con
