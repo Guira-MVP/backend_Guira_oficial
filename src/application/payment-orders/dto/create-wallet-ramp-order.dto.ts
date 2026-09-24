@@ -256,6 +256,20 @@ export class CreateWalletRampOrderDto {
   @Min(0)
   exchange_rate_applied?: number;
 
+  // ── bridge_wallet_to_fiat_us con destino no-USD (Fixed Outputs) ──
+  // Lo que recibe el proveedor, en la divisa destino. Bridge lo garantiza: el
+  // servidor recalcula los USDC a debitar y `amount` solo sirve para comprobar
+  // que el cliente aceptó ese débito. Si no llega, el destino se deriva de `amount`.
+  @ApiPropertyOptional({
+    description:
+      'Monto que recibe el proveedor en la divisa destino (bridge_wallet_to_fiat_us no-USD).',
+    example: 1000,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0.01)
+  destination_amount?: number;
+
   // ── Solicitud de revisión por exceso de límite ──
   // Presente solo cuando el monto supera el límite máximo y el cliente envía justificación.
   @ApiPropertyOptional({

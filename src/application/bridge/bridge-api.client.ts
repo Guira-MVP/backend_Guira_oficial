@@ -2,6 +2,33 @@ import { Injectable, BadGatewayException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 /**
+ * Bridge rechazó un Transfer Fixed Outputs porque `source.amount` no alcanza
+ * para el `destination.amount` con la tasa actual. Solo lleva el mínimo
+ * exigido (un número), así que no expone nada del cuerpo del error (ALTO-02).
+ */
+export class BridgeSourceAmountTooLowError extends BadGatewayException {
+  constructor(public readonly minimumSourceAmount: number) {
+    super(
+      `Bridge exige al menos ${minimumSourceAmount} USDC para el monto de destino con la tasa actual.`,
+    );
+  }
+}
+
+/** Extrae el mínimo de "must be at least 112.67 for destination amount …". */
+function parseSourceAmountTooLow(rawBody: string): number | null {
+  try {
+    const key = (JSON.parse(rawBody) as { source?: { key?: Record<string, unknown> } })
+      ?.source?.key;
+    const msg = key?.['source.amount'];
+    if (typeof msg !== 'string') return null;
+    const m = msg.match(/must be at least\s+([\d.]+)/i);
+    return m ? parseFloat(m[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Cliente HTTP centralizado y tipado para Bridge API v0.
  * Todas las llamadas a Bridge pasan por aquí.
  */
@@ -86,6 +113,10 @@ export class BridgeApiClient {
     if (!res.ok) {
       const err = await res.text();
       this.logger.error(`Bridge POST ${path} failed [${res.status}]: ${this.redactSensitiveError(err)}`);
+      if (res.status === 400) {
+        const minimum = parseSourceAmountTooLow(err);
+        if (minimum != null) throw new BridgeSourceAmountTooLowError(minimum);
+      }
       // ALTO-02: No propagar el cuerpo crudo del error de Bridge al cliente
       // (puede contener IDs internos, datos KYC o detalles de arquitectura).
       // El detalle completo queda en logger.error de arriba para debugging.

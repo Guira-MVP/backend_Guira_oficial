@@ -146,6 +146,15 @@ export interface FiatUsExecContext extends ExecContextBase {
   external_account_local_id: string;
   /** En minúscula. */
   destination_currency: string;
+  /**
+   * Presente solo en destinos no-USD creados con Fixed Outputs. Sin él (USD o
+   * expedientes previos al cambio) el Transfer se crea con `amount` en origen.
+   */
+  fx_mode?: 'fixed_output';
+  /** Monto garantizado al proveedor, en la divisa destino. */
+  destination_amount?: number;
+  /** Tasa cotizada al cliente (USD_X.effective_rate, con spread). */
+  client_rate?: number;
 }
 
 export interface PeruExecContext extends ExecContextBase {
