@@ -571,6 +571,8 @@ export class FeesService {
     fee_type: 'percent' | 'fixed' | 'mixed';
     fee_percent: number;
     fee_fixed: number;
+    min_fee: number;
+    max_fee: number;
   } | null> {
     const today = new Date().toISOString().split('T')[0];
     const normalizedCurrency = currency.toLowerCase();
@@ -578,7 +580,7 @@ export class FeesService {
 
     const { data: override } = await this.supabase
       .from('customer_fee_overrides')
-      .select('fee_type, fee_percent, fee_fixed')
+      .select('fee_type, fee_percent, fee_fixed, min_fee, max_fee')
       .eq('user_id', userId)
       .eq('operation_type', operationType)
       .eq('payment_rail', normalizedPaymentRail)
@@ -591,7 +593,7 @@ export class FeesService {
     const row = override ?? (
       await this.supabase
         .from('fees_config')
-        .select('fee_type, fee_percent, fee_fixed')
+        .select('fee_type, fee_percent, fee_fixed, min_fee, max_fee')
         .eq('operation_type', operationType)
         .eq('payment_rail', normalizedPaymentRail)
         .eq('currency', normalizedCurrency)
@@ -605,6 +607,8 @@ export class FeesService {
       fee_type: row.fee_type as 'percent' | 'fixed' | 'mixed',
       fee_percent: parseFloat(row.fee_percent ?? '0'),
       fee_fixed: parseFloat(row.fee_fixed ?? '0'),
+      min_fee: parseFloat(row.min_fee ?? '0'),
+      max_fee: parseFloat(row.max_fee ?? '0'),
     };
   }
 

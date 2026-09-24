@@ -2716,7 +2716,7 @@ export class WebhooksService {
     const { data: paymentOrder } = await this.supabase
       .from('payment_orders')
       .select(
-        'id, user_id, wallet_id, flow_type, destination_type, amount, fee_amount, amount_destination, currency, source_currency, destination_currency, deposit_reference_code, receipt_url',
+        'id, user_id, wallet_id, flow_type, destination_type, amount, fee_amount, amount_destination, currency, source_currency, destination_currency, deposit_reference_code, receipt_url, fx_mode',
       )
       .eq('bridge_transfer_id', bridgeTransferId)
       .in('status', [
@@ -2823,6 +2823,36 @@ export class WebhooksService {
       } else {
         // Comportamiento original: marcar orden como completed
         const initialAmount = parseFloat(paymentOrder.amount ?? '0');
+        const isFixedOutput = paymentOrder.fx_mode === 'fixed_output';
+        const rawDevFxFee = receipt?.developer_exchange_fee as
+          | { amount?: string; currency?: string }
+          | undefined;
+        const developerExchangeFee =
+          rawDevFxFee?.amount != null
+            ? {
+                amount: parseFloat(rawDevFxFee.amount),
+                currency: (rawDevFxFee.currency ?? '').toUpperCase() || null,
+              }
+            : null;
+
+        // Fixed Outputs garantiza el destino: si el recibo dice otra cosa hay
+        // que revisarlo con Bridge antes de que el cliente lo reclame.
+        if (
+          isFixedOutput &&
+          receiptFinalAmount != null &&
+          Math.abs(receiptFinalAmount - Number(paymentOrder.amount_destination ?? 0)) > 0.01
+        ) {
+          this.logger.error(
+            `⚠️ Orden ${paymentOrder.id} (Fixed Outputs): Bridge entregó ${receiptFinalAmount} ` +
+              `${paymentOrder.destination_currency} pero el monto garantizado era ${paymentOrder.amount_destination}.`,
+          );
+          await this.notifyAdminStaff(
+            'Monto de destino distinto al garantizado',
+            `La orden ${paymentOrder.id} debía entregar ${paymentOrder.amount_destination} ${paymentOrder.destination_currency} ` +
+              `y Bridge reporta ${receiptFinalAmount}. Revisar con Bridge.`,
+            paymentOrder.id,
+          );
+        }
         await this.supabase
           .from('payment_orders')
           .update({
@@ -2856,12 +2886,25 @@ export class WebhooksService {
             // sobreescribir con la tasa real de Bridge como fuente de verdad.
             // Ambos flujos congelan una tasa estimada al crear la orden; sin esto
             // el comprobante PDF quedaría con esa estimación para siempre.
+            // Excepción: Fixed Outputs. Ahí el destino está garantizado y la tasa
+            // del expediente es la cotizada; receipt.exchange_rate es destino /
+            // source original (incluye la comisión), así que se guarda aparte.
             ...(receiptExchangeRate != null &&
+            !isFixedOutput &&
             ['bridge_wallet_to_fiat_us', 'wallet_to_world'].includes(
               paymentOrder.flow_type,
             ) &&
             (paymentOrder.destination_currency ?? '').toUpperCase() !== 'USD'
               ? { exchange_rate_applied: receiptExchangeRate }
+              : {}),
+            ...(isFixedOutput && receiptExchangeRate != null
+              ? { receipt_exchange_rate: receiptExchangeRate }
+              : {}),
+            ...(isFixedOutput && developerExchangeFee
+              ? {
+                  developer_exchange_fee_amount: developerExchangeFee.amount,
+                  developer_exchange_fee_currency: developerExchangeFee.currency,
+                }
               : {}),
             // Guardar metadata histórica si fue on-ramp flexible (amount original 0)
             ...(initialAmount === 0 && receipt?.initial_amount

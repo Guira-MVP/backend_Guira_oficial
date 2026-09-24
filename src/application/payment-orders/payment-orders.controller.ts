@@ -711,6 +711,16 @@ export class AdminPaymentOrdersController {
     return this.paymentOrdersService.getBoliviaToWorldMarginEstimate(id);
   }
 
+  @Get(':id/fx-margin')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({
+    summary:
+      'Margen FX de un bridge_wallet_to_fiat_us no-USD (Fixed Outputs) con la tasa actual',
+  })
+  getFxMargin(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.paymentOrdersService.getFiatUsFxMarginEstimate(id);
+  }
+
   // ── Puerta de revisión de staff (pending_review) ──
   // Rutas propias en vez de extender :id/approve, que exige status
   // 'deposit_received' Y requires_psav — condiciones que 3 de los 4 flujos con
