@@ -477,13 +477,19 @@ describe('PaymentOrdersService.cancelOrderByStaff', () => {
         audit_logs: createTableMock({ insert: { data: null, error: null } }),
         activity_logs: createTableMock({ insert: { data: null, error: null } }),
         notifications: createTableMock({ insert: { data: null, error: null } }),
+        bridge_transfers: createTableMock({ update: { data: null, error: null } }),
       }),
     };
   };
 
   it('cancela desde deposit_received y marca el actor como staff', async () => {
+    // En deposit_received bolivia_to_world todavía no tiene Transfer en Bridge.
     const { supabase, paymentOrders } = staffScenario(
-      buildOrder({ status: 'deposit_received', flow_type: 'bolivia_to_world' }),
+      buildOrder({
+        status: 'deposit_received',
+        flow_type: 'bolivia_to_world',
+        bridge_transfer_id: null,
+      }),
     );
     const service = createService(supabase);
 
@@ -501,6 +507,43 @@ describe('PaymentOrdersService.cancelOrderByStaff', () => {
       cancelled_by_role: 'staff',
       cancellation_reason: 'Cliente pidió anular por teléfono',
     });
+  });
+
+  it('bolivia_to_world en processing: cancela el Transfer en Bridge antes de cancelar la orden', async () => {
+    const { supabase, paymentOrders } = staffScenario(
+      buildOrder({ status: 'processing', flow_type: 'bolivia_to_world' }),
+    );
+    const bridgeApi = { delete: jest.fn().mockResolvedValue({}) };
+    const service = createService(supabase, bridgeApi);
+
+    const result = await service.cancelOrderByStaff('order-1', 'staff-1', {
+      reason: 'Beneficiario incorrecto',
+    });
+
+    expect(bridgeApi.delete).toHaveBeenCalledWith('/v0/transfers/bt-1');
+    expect(result.status).toBe('cancelled');
+    expect(
+      paymentOrders.chains.flatMap((c: any) => c.update.mock.calls).length,
+    ).toBe(1);
+  });
+
+  it('bolivia_to_world en processing: si Bridge rechaza el DELETE, la orden sigue activa', async () => {
+    const { supabase, paymentOrders } = staffScenario(
+      buildOrder({ status: 'processing', flow_type: 'bolivia_to_world' }),
+    );
+    const bridgeApi = {
+      delete: jest.fn().mockRejectedValue(new Error('409 not cancellable')),
+    };
+    const service = createService(supabase, bridgeApi);
+
+    await expect(
+      service.cancelOrderByStaff('order-1', 'staff-1', { reason: 'x' }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'BRIDGE_DELETE_FAILED' }),
+    });
+    expect(
+      paymentOrders.chains.flatMap((c: any) => c.update.mock.calls),
+    ).toHaveLength(0);
   });
 
   it('no permite cancelar un expediente ya enviado', async () => {

@@ -796,6 +796,20 @@ export class PaymentOrdersService {
       throw new NotFoundException('Cuenta externa de destino no encontrada');
     }
 
+    // La divisa destino la define la cuenta externa: Bridge rechaza una divisa
+    // que no coincide con el riel/cuenta, pero recién AL APROBAR, con el depósito
+    // del cliente ya hecho. Se valida aquí para cortar antes de que deposite.
+    if (
+      dto.destination_currency &&
+      extAccount.currency &&
+      dto.destination_currency.toLowerCase() !==
+        String(extAccount.currency).toLowerCase()
+    ) {
+      throw new BadRequestException(
+        `La divisa de destino (${dto.destination_currency.toUpperCase()}) no coincide con la de la cuenta del beneficiario (${String(extAccount.currency).toUpperCase()}).`,
+      );
+    }
+
     // Bloquear si ya existe un expediente activo hacia la misma divisa destino
     const destinationCurrency = dto.destination_currency ?? extAccount.currency;
     await this.assertNoConflictingBoliviaToWorldOrder(
@@ -810,7 +824,7 @@ export class PaymentOrdersService {
     const supplierQuery = this.supabase
       .from('suppliers')
       .select(
-        'bank_details, bridge_liquidation_address_id, payment_rail, compliance_status',
+        'id, bank_details, bridge_external_account_id, bridge_liquidation_address_id, payment_rail, compliance_status',
       )
       .eq('user_id', userId);
 
@@ -825,6 +839,15 @@ export class PaymentOrdersService {
     if (!supplier) {
       throw new NotFoundException(
         'No se encontró el proveedor asociado a la cuenta de destino seleccionada.',
+      );
+    }
+
+    // El proveedor y la cuenta de destino deben ser la misma pareja: si no, el
+    // control de compliance se haría sobre un proveedor y el pago saldría hacia
+    // la cuenta de otro (con el riel y la comisión del primero).
+    if (supplier.bridge_external_account_id !== extAccount.id) {
+      throw new BadRequestException(
+        'La cuenta de destino no corresponde al proveedor seleccionado.',
       );
     }
 
@@ -945,7 +968,9 @@ export class PaymentOrdersService {
         destination_type: 'external_account',
         destination_currency: destinationCurrency,
         external_account_id: dto.external_account_id,
-        supplier_id: dto.supplier_id ?? null,
+        // El proveedor resuelto (no solo el del DTO): approveOrder lo exige para
+        // crear el Transfer, y sin él la orden quedaría varada tras el depósito.
+        supplier_id: supplier.id,
         destination_bank_name: extAccount.bank_name,
         destination_account_holder:
           extAccount.account_name ??
@@ -6422,10 +6447,20 @@ export class PaymentOrdersService {
         ...(dto.receipt_url ? { receipt_url: dto.receipt_url } : {}),
       })
       .eq('id', orderId)
+      // Compare-and-set: si dos miembros del staff aprueban a la vez, solo uno
+      // reclama la orden y crea el Transfer; el otro recibe ORDER_STATE_CHANGED.
+      .eq('status', 'deposit_received')
       .select()
-      .single();
+      .maybeSingle();
 
     if (error) throwDbError(error);
+    if (!updated) {
+      throw new ConflictException({
+        code: 'ORDER_STATE_CHANGED',
+        message:
+          'Este expediente ya fue aprobado o cambió de estado. Recarga para ver su estado actual.',
+      });
+    }
 
     // Audit log
     const approveActorRole = await this.getActorRole(actorId);
@@ -7235,6 +7270,35 @@ export class PaymentOrdersService {
     const decision = evaluateStaffCancellation(order.status);
     if (!decision.allowed) {
       throw this.buildCancellationError(decision);
+    }
+
+    // Flujos PSAV con Transfer en Bridge (bolivia_to_world tras aprobar,
+    // fiat_bo on-ramp): el Transfer se cancela en Bridge ANTES de cancelar en
+    // Guira. Si queda vivo y el staff (u otro) deposita los USDC, el pago sale
+    // igual con la orden marcada como cancelada. Bridge solo acepta el DELETE
+    // en awaiting_funds; si lo rechaza, los fondos ya están en camino.
+    if (
+      order.bridge_transfer_id &&
+      PSAV_DEPOSIT_FLOWS.includes(order.flow_type ?? '')
+    ) {
+      try {
+        await this.bridgeApi.delete(
+          `/v0/transfers/${order.bridge_transfer_id}`,
+        );
+      } catch (err) {
+        this.logger.error(
+          `❌ Bridge rechazó cancelar el transfer ${order.bridge_transfer_id} (orden ${orderId}): ${err instanceof Error ? err.message : String(err)}`,
+        );
+        throw new ConflictException({
+          code: 'BRIDGE_DELETE_FAILED',
+          message:
+            'Bridge no permite cancelar la transferencia: es probable que ya haya recibido los fondos. El expediente sigue activo; revisa el Transfer en Bridge antes de continuar.',
+        });
+      }
+      await this.supabase
+        .from('bridge_transfers')
+        .update({ status: 'cancelled', bridge_state: 'canceled' })
+        .eq('bridge_transfer_id', order.bridge_transfer_id);
     }
 
     // Compare-and-set, igual que en la cancelación de cliente: si el webhook

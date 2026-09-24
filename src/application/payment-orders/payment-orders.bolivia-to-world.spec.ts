@@ -27,6 +27,9 @@ describe('PaymentOrdersService — bolivia_to_world (Fixed Outputs)', () => {
     opts: {
       supplier?: Record<string, unknown>;
       order?: Record<string, unknown>;
+      extAccount?: Record<string, unknown>;
+      /** El compare-and-set de la aprobación no encuentra fila (otro staff ganó). */
+      casLost?: boolean;
     } = {},
   ) {
     const inserts: Record<string, any[]> = {};
@@ -36,12 +39,13 @@ describe('PaymentOrdersService — bolivia_to_world (Fixed Outputs)', () => {
       name: 'Proveedor MX',
       payment_rail: 'spei',
       bank_details: { account_number: '012345678901234567' },
+      bridge_external_account_id: 'ea-local-1',
       bridge_liquidation_address_id: null,
       compliance_status: 'approved',
     };
 
     const tableData: Record<string, any> = {
-      bridge_external_accounts: {
+      bridge_external_accounts: opts.extAccount ?? {
         id: 'ea-local-1',
         currency: 'mxn',
         bank_name: 'BBVA',
@@ -87,6 +91,16 @@ describe('PaymentOrdersService — bolivia_to_world (Fixed Outputs)', () => {
           return { data: tableData[table], error: null };
         }),
         maybeSingle: jest.fn().mockImplementation(async () => {
+          // UPDATE ... .maybeSingle() sobre payment_orders = compare-and-set de
+          // la aprobación: devuelve la fila reclamada.
+          if (table === 'payment_orders' && query.__isUpdate && opts.order) {
+            return {
+              data: opts.casLost
+                ? null
+                : { ...opts.order, status: 'processing' },
+              error: null,
+            };
+          }
           if (table === 'payment_orders' || table === 'bridge_transfers') {
             return { data: null, error: null };
           }
@@ -212,6 +226,14 @@ describe('PaymentOrdersService — bolivia_to_world (Fixed Outputs)', () => {
         name: 'US Wire',
         payment_rail: 'wire',
         bank_details: {},
+        bridge_external_account_id: 'ea-local-1',
+      },
+      extAccount: {
+        id: 'ea-local-1',
+        currency: 'usd',
+        bank_name: 'Chase',
+        account_name: 'US Wire',
+        bridge_external_account_id: 'ea_bridge_1',
       },
     });
     const { service, assertFeeConfigured } = makeService(supabase);
@@ -258,6 +280,56 @@ describe('PaymentOrdersService — bolivia_to_world (Fixed Outputs)', () => {
       ),
     ).rejects.toThrow(BadRequestException);
     expect(supabase.__inserts.payment_orders).toBeUndefined();
+  });
+
+  it('rechaza una cuenta de destino que no es la del proveedor', async () => {
+    const supabase = makeSupabase({
+      supplier: {
+        id: 'sup-1',
+        name: 'Proveedor MX',
+        payment_rail: 'spei',
+        bank_details: {},
+        bridge_external_account_id: 'ea-de-otro-proveedor',
+      },
+    });
+    const { service } = makeService(supabase);
+
+    await expect(
+      service.createBoliviaToWorld(
+        USER_ID,
+        { ...baseDto },
+        { skipReviewGate: true },
+      ),
+    ).rejects.toThrow(
+      'La cuenta de destino no corresponde al proveedor seleccionado.',
+    );
+    expect(supabase.__inserts.payment_orders).toBeUndefined();
+  });
+
+  it('rechaza una divisa distinta a la de la cuenta del beneficiario', async () => {
+    const supabase = makeSupabase();
+    const { service } = makeService(supabase);
+
+    await expect(
+      service.createBoliviaToWorld(
+        USER_ID,
+        { ...baseDto, destination_currency: 'eur' },
+        { skipReviewGate: true },
+      ),
+    ).rejects.toThrow(BadRequestException);
+    expect(supabase.__inserts.payment_orders).toBeUndefined();
+  });
+
+  it('guarda el proveedor resuelto aunque el DTO no traiga supplier_id', async () => {
+    const supabase = makeSupabase();
+    const { service } = makeService(supabase);
+    const { supplier_id: _omit, ...dtoSinProveedor } = baseDto;
+
+    await service.createBoliviaToWorld(USER_ID, dtoSinProveedor, {
+      skipReviewGate: true,
+    });
+
+    expect(supabase.__inserts.payment_orders[0].supplier_id).toBe('sup-1');
   });
 
   // ── Aprobación ──
@@ -315,6 +387,21 @@ describe('PaymentOrdersService — bolivia_to_world (Fixed Outputs)', () => {
       destination_amount: 10000,
       developer_fee_usd: 17.95,
     });
+  });
+
+  it('doble aprobación: el segundo staff recibe ORDER_STATE_CHANGED y no llama a Bridge', async () => {
+    const supabase = makeSupabase({
+      order: depositReceivedOrder,
+      casLost: true,
+    });
+    const { service, bridgePost } = makeService(supabase);
+
+    await expect(
+      service.approveOrder(ORDER_ID, 'staff-2', {}),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'ORDER_STATE_CHANGED' }),
+    });
+    expect(bridgePost).not.toHaveBeenCalled();
   });
 
   it('si Bridge falla, revierte la orden a deposit_received', async () => {
