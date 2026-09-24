@@ -20,6 +20,7 @@ describe('PaymentOrdersService — bolivia_to_world (Fixed Outputs)', () => {
   // BOB_MXN ≈ 0.704717 BOB por MXN; BOB_USD ≈ 12.272055 BOB por USD.
   const RATES: Record<string, number> = {
     BOB_MXN: 0.704717,
+    BOB_EUR: 13.817431,
     BOB_USD: 12.272055,
   };
 
@@ -30,6 +31,8 @@ describe('PaymentOrdersService — bolivia_to_world (Fixed Outputs)', () => {
       extAccount?: Record<string, unknown>;
       /** El compare-and-set de la aprobación no encuentra fila (otro staff ganó). */
       casLost?: boolean;
+      /** Otras órdenes activas del cliente con Transfer (colisión de dirección). */
+      activeOrders?: Record<string, unknown>[];
     } = {},
   ) {
     const inserts: Record<string, any[]> = {};
@@ -76,6 +79,17 @@ describe('PaymentOrdersService — bolivia_to_world (Fixed Outputs)', () => {
         }),
         eq: jest.fn(() => query),
         ilike: jest.fn(() => query),
+        neq: jest.fn(() => {
+          query.__collisionQuery = true;
+          return query;
+        }),
+        not: jest.fn(() => query),
+        // La consulta de colisión termina en .limit() y se espera directamente.
+        then: (resolve: any, reject: any) =>
+          Promise.resolve({
+            data: query.__collisionQuery ? (opts.activeOrders ?? []) : null,
+            error: null,
+          }).then(resolve, reject),
         in: jest.fn(() => query),
         is: jest.fn(() => query),
         or: jest.fn(() => query),
@@ -320,6 +334,38 @@ describe('PaymentOrdersService — bolivia_to_world (Fixed Outputs)', () => {
     expect(supabase.__inserts.payment_orders).toBeUndefined();
   });
 
+  it('guarda el IBAN completo (no los últimos 4) cuando el proveedor SEPA no tiene account_number', async () => {
+    const supabase = makeSupabase({
+      supplier: {
+        id: 'sup-1',
+        name: 'industrias Albus',
+        payment_rail: 'sepa',
+        bank_details: { iban: 'LU404080000029745331', swift_bic: 'BCIRLULL' },
+        bridge_external_account_id: 'ea-local-1',
+      },
+      extAccount: {
+        id: 'ea-local-1',
+        currency: 'eur',
+        bank_name: 'Banking Circle S.A.',
+        account_name: 'industrias Albus',
+        account_last_4: '5331',
+        iban: 'LU404080000029745331',
+        bridge_external_account_id: 'ea_bridge_1',
+      },
+    });
+    const { service } = makeService(supabase);
+
+    await service.createBoliviaToWorld(
+      USER_ID,
+      { ...baseDto, destination_currency: 'eur' },
+      { skipReviewGate: true },
+    );
+
+    expect(
+      supabase.__inserts.payment_orders[0].destination_account_number,
+    ).toBe('LU404080000029745331');
+  });
+
   it('guarda el proveedor resuelto aunque el DTO no traiga supplier_id', async () => {
     const supabase = makeSupabase();
     const { service } = makeService(supabase);
@@ -402,6 +448,60 @@ describe('PaymentOrdersService — bolivia_to_world (Fixed Outputs)', () => {
       response: expect.objectContaining({ code: 'ORDER_STATE_CHANGED' }),
     });
     expect(bridgePost).not.toHaveBeenCalled();
+  });
+
+  it('bloquea la aprobación si otro Transfer del cliente usa la misma ruta de depósito', async () => {
+    const supabase = makeSupabase({
+      order: depositReceivedOrder,
+      activeOrders: [
+        {
+          id: 'otra-orden-0000',
+          flow_type: 'wallet_to_world',
+          status: 'waiting_deposit',
+          destination_currency: 'MXN',
+          bridge_source_deposit_instructions: {
+            address: 'CsVB841kxJHtPVr2mczQEy6Nrze5rAJLjrsM2RZKA8oq',
+            chain: 'solana',
+            currency: 'usdc',
+          },
+        },
+      ],
+    });
+    const { service, bridgePost } = makeService(supabase);
+
+    await expect(
+      service.approveOrder(ORDER_ID, 'staff-1', {}),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: 'DEPOSIT_ADDRESS_IN_USE',
+        conflicting_order_id: 'otra-orden-0000',
+      }),
+    });
+    expect(bridgePost).not.toHaveBeenCalled();
+    expect(supabase.__updates.payment_orders).toBeUndefined();
+  });
+
+  it('no bloquea si el otro Transfer va a otra divisa', async () => {
+    const supabase = makeSupabase({
+      order: depositReceivedOrder,
+      activeOrders: [
+        {
+          id: 'otra-orden-usd',
+          flow_type: 'bolivia_to_world',
+          status: 'processing',
+          destination_currency: 'usd',
+          bridge_source_deposit_instructions: {
+            to_address: 'OtraDireccion',
+            payment_rail: 'solana',
+            currency: 'usdc',
+          },
+        },
+      ],
+    });
+    const { service, bridgePost } = makeService(supabase);
+
+    await service.approveOrder(ORDER_ID, 'staff-1', {});
+    expect(bridgePost).toHaveBeenCalledTimes(1);
   });
 
   it('si Bridge falla, revierte la orden a deposit_received', async () => {

@@ -53,6 +53,8 @@ describe('PaymentOrdersService — plazo de depósito y margen', () => {
         'order',
         'limit',
         'ilike',
+        'neq',
+        'not',
       ]) {
         q[m] = chain(m);
       }
@@ -386,6 +388,9 @@ describe('PaymentOrdersService — plazo de depósito y margen', () => {
     function approveSupabase() {
       return makeSupabase((t, q) => {
         if (t === 'payment_orders') {
+          // Consulta de colisión de dirección de depósito (lleva .neq): sin
+          // otros Transfers activos del cliente.
+          if (q.filters.some((f: any[]) => f[0] === 'neq')) return { data: [] };
           return {
             data:
               q.kind === 'update' ? { ...order, status: 'processing' } : order,
