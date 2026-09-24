@@ -1244,6 +1244,58 @@ export class PdfService {
   //  Paleta teal institucional.
   // ═══════════════════════════════════════════════════════════
 
+  /**
+   * Datos bancarios del beneficiario para el C.T.A.V. de bolivia_to_world.
+   *
+   * El riel sale de las instrucciones del Transfer (destination_payment_rail)
+   * y el código de traza de las columnas que llena el webhook de Bridge
+   * (imad para Wire, ach_trace_number para ACH). Si el pago aún no se
+   * completó, el código queda vacío (N/D).
+   */
+  static buildBoliviaToWorldReceiptBank(order: any): {
+    bankName: string | null;
+    accountNumber: string | null;
+    accountHolder: string | null;
+    rail: string | null;
+    traceLabel: string;
+    traceValue: string | null;
+  } {
+    const instr = (order?.bridge_source_deposit_instructions ?? {}) as Record<
+      string,
+      unknown
+    >;
+    const rawRail = (instr.destination_payment_rail as string | undefined) ?? null;
+    const RAIL_LABELS: Record<string, string> = {
+      ach: 'ACH',
+      wire: 'Wire (Fedwire)',
+      sepa: 'SEPA',
+      spei: 'SPEI',
+      pix: 'PIX',
+      bre_b: 'Bre-B',
+      co_bank_transfer: 'Transferencia bancaria (CO)',
+      faster_payments: 'Faster Payments',
+    };
+
+    let traceLabel = 'Código de Traza';
+    let traceValue: string | null = null;
+    if (order?.imad) {
+      traceLabel = 'IMAD (Fedwire)';
+      traceValue = order.imad;
+    } else if (order?.ach_trace_number) {
+      traceLabel = 'N° de Traza ACH';
+      traceValue = order.ach_trace_number;
+    }
+
+    return {
+      bankName: order?.destination_bank_name ?? null,
+      accountNumber: order?.destination_account_number ?? null,
+      accountHolder: order?.destination_account_holder ?? null,
+      rail: rawRail ? (RAIL_LABELS[rawRail] ?? rawRail.toUpperCase()) : null,
+      traceLabel,
+      traceValue,
+    };
+  }
+
   async generatePsavReceiptPdf(
     order: any,
     psavAgent: { id: string; name: string },
@@ -1307,9 +1359,15 @@ export class PdfService {
       ? `Bs. ${amountDest}`            // ej: "Bs. 7186.94"
       : `${amountDest} ${destCcy}`;    // ej: "100.00 USDT"
 
+    // bolivia_to_world: pago bancario al exterior (BOB → divisa del beneficiario).
+    // exchange_rate_applied es BOB_X = "Bs por 1 unidad de la divisa destino".
+    const isBoliviaToWorld = order.flow_type === 'bolivia_to_world';
+
     const exRateDisplay = isWorldToBolivia
       ? `${exRate} ${currency}/BOB`     // ej: "7.5652 USD/BOB"
-      : exRate;                         // ej: "6.96"
+      : isBoliviaToWorld && destCcy
+        ? `${exRate} BOB/${destCcy}`    // ej: "0.704717 BOB/MXN"
+        : exRate;                       // ej: "6.96"
 
     const destNet = nd(order.destination_network);
     const txRef = nd(order.tx_hash ?? order.source_tx_hash);
@@ -1391,6 +1449,35 @@ export class PdfService {
         { text: nd(order.destination_account_number), fontSize: 8.5, bold: true, color: C.body, fillColor: C.white },
         { text: 'Titular', fontSize: 7.5, color: C.label, fillColor: C.white },
         { text: nd(order.destination_account_holder), fontSize: 8.5, bold: true, color: C.body, fillColor: C.white },
+      ]);
+    } else if (isBoliviaToWorld) {
+      // bolivia_to_world: pago bancario al beneficiario vía Bridge Transfer.
+      // No hay "wallet destino": la dirección Solana del Transfer es la cuenta
+      // de fondeo de Guira, no del beneficiario. Se muestran los datos bancarios
+      // y el código de traza del pago (lo escribe el webhook de Bridge).
+      const bank = PdfService.buildBoliviaToWorldReceiptBank(order);
+      detailRows.push([
+        { text: 'Monto Entregado', fontSize: 7.5, color: C.label, fillColor: C.white },
+        { text: amountDestDisplay, fontSize: 8.5, bold: true, color: C.body, fillColor: C.white },
+        { text: 'Referencia', fontSize: 7.5, color: C.label, fillColor: C.white },
+        { text: refCode, fontSize: 8.5, bold: true, color: C.body, fillColor: C.white },
+      ]);
+      detailRows.push([
+        { text: 'Banco Destino', fontSize: 7.5, color: C.label, fillColor: C.rowAlt },
+        { text: nd(bank.bankName), fontSize: 8.5, bold: true, color: C.body, fillColor: C.rowAlt },
+        { text: 'Riel de Pago', fontSize: 7.5, color: C.label, fillColor: C.rowAlt },
+        { text: nd(bank.rail), fontSize: 8.5, bold: true, color: C.body, fillColor: C.rowAlt },
+      ]);
+      detailRows.push([
+        { text: 'Cuenta Destino', fontSize: 7.5, color: C.label, fillColor: C.white },
+        { text: nd(bank.accountNumber), fontSize: 8.5, bold: true, color: C.body, fillColor: C.white },
+        { text: 'Titular', fontSize: 7.5, color: C.label, fillColor: C.white },
+        { text: nd(bank.accountHolder), fontSize: 8.5, bold: true, color: C.body, fillColor: C.white },
+      ]);
+      detailRows.push([
+        { text: bank.traceLabel, fontSize: 7.5, color: C.label, fillColor: C.rowAlt },
+        { text: nd(bank.traceValue), fontSize: 8, bold: true, color: C.body, fillColor: C.rowAlt, colSpan: 3 },
+        {}, {},
       ]);
     } else {
       // Flujos BOB→Cripto: mostrar wallet blockchain

@@ -8216,6 +8216,26 @@ export class PaymentOrdersService {
   }
 
   /**
+   * ¿El C.T.A.V. guardado se generó antes de que la orden se completara?
+   *
+   * El instante de generación viaja en la ruta del archivo
+   * (`<user>/<order>_ctav_<epoch_ms>.pdf`, ver _storePsavReceipt). Solo se
+   * considera desactualizado si receipt_url es realmente un C.T.A.V.: si es
+   * otro documento (p. ej. una evidencia subida por el staff) no se pisa.
+   */
+  private isCtavStaleForCompletion(order: {
+    receipt_url?: string | null;
+    completed_at?: string | null;
+  }): boolean {
+    if (!order.completed_at || !order.receipt_url) return false;
+    const match = /_ctav_(\d+)\.pdf$/.exec(order.receipt_url);
+    if (!match) return false;
+    const generatedAt = Number(match[1]);
+    const completedAt = new Date(order.completed_at).getTime();
+    return Number.isFinite(completedAt) && generatedAt < completedAt;
+  }
+
+  /**
    * Genera y almacena el comprobante PSAV cuando la orden llega a completed.
    * Fire-and-forget seguro: nunca lanza, solo loggea. Idempotente: si ya tiene
    * receipt_url no regenera.
@@ -8228,8 +8248,12 @@ export class PaymentOrdersService {
         .eq('id', orderId)
         .single();
 
-      if (!order || order.ctav_id) return;
+      if (!order) return;
+      if (order.ctav_id && !this.isCtavStaleForCompletion(order)) return;
 
+      // Si ya existía un C.T.A.V. generado ANTES de completarse la orden (por
+      // ejemplo, el staff lo generó en 'processing'), se regenera con los datos
+      // finales conservando el mismo ctav_id: _storePsavReceipt lo reutiliza.
       await this._storePsavReceipt(order);
     } catch (err: any) {
       this.logger.error(`❌ Auto-generación comprobante PSAV falló para orden ${orderId}: ${err?.message}`);
