@@ -423,6 +423,8 @@ export class WebhooksService {
           await this.handleTransferRefundInFlight(payload);
         } else if (state === 'refunded') {
           await this.handleTransferRefunded(payload);
+        } else if (state === 'underfunded') {
+          await this.handleTransferUnderfunded(payload);
         } else {
           this.logger.log(
             `transfer status_transitioned a ${state} - actualizando bridge_state`,
@@ -4235,6 +4237,88 @@ export class WebhooksService {
 
     this.logger.log(
       `✅ Orden ${order.id} completada vía drain ${drainId} (payment_processed)`,
+    );
+  }
+
+  /**
+   * transfer.updated → state 'underfunded' (Fixed Outputs).
+   *
+   * El tipo de cambio se movió desde que se creó el Transfer y el USDC recibido
+   * ya no alcanza para entregar el destination.amount. Bridge retiene el Transfer
+   * y publica additional_funding_instructions: el staff debe enviar un Transfer
+   * adicional por al menos ese monto. La orden sigue en 'processing'.
+   */
+  private async handleTransferUnderfunded(
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    const data = (payload.event_object || payload.data) as Record<
+      string,
+      unknown
+    >;
+    const bridgeTransferId = data?.id as string | undefined;
+    if (!bridgeTransferId) return;
+
+    const additionalFunding =
+      (data?.additional_funding_instructions as
+        | Record<string, unknown>
+        | undefined) ?? null;
+
+    await this.supabase
+      .from('bridge_transfers')
+      .update({
+        bridge_state: 'underfunded',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('bridge_transfer_id', bridgeTransferId);
+
+    const { data: order } = await this.supabase
+      .from('payment_orders')
+      .select(
+        'id, user_id, flow_type, status, bridge_source_deposit_instructions',
+      )
+      .eq('bridge_transfer_id', bridgeTransferId)
+      .maybeSingle();
+
+    if (!order) {
+      this.logger.warn(
+        `⚠️ Transfer ${bridgeTransferId} underfunded sin orden vinculada. Requiere conciliación manual.`,
+      );
+      return;
+    }
+
+    const instructions = {
+      ...((order.bridge_source_deposit_instructions as Record<
+        string,
+        unknown
+      > | null) ?? {}),
+      bridge_state: 'underfunded',
+      additional_funding: additionalFunding,
+    };
+
+    await this.supabase
+      .from('payment_orders')
+      .update({ bridge_source_deposit_instructions: instructions })
+      .eq('id', order.id);
+
+    const missingAmount = additionalFunding?.amount ?? 'N/D';
+    await this.notifyAdminStaff(
+      'Transferencia con fondos insuficientes',
+      `El Transfer de la orden ${order.id} (${order.flow_type}) quedó underfunded por variación del tipo de cambio. ` +
+        `Bridge requiere al menos ${missingAmount} USDC adicionales para completar el monto de destino.`,
+      order.id,
+    );
+
+    this.ordersGateway.emitOrderUpdated(order.user_id, {
+      id: order.id,
+      user_id: order.user_id,
+      status: order.status,
+      flow_type: order.flow_type,
+      updated_at: new Date().toISOString(),
+      bridge_source_deposit_instructions: instructions,
+    });
+
+    this.logger.warn(
+      `⚠️ Orden ${order.id}: transfer ${bridgeTransferId} underfunded — faltan ${missingAmount} USDC`,
     );
   }
 

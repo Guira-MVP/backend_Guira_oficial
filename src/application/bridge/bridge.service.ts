@@ -25,6 +25,7 @@ import {
   VIRTUAL_ACCOUNT_FLOW,
   VIRTUAL_ACCOUNT_EXTERNAL_FLOW,
 } from '../../common/constants/flow-access.constants';
+import { resolveBoOutFeeRail } from '../../common/constants/fiat-rail-catalog.constants';
 
 @Injectable()
 export class BridgeService {
@@ -1396,15 +1397,12 @@ export class BridgeService {
     if (!developerFeePercent) {
       const isCryptoDestination = !!dto.destination_address;
       const destCurrency = dto.destination_currency.toLowerCase();
-      const isUsdRailAware =
-        !isCryptoDestination &&
-        destCurrency === 'usd' &&
-        (dto.destination_payment_rail === 'ach' ||
-          dto.destination_payment_rail === 'wire');
       developerFeePercent = await this.feesService.getFeePercent(
         userId,
         isCryptoDestination ? 'interbank_bo_wallet' : 'interbank_bo_out',
-        isUsdRailAware ? dto.destination_payment_rail : 'psav',
+        isCryptoDestination
+          ? 'psav'
+          : resolveBoOutFeeRail(destCurrency, dto.destination_payment_rail),
         destCurrency,
       );
     }
