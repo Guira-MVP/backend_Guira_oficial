@@ -20,6 +20,14 @@ export class ApproveOrderDto {
   @IsOptional()
   @IsString()
   receipt_url?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'bolivia_to_world: el staff confirma que aprueba aunque el margen estimado con las tasas actuales sea negativo.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  acknowledge_negative_margin?: boolean;
 }
 
 /**

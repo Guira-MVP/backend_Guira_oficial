@@ -9,6 +9,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import * as crypto from 'crypto';
 import { SUPABASE_CLIENT } from '../../core/supabase/supabase.module';
 import { throwDbError } from '../../core/utils/db-error.util';
@@ -66,6 +67,7 @@ import {
   requiresBridgeStateCheck,
   requiresNoDepositDeclaration,
   defaultClientCancellationReason,
+  PSAV_DEPOSIT_FLOWS,
 } from './cancellation-policy';
 import { ALLOWED_NETWORKS } from '../../common/constants/guira-crypto-config.constants';
 import {
@@ -106,6 +108,19 @@ import { resolveBoOutFeeRail } from '../../common/constants/fiat-rail-catalog.co
  * cotización; más allá se exige recotizar.
  */
 const BOLIVIA_TO_WORLD_RATE_TOLERANCE = 0.01;
+
+/**
+ * Colchón que Bridge suma al origen en Fixed Outputs cuando solo se envía
+ * destination.amount (guía fixed_outputs_integration_guide). Lo que no se usa
+ * vuelve a Guira como Developer Exchange Fee.
+ */
+const BRIDGE_FIXED_OUTPUT_BUFFER = 0.01;
+
+/** Plazo de depósito por defecto si falta app_settings.PSAV_DEPOSIT_EXPIRY_MINUTES. */
+const DEFAULT_PSAV_DEPOSIT_EXPIRY_MINUTES = 10;
+
+/** Expedientes vencidos que el cron procesa por ciclo. */
+const DEPOSIT_EXPIRY_BATCH_SIZE = 50;
 
 function buildDateRange(
   year: number,
@@ -398,6 +413,25 @@ export class PaymentOrdersService {
       amount_destination:
         Math.floor((netBob / appliedRate) * 100 + 1e-9) / 100,
     };
+  }
+
+  /**
+   * Vencimiento del plazo de depósito del cliente en los flujos PSAV.
+   * Configurable en app_settings.PSAV_DEPOSIT_EXPIRY_MINUTES (default 10).
+   */
+  private async resolveDepositDeadline(): Promise<string> {
+    const { data: setting } = await this.supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'PSAV_DEPOSIT_EXPIRY_MINUTES')
+      .maybeSingle();
+
+    const parsed = parseInt(setting?.value ?? '', 10);
+    const minutes =
+      Number.isFinite(parsed) && parsed > 0
+        ? parsed
+        : DEFAULT_PSAV_DEPOSIT_EXPIRY_MINUTES;
+    return new Date(Date.now() + minutes * 60 * 1000).toISOString();
   }
 
   private generateDepositReferenceCode(): string {
@@ -928,6 +962,9 @@ export class PaymentOrdersService {
         notes: dto.notes,
         deposit_reference_code: this.generateDepositReferenceCode(),
         status: opts?.skipReviewGate ? 'waiting_deposit' : 'pending_review',
+        deposit_expires_at: opts?.skipReviewGate
+          ? await this.resolveDepositDeadline()
+          : null,
         bridge_execution_context: opts?.skipReviewGate ? null : execContext,
       })
       .select()
@@ -1332,6 +1369,9 @@ export class PaymentOrdersService {
         notes: dto.notes,
         deposit_reference_code: this.generateDepositReferenceCode(),
         status: opts?.skipReviewGate ? 'waiting_deposit' : 'pending_review',
+        deposit_expires_at: opts?.skipReviewGate
+          ? await this.resolveDepositDeadline()
+          : null,
         bridge_execution_context: opts?.skipReviewGate ? null : execContext,
       })
       .select()
@@ -1460,6 +1500,9 @@ export class PaymentOrdersService {
         notes: dto.notes,
         deposit_reference_code: this.generateDepositReferenceCode(),
         status: opts?.skipReviewGate ? 'waiting_deposit' : 'pending_review',
+        deposit_expires_at: opts?.skipReviewGate
+          ? await this.resolveDepositDeadline()
+          : null,
         bridge_execution_context: opts?.skipReviewGate ? null : execContext,
       })
       .select()
@@ -1983,16 +2026,21 @@ export class PaymentOrdersService {
       const depositInstructions =
         this.psavService.formatDepositInstructions(psavAccount);
 
+      // El plazo de depósito arranca recién aquí: mientras estuvo en revisión
+      // el cliente no veía la cuenta receptora.
+      const depositExpiresAt = await this.resolveDepositDeadline();
       await this.supabase
         .from('payment_orders')
         .update({
           status: 'waiting_deposit',
           psav_deposit_instructions: depositInstructions,
+          deposit_expires_at: depositExpiresAt,
         })
         .eq('id', order.id);
 
       order.status = 'waiting_deposit';
       order.psav_deposit_instructions = depositInstructions;
+      order.deposit_expires_at = depositExpiresAt;
       return { bridge_transfer_id: null, status: 'waiting_deposit' };
     } catch (err) {
       return this.handleBridgeLegFailure(
@@ -2484,6 +2532,9 @@ export class PaymentOrdersService {
         supporting_document_url: dto.supporting_document_url,
         deposit_reference_code: this.generateDepositReferenceCode(),
         status: opts?.skipReviewGate ? 'waiting_deposit' : 'pending_review',
+        deposit_expires_at: opts?.skipReviewGate
+          ? await this.resolveDepositDeadline()
+          : null,
         bridge_execution_context: opts?.skipReviewGate ? null : execContext,
       })
       .select()
@@ -2653,6 +2704,7 @@ export class PaymentOrdersService {
         bridge_raw_response: bridgeTransfer,
       });
 
+      const depositExpiresAt = await this.resolveDepositDeadline();
       await this.supabase
         .from('payment_orders')
         .update({
@@ -2660,8 +2712,10 @@ export class PaymentOrdersService {
           bridge_transfer_id: transferId,
           bridge_source_deposit_instructions: bridgeDepositInstructions,
           psav_deposit_instructions: psavDepositInstructions,
+          deposit_expires_at: depositExpiresAt,
         })
         .eq('id', order.id);
+      order.deposit_expires_at = depositExpiresAt;
 
       await this.supabase.from('ledger_entries').insert({
         wallet_id: order.wallet_id,
@@ -5187,7 +5241,7 @@ export class PaymentOrdersService {
   ) {
     const { data: order, error: fetchErr } = await this.supabase
       .from('payment_orders')
-      .select('id, user_id, status, requires_psav, notes')
+      .select('id, user_id, status, requires_psav, notes, deposit_expires_at')
       .eq('id', orderId)
       .eq('user_id', userId)
       .single();
@@ -5200,6 +5254,20 @@ export class PaymentOrdersService {
       );
     }
 
+    // Plazo de depósito vencido: el cron de vencimiento cancela el expediente.
+    if (
+      order.deposit_expires_at &&
+      new Date(order.deposit_expires_at).getTime() <= Date.now()
+    ) {
+      throw new BadRequestException({
+        code: 'DEPOSIT_EXPIRED',
+        message:
+          'Venció el plazo para realizar el depósito y el expediente se cancelará. Si ya depositaste, contacta a soporte.',
+      });
+    }
+
+    // Compare-and-set: si el cron de vencimiento canceló el expediente entre la
+    // lectura y este UPDATE, no se revive una orden cancelada.
     const { data: updated, error } = await this.supabase
       .from('payment_orders')
       .update({
@@ -5211,10 +5279,18 @@ export class PaymentOrdersService {
       })
       .eq('id', orderId)
       .eq('user_id', userId)
+      .eq('status', 'waiting_deposit')
       .select()
-      .single();
+      .maybeSingle();
 
     if (error) throwDbError(error);
+    if (!updated) {
+      throw new ConflictException({
+        code: 'ORDER_STATE_CHANGED',
+        message:
+          'El expediente cambió de estado mientras enviabas el comprobante. Actualiza la página para ver su estado.',
+      });
+    }
 
     // Notificar a admins que hay un depósito por revisar
     const { data: admins } = await this.supabase
@@ -5535,6 +5611,170 @@ export class PaymentOrdersService {
     return updated;
   }
 
+  // ═══════════════════════════════════════════════
+  //  PLAZO DE DEPÓSITO (flujos PSAV)
+  // ═══════════════════════════════════════════════
+
+  /**
+   * Cancela los expedientes PSAV cuyo plazo de depósito venció sin que el
+   * cliente subiera el comprobante. Corre cada minuto: el plazo es de minutos.
+   */
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'psav-deposit-expiry' })
+  async expireOverdueDepositOrders(): Promise<void> {
+    const { data: overdue, error } = await this.supabase
+      .from('payment_orders')
+      .select(
+        'id, user_id, flow_type, amount, currency, status, bridge_transfer_id, deposit_reference_code, deposit_expires_at',
+      )
+      .eq('status', 'waiting_deposit')
+      .in('flow_type', [...PSAV_DEPOSIT_FLOWS])
+      .lt('deposit_expires_at', new Date().toISOString())
+      .order('deposit_expires_at', { ascending: true })
+      .limit(DEPOSIT_EXPIRY_BATCH_SIZE);
+
+    if (error) {
+      this.logger.error(
+        `Error buscando expedientes con plazo de depósito vencido: ${error.message}`,
+      );
+      return;
+    }
+
+    for (const order of overdue ?? []) {
+      try {
+        await this.expireDepositOrder(order);
+      } catch (err) {
+        this.logger.error(
+          `❌ No se pudo vencer el expediente ${order.id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Cancela un expediente PSAV por plazo de depósito vencido.
+   *
+   * El dinero del cliente pudo haber llegado a la cuenta PSAV sin comprobante:
+   * por eso, además de cancelar, se avisa al staff para conciliar y devolver.
+   */
+  private async expireDepositOrder(order: {
+    id: string;
+    user_id: string;
+    flow_type: string;
+    amount: number | string | null;
+    currency: string | null;
+    bridge_transfer_id: string | null;
+    deposit_reference_code: string | null;
+  }): Promise<void> {
+    const reason = 'Plazo de depósito vencido';
+
+    // fiat_bo_to_bridge_wallet ya tiene un transfer en Bridge (lo funde el PSAV
+    // más tarde). Si Bridge no acepta el DELETE, la orden NO se cancela: se
+    // quita el plazo para no reintentar cada minuto y se escala al staff.
+    if (order.bridge_transfer_id) {
+      try {
+        await this.bridgeApi.delete(
+          `/v0/transfers/${order.bridge_transfer_id}`,
+        );
+        await this.supabase
+          .from('bridge_transfers')
+          .update({ status: 'cancelled', bridge_state: 'canceled' })
+          .eq('bridge_transfer_id', order.bridge_transfer_id);
+      } catch (err) {
+        await this.supabase
+          .from('payment_orders')
+          .update({ deposit_expires_at: null })
+          .eq('id', order.id)
+          .eq('status', 'waiting_deposit');
+        await this.notifyActiveStaff(
+          order.id,
+          'Plazo de depósito vencido sin poder cancelar',
+          `El expediente ${order.id.slice(0, 8)} (${order.flow_type}) venció, pero Bridge rechazó cancelar el transfer ${order.bridge_transfer_id}. Revisarlo manualmente.`,
+        );
+        this.logger.warn(
+          `⚠️ Expediente ${order.id} vencido pero Bridge rechazó el DELETE: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return;
+      }
+    }
+
+    // Compare-and-set: si el cliente subió el comprobante justo antes, gana él.
+    const { data: cancelled, error } = await this.supabase
+      .from('payment_orders')
+      .update({
+        status: 'cancelled',
+        cancelled_at: new Date().toISOString(),
+        cancelled_by: null,
+        cancelled_by_role: 'system',
+        cancellation_reason: reason,
+      })
+      .eq('id', order.id)
+      .eq('status', 'waiting_deposit')
+      .select('id, user_id, status, flow_type')
+      .maybeSingle();
+
+    if (error) throwDbError(error);
+    if (!cancelled) return;
+
+    // Ledgers pendientes (el on-ramp fiat_bo registra el crédito esperado).
+    // Estos flujos no reservan saldo, así que no hay reserva que liberar.
+    await this.supabase
+      .from('ledger_entries')
+      .update({ status: 'reversed' })
+      .eq('reference_type', 'payment_order')
+      .eq('reference_id', order.id)
+      .eq('status', 'pending');
+
+    await this.supabase.from('audit_logs').insert({
+      performed_by: null,
+      role: 'system',
+      action: 'EXPIRE_DEPOSIT_ORDER',
+      table_name: 'payment_orders',
+      record_id: order.id,
+      previous_values: { status: 'waiting_deposit' },
+      new_values: { status: 'cancelled', cancelled_by_role: 'system' },
+      reason,
+      source: 'cron',
+    });
+
+    await this.supabase.from('activity_logs').insert({
+      user_id: order.user_id,
+      action: 'PAYMENT_ORDER_DEPOSIT_EXPIRED',
+      description: `Expediente ${order.id} (${order.flow_type}) cancelado: venció el plazo de depósito.`,
+    });
+
+    await this.notificationsService.sendNotification({
+      userId: order.user_id,
+      type: NotificationType.FINANCIAL,
+      title: 'Expediente cancelado',
+      message:
+        'Tu expediente fue cancelado porque venció el plazo para realizar el depósito. ' +
+        'Si ya depositaste, contacta a soporte para gestionar la devolución.',
+      link: `/panel/pagos/${order.id}`,
+      referenceType: 'payment_order',
+      referenceId: order.id,
+    });
+
+    await this.notifyActiveStaff(
+      order.id,
+      'Plazo de depósito vencido',
+      `El expediente ${order.id.slice(0, 8)} (${order.flow_type}, ${order.amount ?? 0} ${(order.currency ?? '').toUpperCase()}) ` +
+        `se canceló por plazo vencido. Verificar si ingresó dinero en la cuenta PSAV con la referencia ` +
+        `${order.deposit_reference_code ?? 'N/D'} y, si llegó, gestionar la devolución.`,
+    );
+
+    this.ordersGateway.emitOrderUpdated(order.user_id, {
+      id: order.id,
+      user_id: order.user_id,
+      status: 'cancelled',
+      flow_type: order.flow_type,
+      updated_at: new Date().toISOString(),
+    });
+
+    this.logger.log(
+      `⏰ Expediente ${order.id} (${order.flow_type}) cancelado por plazo de depósito vencido`,
+    );
+  }
+
   // ── Flujos del usuario para mapa del dashboard ──
 
   /** Flujos interbank del usuario agrupados por moneda — alimenta el mapa del dashboard. */
@@ -5853,6 +6093,86 @@ export class PaymentOrdersService {
   }
 
   /**
+   * Margen estimado de un bolivia_to_world si se aprobara AHORA.
+   *
+   * El cliente pagó `amount` BOB con tasas congeladas, pero el USDC que exige
+   * Bridge y su costo en Binance se calculan con las tasas de este momento.
+   * Aproximación (Bridge fija el monto exacto al crear el Transfer):
+   *   usdcNeeded    = amount_destination / USD_X.bridge_sell_rate (USD → 1:1)
+   *   usdcToDeposit = usdcNeeded × (1 + colchón) + developer_fee_usd
+   *   costBob       = usdcToDeposit × BOB_USD.base_rate (Binance, sin spread)
+   *   returnedBob   = (developer_fee_usd + usdcNeeded × colchón) × BOB_USD.base_rate
+   *   margin_bob    = amount − costBob + returnedBob
+   */
+  private async estimateBoliviaToWorldMargin(order: any): Promise<{
+    margin_bob: number;
+    usdc_to_deposit_estimate: number;
+    usdc_needed_estimate: number;
+    developer_fee_usd: number;
+    rates: { bob_usd_base: number; usd_dest_sell: number };
+    age_minutes: number | null;
+  }> {
+    const destCurrency = (order.destination_currency ?? 'usd').toUpperCase();
+    const amountDestination = Number(order.amount_destination ?? 0);
+
+    const bobUsdBase = (await this.exchangeRatesService.getRate('BOB_USD'))
+      .base_rate;
+    let usdDestSell = 1;
+    if (destCurrency !== 'USD') {
+      const usdDest = await this.exchangeRatesService.getRate(
+        `USD_${destCurrency}`,
+      );
+      usdDestSell = usdDest.bridge_sell_rate ?? usdDest.base_rate;
+    }
+
+    let developerFeeUsd = Number(order.developer_fee_usd);
+    if (!Number.isFinite(developerFeeUsd)) {
+      developerFeeUsd = Number(order.fee_amount ?? 0) / bobUsdBase;
+    }
+
+    const usdcNeeded = amountDestination / usdDestSell;
+    const buffer = usdcNeeded * BRIDGE_FIXED_OUTPUT_BUFFER;
+    const usdcToDeposit = usdcNeeded + buffer + developerFeeUsd;
+    const costBob = usdcToDeposit * bobUsdBase;
+    const returnedBob = (developerFeeUsd + buffer) * bobUsdBase;
+    const marginBob = Number(order.amount ?? 0) - costBob + returnedBob;
+
+    // Minutos desde que el cliente declaró el depósito (o desde la creación).
+    const since = order.updated_at ?? order.created_at;
+    const ageMinutes = since
+      ? Math.max(0, Math.round((Date.now() - new Date(since).getTime()) / 60000))
+      : null;
+
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    return {
+      margin_bob: round2(marginBob),
+      usdc_to_deposit_estimate: round2(usdcToDeposit),
+      usdc_needed_estimate: round2(usdcNeeded),
+      developer_fee_usd: round2(developerFeeUsd),
+      rates: { bob_usd_base: bobUsdBase, usd_dest_sell: usdDestSell },
+      age_minutes: ageMinutes,
+    };
+  }
+
+  /** Endpoint de staff: margen estimado antes de aprobar un bolivia_to_world. */
+  async getBoliviaToWorldMarginEstimate(orderId: string) {
+    const { data: order } = await this.supabase
+      .from('payment_orders')
+      .select('*')
+      .eq('id', orderId)
+      .single();
+
+    if (!order) throw new NotFoundException('Orden no encontrada');
+    if (order.flow_type !== 'bolivia_to_world') {
+      throw new BadRequestException(
+        'El margen estimado solo aplica a expedientes bolivia_to_world.',
+      );
+    }
+
+    return this.estimateBoliviaToWorldMargin(order);
+  }
+
+  /**
    * Crea el Bridge Transfer de bolivia_to_world con monto de destino fijo
    * (Fixed Outputs) y persiste las instrucciones de depósito para el staff.
    *
@@ -6032,6 +6352,33 @@ export class PaymentOrdersService {
       throw new BadRequestException('Esta orden no requiere aprobación manual');
     }
 
+    // ── bolivia_to_world: margen con las tasas actuales ──
+    // El riesgo cambiario entre la creación y esta aprobación lo absorbe Guira.
+    // Si hoy la operación da pérdida, el staff tiene que confirmarlo a sabiendas.
+    // Si las tasas no están disponibles no se bloquea la operación: solo se loguea.
+    let estimatedMarginBob: number | null = null;
+    if (order.flow_type === 'bolivia_to_world') {
+      try {
+        estimatedMarginBob = (await this.estimateBoliviaToWorldMargin(order))
+          .margin_bob;
+      } catch (err) {
+        this.logger.warn(
+          `⚠️ No se pudo estimar el margen de la orden ${orderId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      if (
+        estimatedMarginBob != null &&
+        estimatedMarginBob < 0 &&
+        !dto.acknowledge_negative_margin
+      ) {
+        throw new ConflictException({
+          code: 'NEGATIVE_MARGIN',
+          margin_bob: estimatedMarginBob,
+          message: `Con las tasas actuales esta operación genera una pérdida estimada de ${Math.abs(estimatedMarginBob).toFixed(2)} BOB. Confirma para aprobar igualmente.`,
+        });
+      }
+    }
+
     // ── Cotización CONGELADA al crear el expediente ──
     // La aprobación es SOLO una transición de estado: no recalcula ni acepta
     // cambios de tipo de cambio, fee o monto destino. El cliente creó el
@@ -6093,6 +6440,13 @@ export class PaymentOrdersService {
         status: 'processing',
         exchange_rate_applied: exchangeRate,
         amount_destination: amountDestination,
+        ...(estimatedMarginBob != null
+          ? {
+              estimated_margin_bob: estimatedMarginBob,
+              acknowledged_negative_margin:
+                dto.acknowledge_negative_margin ?? false,
+            }
+          : {}),
       },
       reason: dto.notes ?? '',
       source: 'admin_panel',
