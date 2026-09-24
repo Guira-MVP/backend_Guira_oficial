@@ -930,10 +930,16 @@ export class PaymentOrdersService {
         bobUsdRate,
       );
 
+    // Identificador COMPLETO de la cuenta del beneficiario, según el riel:
+    // número de cuenta (ACH/Wire), IBAN (SEPA) o CLABE (SPEI). Los 4 últimos
+    // dígitos van al final: son solo un respaldo y terminaban en el comprobante
+    // y el C.T.A.V. en lugar del IBAN cuando el proveedor no tenía account_number.
     const fullAccountNumber =
       supplier?.bank_details?.account_number ??
-      extAccount.account_last_4 ??
+      supplier?.bank_details?.iban ??
+      supplier?.bank_details?.clabe ??
       extAccount.iban ??
+      extAccount.account_last_4 ??
       extAccount.swift_bic;
 
     // Obtener canal PSAV del usuario para depósito en BOB
@@ -6382,6 +6388,56 @@ export class PaymentOrdersService {
     };
   }
 
+  /**
+   * Evita que dos Transfers del mismo cliente compartan la dirección de depósito.
+   *
+   * Bridge reutiliza la `to_address` por cliente y ruta (verificado en sandbox:
+   * dos Transfers USDC/Solana → EUR del mismo customer recibieron la misma
+   * dirección). Si hay otro Transfer esperando fondos por esa ruta —de este u
+   * otro flujo, p. ej. un wallet_to_world con importe flexible—, el depósito
+   * del staff podría asignarse al Transfer equivocado y pagar a otro
+   * beneficiario. Se bloquea ANTES de pasar a processing y de llamar a Bridge.
+   */
+  private async assertNoDepositAddressCollision(order: any): Promise<void> {
+    const destCurrency = String(order.destination_currency ?? '').toLowerCase();
+
+    const { data: active } = await this.supabase
+      .from('payment_orders')
+      .select(
+        'id, flow_type, status, destination_currency, bridge_source_deposit_instructions',
+      )
+      .eq('user_id', order.user_id)
+      .neq('id', order.id)
+      .not('bridge_transfer_id', 'is', null)
+      .in('status', ['waiting_deposit', 'deposit_received', 'processing'])
+      .limit(50);
+
+    const conflicting = (active ?? []).find((row) => {
+      const instr = (row.bridge_source_deposit_instructions ?? {}) as Record<
+        string,
+        unknown
+      >;
+      const rail = String(instr.payment_rail ?? instr.chain ?? '').toLowerCase();
+      const currency = String(instr.currency ?? '').toLowerCase();
+      return (
+        rail === 'solana' &&
+        currency === 'usdc' &&
+        String(row.destination_currency ?? '').toLowerCase() === destCurrency
+      );
+    });
+
+    if (conflicting) {
+      throw new ConflictException({
+        code: 'DEPOSIT_ADDRESS_IN_USE',
+        conflicting_order_id: conflicting.id,
+        message:
+          `El cliente tiene otro expediente (${conflicting.id.slice(0, 8)}, ${conflicting.flow_type}) ` +
+          `esperando fondos en USDC/Solana hacia ${destCurrency.toUpperCase()}. Bridge usaría la misma ` +
+          `dirección de depósito para ambos: completa o cancela ese expediente antes de aprobar este.`,
+      });
+    }
+  }
+
   /** Endpoint de staff: margen estimado antes de aprobar un bolivia_to_world. */
   async getBoliviaToWorldMarginEstimate(orderId: string) {
     const { data: order } = await this.supabase
@@ -6578,6 +6634,10 @@ export class PaymentOrdersService {
     }
     if (!order.requires_psav) {
       throw new BadRequestException('Esta orden no requiere aprobación manual');
+    }
+
+    if (order.flow_type === 'bolivia_to_world') {
+      await this.assertNoDepositAddressCollision(order);
     }
 
     // ── bolivia_to_world: margen con las tasas actuales ──
