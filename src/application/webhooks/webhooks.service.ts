@@ -3276,7 +3276,15 @@ export class WebhooksService {
     // de forma incondicional, sin comprobar que exista una reserva previa.
     // Se excluyen de la liberación genérica y tampoco entran en el bloque de
     // liberación por source_currency de más abajo (no están en offRampWalletFlows).
-    const noReservationFlows = ['wallet_to_world'];
+    //
+    // Flujos con depósito fiat en PSAV (bolivia_to_world, fiat_bo_to_bridge_wallet):
+    // el cliente pagó en BOB a la cuenta PSAV y el staff fondeó el Transfer con
+    // USDC propios. Tampoco hubo reserve_balance: liberar aquí le acreditaría al
+    // cliente un saldo que nunca tuvo. Su devolución es manual (en BOB, desde PSAV).
+    const psavDepositFlows = ['bolivia_to_world', 'fiat_bo_to_bridge_wallet'];
+    const isPsavDepositFlow =
+      failedOrder != null && psavDepositFlows.includes(failedOrder.flow_type);
+    const noReservationFlows = ['wallet_to_world', ...psavDepositFlows];
     const isNoReservationFlow =
       failedOrder != null && noReservationFlows.includes(failedOrder.flow_type);
 
@@ -3341,9 +3349,23 @@ export class WebhooksService {
       // En flujos on-chain no hubo saldo retenido que devolver: los fondos
       // llegaron (o iban a llegar) desde una wallet externa. Prometer una
       // devolución al saldo sería falso.
-      const failMessage = isNoReservationFlow
-        ? `Tu pago de $${transfer.amount} falló. Si ya enviaste los fondos, contacta a soporte para gestionar la devolución.`
-        : `Tu pago de $${transfer.amount} falló. El saldo ha sido devuelto a tu cuenta.`;
+      const failMessage = isPsavDepositFlow
+        ? `Tu operación por ${failedOrder!.amount} ${(failedOrder!.currency ?? '').toUpperCase()} no pudo completarse. Nuestro equipo te contactará para gestionar la devolución de tu depósito.`
+        : isNoReservationFlow
+          ? `Tu pago de $${transfer.amount} falló. Si ya enviaste los fondos, contacta a soporte para gestionar la devolución.`
+          : `Tu pago de $${transfer.amount} falló. El saldo ha sido devuelto a tu cuenta.`;
+
+      // El depósito del cliente está en la cuenta PSAV: devolverlo es trabajo
+      // del staff, que de otro modo no se entera.
+      if (isPsavDepositFlow) {
+        await this.notifyAdminStaff(
+          'Transfer fallido: devolver depósito PSAV',
+          `El Transfer ${bridgeTransferId} de la orden ${failedOrder!.id} (${failedOrder!.flow_type}) falló. ` +
+            `El cliente depositó ${failedOrder!.amount} ${(failedOrder!.currency ?? '').toUpperCase()} ` +
+            `(referencia ${failedOrder!.deposit_reference_code ?? 'N/D'}): gestionar la devolución y recuperar los USDC enviados a Bridge.`,
+          failedOrder!.id,
+        );
+      }
 
       await this.supabase.from('notifications').insert({
         user_id: transfer.user_id,
@@ -3357,7 +3379,9 @@ export class WebhooksService {
       await this.supabase.from('activity_logs').insert({
         user_id: transfer.user_id,
         action: 'TRANSFER_FAILED',
-        description: `Transfer ${bridgeTransferId} falló — saldo liberado`,
+        description: isNoReservationFlow
+          ? `Transfer ${bridgeTransferId} falló — sin saldo retenido que liberar`
+          : `Transfer ${bridgeTransferId} falló — saldo liberado`,
       });
     } else {
       this.logger.warn(
