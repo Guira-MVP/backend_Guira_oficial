@@ -42,3 +42,22 @@ export const FEE_PAYMENT_RAILS = [
   'bridge',
   ...RAMP_OFF_FIAT_US_DESTINATION_RAILS,
 ] as const;
+
+/**
+ * Riel con el que se indexa la comisión de interbank_bo_out (bolivia_to_world)
+ * en fees_config/customer_fee_overrides: los destinos USD distinguen ACH y Wire
+ * (cada uno con su fila); cualquier otra divisa usa la fila 'psav' de su divisa.
+ */
+export function resolveBoOutFeeRail(
+  destinationCurrency: string,
+  supplierRail: string | null | undefined,
+): string {
+  const rail = (supplierRail ?? '').toLowerCase();
+  if (
+    destinationCurrency.toLowerCase() === 'usd' &&
+    (rail === 'ach' || rail === 'wire')
+  ) {
+    return rail;
+  }
+  return 'psav';
+}
