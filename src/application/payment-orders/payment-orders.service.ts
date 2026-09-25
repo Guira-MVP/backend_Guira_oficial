@@ -109,6 +109,7 @@ import {
   calculateFixedOutputAmounts,
   destinationFromSource,
   FixedOutputAmounts,
+  FixedOutputPreflightError,
   isFixedOutputCurrency,
   NON_USD_ALLOWED_SOURCE_CURRENCY,
 } from './fiat-us-fixed-output';
@@ -2217,6 +2218,14 @@ export class PaymentOrdersService {
         `↩️ Aprobación de ${order.id} revertida a pending_review: ${message}`,
       );
 
+      // FixedOutputPreflightError: el control de tipo de cambio frenó el envío
+      // (o Bridge lo rechazó por eso). Reintentar no sirve si el margen se agotó,
+      // así que el mensaje ya indica qué hacer.
+      if (err instanceof FixedOutputPreflightError) {
+        throw new BadRequestException(
+          `No se envió la transferencia: ${message}. El expediente volvió a revisión.`,
+        );
+      }
       throw new BadRequestException(
         `No se pudo crear la transferencia en Bridge: ${message}. ` +
           `El expediente volvió a revisión y la aprobación se puede reintentar.`,
@@ -2235,7 +2244,10 @@ export class PaymentOrdersService {
       .from('payment_orders')
       .update({
         status: 'failed',
-        failure_reason: `Bridge Transfer falló: ${message}`,
+        failure_reason:
+          err instanceof FixedOutputPreflightError
+            ? `Transferencia no enviada: ${message}`
+            : `Bridge Transfer falló: ${message}`,
       })
       .eq('id', order.id);
 
@@ -3747,10 +3759,14 @@ export class PaymentOrdersService {
     paymentRail: string,
     destCurrency: string,
     dto: CreateWalletRampOrderDto,
+    origin: 'client' | 'limit_review' = 'client',
   ): Promise<FixedOutputAmounts> {
-    const rate = await this.exchangeRatesService.getRate(`USD_${destCurrency}`);
+    // Tasa pedida a Bridge ahora mismo (no la guardada por el cron): con
+    // Fixed Outputs una tasa desactualizada se traduce en cobrar de más o en un
+    // Transfer que Bridge rechaza al aprobar.
+    const rate = await this.exchangeRatesService.getLiveUsdRate(destCurrency);
     const clientRate = rate.effective_rate;
-    const bridgeSellRate = rate.bridge_sell_rate ?? rate.base_rate;
+    const bridgeSellRate = rate.bridge_sell_rate;
     if (!(clientRate > 0) || !(bridgeSellRate > 0)) {
       throw new BadRequestException(
         `No hay tipo de cambio disponible para ${destCurrency}. Inténtalo en unos minutos.`,
@@ -3787,6 +3803,17 @@ export class PaymentOrdersService {
     // nunca se debita más de lo que el cliente vio en la revisión.
     const MAX_DEBIT_INCREASE = 0.005;
     if (quote.source_amount > dto.amount * (1 + MAX_DEBIT_INCREASE) + 0.01) {
+      // Una solicitud por exceso de límite se aprueba horas o días después de
+      // que el cliente cotizó. El débito que aceptó ya no alcanza y el staff no
+      // puede cobrarle más sin su consentimiento: la salida es rechazarla.
+      if (origin === 'limit_review') {
+        throw new BadRequestException(
+          `El tipo de cambio empeoró desde que el cliente envió la solicitud: para entregar ` +
+            `${destinationAmount} ${destCurrency} ahora se necesitan ${quote.source_amount} ` +
+            `${NON_USD_ALLOWED_SOURCE_CURRENCY} y el cliente aceptó ${dto.amount}. ` +
+            `Rechaza la solicitud para que el cliente vuelva a cotizar.`,
+        );
+      }
       throw new BadRequestException(
         `La cotización cambió: ahora se necesitan ${quote.source_amount} ${NON_USD_ALLOWED_SOURCE_CURRENCY} ` +
           `para entregar ${destinationAmount} ${destCurrency}. Vuelve a cotizar para continuar.`,
@@ -3803,7 +3830,7 @@ export class PaymentOrdersService {
   private async createBridgeWalletToFiatUs(
     userId: string,
     dto: CreateWalletRampOrderDto,
-    opts?: { skipReviewGate?: boolean },
+    opts?: { skipReviewGate?: boolean; fromLimitReview?: boolean },
   ) {
     const wallet = await this.getUserWallet(userId, dto.wallet_id);
 
@@ -3920,6 +3947,7 @@ export class PaymentOrdersService {
         supplier.payment_rail,
         destCurrency,
         dto,
+        opts?.fromLimitReview ? 'limit_review' : 'client',
       );
       ({ fee_amount, net_amount } = fixedOutput);
       totalNeeded = fixedOutput.source_amount;
@@ -4115,7 +4143,7 @@ export class PaymentOrdersService {
         );
       } catch (err) {
         if (err instanceof BridgeSourceAmountTooLowError) {
-          throw new Error(
+          throw new FixedOutputPreflightError(
             `el tipo de cambio empeoró más que el margen cotizado: Bridge exige ` +
               `${err.minimumSourceAmount} ${sourceCurrency} y el expediente reservó ${ctx.amount}. ` +
               `Rechaza el expediente para que el cliente vuelva a cotizar`,
@@ -4199,10 +4227,10 @@ export class PaymentOrdersService {
     developerFee: number;
     clientRate: number | null;
   }) {
-    const rate = await this.exchangeRatesService.getRate(
-      `USD_${args.destinationCurrency.toUpperCase()}`,
+    const rate = await this.exchangeRatesService.getLiveUsdRate(
+      args.destinationCurrency,
     );
-    const sellRate = rate.bridge_sell_rate ?? rate.base_rate;
+    const sellRate = rate.bridge_sell_rate;
     const bridgeMin = bridgeMinSourceAmount(
       args.destinationAmount,
       sellRate,
@@ -4218,20 +4246,28 @@ export class PaymentOrdersService {
       destination_currency: args.destinationCurrency.toUpperCase(),
       bridge_sell_rate: sellRate,
       client_rate: args.clientRate,
-      rate_updated_at: rate.updated_at ?? null,
+      rate_fetched_at: rate.fetched_at,
     };
   }
 
   private async assertFiatUsFixedOutputMargin(ctx: FiatUsExecContext) {
-    const estimate = await this.estimateFiatUsFixedOutputMargin({
-      destinationCurrency: ctx.destination_currency,
-      destinationAmount: ctx.destination_amount as number,
-      reservedAmount: ctx.amount,
-      developerFee: ctx.fee_amount,
-      clientRate: ctx.client_rate ?? null,
-    });
+    let estimate: Awaited<ReturnType<typeof this.estimateFiatUsFixedOutputMargin>>;
+    try {
+      estimate = await this.estimateFiatUsFixedOutputMargin({
+        destinationCurrency: ctx.destination_currency,
+        destinationAmount: ctx.destination_amount as number,
+        reservedAmount: ctx.amount,
+        developerFee: ctx.fee_amount,
+        clientRate: ctx.client_rate ?? null,
+      });
+    } catch {
+      throw new FixedOutputPreflightError(
+        'no se pudo obtener el tipo de cambio actual de Bridge para comprobar el margen. ' +
+          'Reintenta la aprobación en unos minutos',
+      );
+    }
     if (estimate.margin_exhausted) {
-      throw new Error(
+      throw new FixedOutputPreflightError(
         `el tipo de cambio empeoró más que el margen cotizado: con la tasa actual ` +
           `(${estimate.bridge_sell_rate}) se necesitan ${estimate.bridge_min_source_amount} ` +
           `${ctx.source_currency} y el expediente reservó ${ctx.amount}. ` +
@@ -8308,7 +8344,10 @@ export class PaymentOrdersService {
       case WalletRampFlowType.BRIDGE_WALLET_TO_CRYPTO:
         return this.createBridgeWalletToCrypto(userId, dto, reviewed);
       case WalletRampFlowType.BRIDGE_WALLET_TO_FIAT_US:
-        return this.createBridgeWalletToFiatUs(userId, dto, reviewed);
+        return this.createBridgeWalletToFiatUs(userId, dto, {
+          ...reviewed,
+          fromLimitReview: true,
+        });
       case WalletRampFlowType.WALLET_TO_WORLD:
         return this.createWalletToWorld(userId, dto, reviewed);
       default:

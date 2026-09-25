@@ -14,12 +14,18 @@ export class BridgeSourceAmountTooLowError extends BadGatewayException {
   }
 }
 
-/** Extrae el mínimo de "must be at least 112.67 for destination amount …". */
+/**
+ * Extrae el mínimo de "must be at least 112.67 for destination amount …".
+ *
+ * Bridge no es consistente con la clave: el sandbox devolvió
+ * `source.key["source.amount"]` (2026-09-24) y la guía de Fixed Outputs
+ * documenta `source.key.amount` ("must be at least 1030.00 USDC …").
+ */
 function parseSourceAmountTooLow(rawBody: string): number | null {
   try {
     const key = (JSON.parse(rawBody) as { source?: { key?: Record<string, unknown> } })
       ?.source?.key;
-    const msg = key?.['source.amount'];
+    const msg = key?.['source.amount'] ?? key?.['amount'];
     if (typeof msg !== 'string') return null;
     const m = msg.match(/must be at least\s+([\d.]+)/i);
     return m ? parseFloat(m[1]) : null;
