@@ -475,24 +475,13 @@ export class ExchangeRatesService {
     // El spread es configuración de Guira: se lee de la fila del par.
     const { spread_percent } = await this.getRate(pair);
 
-    let sellRate = NaN;
-    try {
-      const resp = await this.bridgeApi.get<BridgeExchangeRateResponse>(
-        `/v0/exchange_rates?from=usd&to=${upper.toLowerCase()}`,
-      );
-      sellRate = parseFloat(resp?.sell_rate);
-    } catch (err) {
-      this.logger.warn(
-        `No se pudo obtener la tasa en vivo ${pair} de Bridge: ${(err as Error).message}`,
-      );
-    }
-    if (!(sellRate > 0)) {
+    const bridgeSellRate = await this.fetchBridgeUsdSellRate(upper);
+    if (bridgeSellRate === null) {
       throw new BadRequestException(
         `No pudimos obtener el tipo de cambio actual para ${upper}. Inténtalo en unos minutos.`,
       );
     }
 
-    const bridgeSellRate = this.truncateToCalcPrecision(sellRate, pair);
     return {
       pair,
       bridge_sell_rate: bridgeSellRate,
@@ -504,6 +493,61 @@ export class ExchangeRatesService {
       ),
       fetched_at: new Date().toISOString(),
     };
+  }
+
+  /**
+   * Tasa USD→X que Bridge aplicaría ahora mismo, SIN spread de Guira.
+   *
+   * Para los flujos de importe flexible (wallet_to_world) Guira no cobra
+   * spread: el transfer solo lleva developer_fee_percent y la conversión la
+   * hace Bridge a su tasa. Si Bridge no responde se recurre a la última
+   * bridge_sell_rate sincronizada por el cron, marcada como `cached` para que
+   * la UI lo diga en vez de presentarla como tasa en vivo.
+   */
+  async getBridgeUsdRateForEstimate(currency: string): Promise<{
+    pair: string;
+    rate: number;
+    source: 'live' | 'cached';
+    fetched_at: string;
+  }> {
+    const upper = currency.toUpperCase();
+    const pair = `USD_${upper}`;
+
+    const live = await this.fetchBridgeUsdSellRate(upper);
+    if (live !== null) {
+      return { pair, rate: live, source: 'live', fetched_at: new Date().toISOString() };
+    }
+
+    const cached = await this.getRate(pair);
+    if (!(cached.bridge_sell_rate && cached.bridge_sell_rate > 0)) {
+      throw new BadRequestException(
+        `No pudimos obtener el tipo de cambio actual para ${upper}. Inténtalo en unos minutos.`,
+      );
+    }
+    return {
+      pair,
+      rate: cached.bridge_sell_rate,
+      source: 'cached',
+      fetched_at: cached.updated_at,
+    };
+  }
+
+  /** sell_rate de Bridge USD→X truncada, o null si Bridge falla o devuelve basura. */
+  private async fetchBridgeUsdSellRate(upper: string): Promise<number | null> {
+    const pair = `USD_${upper}`;
+    let sellRate = NaN;
+    try {
+      const resp = await this.bridgeApi.get<BridgeExchangeRateResponse>(
+        `/v0/exchange_rates?from=usd&to=${upper.toLowerCase()}`,
+      );
+      sellRate = parseFloat(resp?.sell_rate);
+    } catch (err) {
+      this.logger.warn(
+        `No se pudo obtener la tasa en vivo ${pair} de Bridge: ${(err as Error).message}`,
+      );
+    }
+    if (!(sellRate > 0)) return null;
+    return this.truncateToCalcPrecision(sellRate, pair);
   }
 
   /** Convierte un monto aplicando tipo de cambio con spread. */

@@ -68,3 +68,50 @@ describe('ExchangeRatesService.getLiveUsdRate', () => {
     );
   });
 });
+
+/**
+ * getBridgeUsdRateForEstimate: la tasa que usa la calculadora de importe
+ * flexible. Sin spread (Guira solo cobra el developer fee) y, a diferencia de
+ * getLiveUsdRate, con respaldo en la última tasa sincronizada: es una
+ * estimación, no un cobro.
+ */
+describe('ExchangeRatesService.getBridgeUsdRateForEstimate', () => {
+  function makeService(opts: { bridgeFails?: boolean } = {}) {
+    const single = jest.fn().mockResolvedValue({
+      data: {
+        pair: 'USD_EUR',
+        rate: '0.8700',
+        spread_percent: '1',
+        bridge_sell_rate: '0.8700',
+        bridge_buy_rate: '0.8800',
+        updated_at: '2026-09-01T00:00:00Z',
+      },
+      error: null,
+    });
+    const query: any = { select: () => query, eq: () => query, single };
+    const supabase = { from: jest.fn(() => query) };
+    const bridgeGet = opts.bridgeFails
+      ? jest.fn().mockRejectedValue(new Error('timeout'))
+      : jest.fn().mockResolvedValue({ sell_rate: '0.8727' });
+    return new ExchangeRatesService(
+      supabase as any,
+      {} as any,
+      { get: bridgeGet } as any,
+      {} as any,
+    );
+  }
+
+  it('devuelve la sell_rate de Bridge sin spread', async () => {
+    const r = await makeService().getBridgeUsdRateForEstimate('eur');
+    expect(r).toMatchObject({ pair: 'USD_EUR', rate: 0.8727, source: 'live' });
+  });
+
+  it('si Bridge no responde, usa la última tasa sincronizada y lo indica', async () => {
+    const r = await makeService({ bridgeFails: true }).getBridgeUsdRateForEstimate('EUR');
+    expect(r).toMatchObject({
+      rate: 0.87,
+      source: 'cached',
+      fetched_at: '2026-09-01T00:00:00Z',
+    });
+  });
+});

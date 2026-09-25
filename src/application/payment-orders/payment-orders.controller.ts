@@ -424,6 +424,19 @@ export class PaymentOrdersController {
     return maskOrdersIfNeeded([order], linked)[0];
   }
 
+  @Get(':id/flexible-quote')
+  @ApiOperation({
+    summary:
+      'Comisión congelada y tipo de cambio para calcular el depósito de un expediente de importe flexible',
+  })
+  @RequiresCapability('orders:read')
+  getFlexibleQuote(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @TargetUserId() targetUserId: string,
+  ) {
+    return this.paymentOrdersService.getFlexibleQuoteContext(targetUserId, id);
+  }
+
   @Get(':id/pdf')
   @ApiOperation({ summary: 'Generar comprobante operativo en PDF de la orden' })
   @RequiresCapability('orders:documents')
