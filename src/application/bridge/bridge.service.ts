@@ -285,22 +285,7 @@ export class BridgeService {
         is_external_sweep: isExternalSweep,
         external_destination_label: dto.destination_label ?? null,
         // ── Campos de source_deposit_instructions (respuesta de Bridge) ──
-        bank_name: (sdi.bank_name as string) ?? null,
-        bank_address: (sdi.bank_address as string) ?? null,
-        beneficiary_name: (sdi.bank_beneficiary_name as string) ?? null,
-        beneficiary_address: (sdi.bank_beneficiary_address as string) ?? null,
-        routing_number: (sdi.bank_routing_number as string) ?? null,
-        account_number: (sdi.bank_account_number as string) ?? null,
-        // Campos multi-divisa (Bridge los devuelve según source_currency)
-        iban: (sdi.iban as string) ?? null,
-        clabe: (sdi.clabe as string) ?? null,
-        br_code: (sdi.br_code as string) ?? null,
-        sort_code: (sdi.sort_code as string) ?? null,
-        payment_rails: (sdi.payment_rails as string[]) ?? null,
-        // Titular de la cuenta
-        account_holder_name: (sdi.account_holder_name as string) ?? null,
-        // Mensaje de depósito: específico de COP/Bre-B
-        deposit_message: (sdi.deposit_message as string) ?? null,
+        ...this.mapDepositInstructions(sdi),
         // Fee confirmado por Bridge (fuente de verdad)
         // Si Bridge no lo devuelve, usamos el cálculo local como fallback
         developer_fee_percent:
@@ -317,6 +302,101 @@ export class BridgeService {
     return data;
   }
 
+  /**
+   * Mapea source_deposit_instructions de Bridge a columnas de bridge_virtual_accounts.
+   * Cada moneda usa claves distintas: USD/MXN devuelven bank_account_number,
+   * GBP devuelve account_number; EUR agrega bic y COP bre_b_key.
+   */
+  private mapDepositInstructions(sdi: Record<string, unknown>) {
+    const str = (...keys: string[]) => {
+      for (const k of keys) {
+        if (typeof sdi[k] === 'string' && sdi[k]) return sdi[k] as string;
+      }
+      return null;
+    };
+    const rails = sdi.payment_rails;
+    return {
+      bank_name: str('bank_name'),
+      bank_address: str('bank_address'),
+      // El ejemplo GBP de la doc de Bridge trae el typo "bank_benficiary_*"
+      beneficiary_name: str('bank_beneficiary_name', 'bank_benficiary_name'),
+      beneficiary_address: str(
+        'bank_beneficiary_address',
+        'bank_benficiary_address',
+      ),
+      routing_number: str('bank_routing_number'),
+      account_number: str('bank_account_number', 'account_number'),
+      iban: str('iban'),
+      bic: str('bic'),
+      clabe: str('clabe'),
+      br_code: str('br_code'),
+      sort_code: str('sort_code'),
+      bre_b_key: str('bre_b_key'),
+      // EUR/GBP lo devuelven como string, el resto como array
+      payment_rails: Array.isArray(rails)
+        ? (rails as string[])
+        : typeof rails === 'string'
+          ? [rails]
+          : null,
+      account_holder_name: str('account_holder_name'),
+      deposit_message: str('deposit_message'),
+    };
+  }
+
+  /** Campo obligatorio (según el schema de Bridge) que falta en la fila local. */
+  private static readonly VA_REQUIRED_FIELD: Record<string, string> = {
+    eur: 'bic',
+    gbp: 'account_number',
+    cop: 'bre_b_key',
+  };
+
+  /**
+   * Completa VAs creadas antes de que se guardaran todos los campos
+   * (p. ej. bic de EUR). Consulta Bridge una sola vez por VA: después
+   * de actualizar, el campo ya no está vacío y no se vuelve a pedir.
+   */
+  private async backfillDepositInstructions(
+    rows: Record<string, unknown>[],
+  ) {
+    return Promise.all(
+      rows.map(async (va) => {
+        const field =
+          BridgeService.VA_REQUIRED_FIELD[va.source_currency as string];
+        if (!field || va[field] || !va.bridge_virtual_account_id) return va;
+        try {
+          const bridgeVA = await this.bridgeApi.get<Record<string, unknown>>(
+            `/v0/customers/${va.bridge_customer_id as string}/virtual_accounts/${va.bridge_virtual_account_id as string}`,
+          );
+          const sdi =
+            (bridgeVA.source_deposit_instructions as Record<string, unknown>) ??
+            {};
+          // Solo rellenar huecos: no pisar datos existentes con nulls
+          const patch = Object.fromEntries(
+            Object.entries(this.mapDepositInstructions(sdi)).filter(
+              ([k, v]) => v != null && va[k] == null,
+            ),
+          );
+          if (Object.keys(patch).length === 0) return va;
+          const { error } = await this.supabase
+            .from('bridge_virtual_accounts')
+            .update({ ...patch, updated_at: new Date().toISOString() })
+            .eq('id', va.id as string);
+          if (error) {
+            this.logger.warn(
+              `No se pudo guardar instrucciones de la VA ${va.id as string}: ${error.message}`,
+            );
+          }
+          return { ...va, ...patch };
+        } catch (err) {
+          this.logger.warn(
+            `No se pudo completar instrucciones de la VA ${va.id as string}: ${err}`,
+          );
+          return va;
+        }
+      }),
+    );
+  }
+
   /** Lista virtual accounts del usuario. */
   async listVirtualAccounts(userId: string) {
     const { data, error } = await this.supabase
@@ -327,7 +407,7 @@ export class BridgeService {
       .order('created_at');
 
     if (error) throwDbError(error);
-    return data ?? [];
+    return this.backfillDepositInstructions(data ?? []);
   }
 
   /** Detalle de una virtual account. */
