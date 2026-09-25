@@ -134,6 +134,16 @@ const DEFAULT_PSAV_DEPOSIT_EXPIRY_MINUTES = 10;
 /** Expedientes vencidos que el cron procesa por ciclo. */
 const DEPOSIT_EXPIRY_BATCH_SIZE = 50;
 
+/** Flujos donde el cliente decide cuánto depositar (transfer con flexible_amount). */
+const FLEXIBLE_AMOUNT_FLOWS = new Set(['wallet_to_world', 'wallet_to_wallet']);
+
+/** Estados en que un expediente de importe flexible aún espera el depósito. */
+const FLEXIBLE_QUOTE_OPEN_STATUSES = new Set([
+  'created',
+  'pending_review',
+  'waiting_deposit',
+]);
+
 function buildDateRange(
   year: number,
   month?: number,
@@ -5333,6 +5343,160 @@ export class PaymentOrdersService {
     }
 
     return this.toClientOrder(data);
+  }
+
+  /**
+   * Datos para la calculadora de un expediente de importe flexible
+   * (wallet_to_world / wallet_to_wallet): el cliente elige cuánto depositar, así
+   * que necesita saber qué comisión y qué tasa se le van a aplicar.
+   *
+   * La comisión es la CONGELADA en el expediente, no la configuración actual:
+   * Bridge cobra el developer_fee_percent con que se creó el transfer, aunque el
+   * override del cliente haya cambiado después. Por eso no sirve /fees/preview,
+   * que además resuelve contra quien consulta y no contra el titular.
+   */
+  async getFlexibleQuoteContext(userId: string, orderId: string) {
+    const { data: order, error } = await this.supabase
+      .from('payment_orders')
+      .select(
+        'id, user_id, flow_type, status, supplier_id, source_network, source_currency, currency, destination_network, destination_currency, bridge_transfer_id, bridge_execution_context',
+      )
+      .eq('id', orderId)
+      .eq('user_id', userId)
+      .single();
+
+    if (error || !order) {
+      throw new NotFoundException('Orden no encontrada');
+    }
+
+    if (!FLEXIBLE_AMOUNT_FLOWS.has(order.flow_type)) {
+      throw new BadRequestException({
+        code: 'NOT_FLEXIBLE_AMOUNT_FLOW',
+        message: 'La calculadora solo aplica a expedientes de importe flexible.',
+      });
+    }
+    if (!FLEXIBLE_QUOTE_OPEN_STATUSES.has(order.status)) {
+      throw new BadRequestException({
+        code: 'ORDER_STATE_CHANGED',
+        message: 'El expediente ya no admite depósitos.',
+      });
+    }
+
+    const isWalletToWorld = order.flow_type === 'wallet_to_world';
+    const sourceNetwork = String(order.source_network ?? '').toLowerCase();
+    const sourceCurrency = String(
+      order.source_currency ?? order.currency ?? 'usdc',
+    ).toLowerCase();
+    const destinationCurrency = String(
+      order.destination_currency ?? 'usd',
+    ).toLowerCase();
+
+    // Clave de comisión, idéntica a la que usa la creación de cada flujo.
+    let feeKey: { operation: string; rail: string; currency: string };
+    if (isWalletToWorld) {
+      const { data: supplier } = await this.supabase
+        .from('suppliers')
+        .select('payment_rail')
+        .eq('id', order.supplier_id)
+        .maybeSingle();
+      feeKey = {
+        operation: 'ramp_off_wallet_world',
+        rail: supplier?.payment_rail ?? '',
+        currency: destinationCurrency,
+      };
+    } else {
+      feeKey = {
+        operation: 'interbank_w2w',
+        rail: 'bridge',
+        currency: sourceCurrency,
+      };
+    }
+
+    // ── Comisión congelada: transfer → contexto de revisión → config actual ──
+    let feePercent: number | null = null;
+    let feeSource: 'transfer' | 'review_context' | 'current_config' =
+      'current_config';
+
+    if (order.bridge_transfer_id) {
+      const { data: transfer } = await this.supabase
+        .from('bridge_transfers')
+        .select('developer_fee_percent')
+        .eq('bridge_transfer_id', order.bridge_transfer_id)
+        .maybeSingle();
+      const pct = parseFloat(String(transfer?.developer_fee_percent ?? ''));
+      if (Number.isFinite(pct)) {
+        feePercent = pct;
+        feeSource = 'transfer';
+      }
+    }
+    if (feePercent === null) {
+      const pct = parseFloat(
+        String(order.bridge_execution_context?.fee_percent ?? ''),
+      );
+      if (Number.isFinite(pct)) {
+        feePercent = pct;
+        feeSource = 'review_context';
+      }
+    }
+
+    // Resuelta contra el TITULAR (userId es el targetUserId del controlador).
+    const current = feeKey.rail
+      ? await this.feesService.previewFee(
+          userId,
+          feeKey.operation,
+          feeKey.rail,
+          feeKey.currency,
+          0,
+        )
+      : null;
+    if (feePercent === null) {
+      feePercent = current?.fee_percent ?? 0;
+    }
+    // Tarifa preferencial solo si el % congelado es el del override vigente;
+    // si el override cambió después, no se puede afirmar de dónde salió.
+    const isOverride =
+      !!current?.is_override && current.fee_percent === feePercent;
+
+    // ── Tipo de cambio ──
+    // wallet_to_wallet es token→token (stablecoins): sin conversión de divisa.
+    const rateApplies = isWalletToWorld && destinationCurrency !== 'usd';
+    let exchangeRate = 1;
+    let rateSource: 'none' | 'live' | 'cached' = 'none';
+    let rateFetchedAt: string | null = null;
+    if (rateApplies) {
+      const rate =
+        await this.exchangeRatesService.getBridgeUsdRateForEstimate(
+          destinationCurrency,
+        );
+      exchangeRate = rate.rate;
+      rateSource = rate.source;
+      rateFetchedAt = rate.fetched_at;
+    }
+
+    const minAmount = isWalletToWorld
+      ? getWalletToWorldMinAmount(sourceNetwork, sourceCurrency)
+      : getTransferMinAmount(
+          sourceNetwork,
+          sourceCurrency,
+          String(order.destination_network ?? ''),
+          destinationCurrency,
+        );
+
+    return {
+      order_id: order.id,
+      flow_type: order.flow_type,
+      source_currency: sourceCurrency.toUpperCase(),
+      source_network: sourceNetwork,
+      destination_currency: destinationCurrency.toUpperCase(),
+      fee_percent: feePercent,
+      fee_source: feeSource,
+      is_override: isOverride,
+      rate_applies: rateApplies,
+      exchange_rate: exchangeRate,
+      rate_source: rateSource,
+      rate_fetched_at: rateFetchedAt,
+      min_amount: minAmount,
+    };
   }
 
   /**
