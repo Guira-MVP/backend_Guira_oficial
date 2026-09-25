@@ -451,6 +451,61 @@ export class ExchangeRatesService {
     };
   }
 
+  /**
+   * Tasa USD→X pedida a Bridge en este momento, con el spread de USD_X aplicado.
+   *
+   * Para los puntos donde una tasa desactualizada cuesta dinero (cotizar y
+   * aprobar un Fixed Outputs). No sirve exchange_rates_config.updated_at para
+   * saber si la tasa guardada está vigente: el cron solo escribe cuando el valor
+   * cambia, así que una tasa estable se ve "vieja" aunque esté al día, y un
+   * fallo de sincronización se ve igual que una tasa estable.
+   *
+   * Lanza si Bridge no responde o devuelve una tasa inválida: mejor no cotizar
+   * que cotizar con un dato del que no se sabe la antigüedad.
+   */
+  async getLiveUsdRate(currency: string): Promise<{
+    pair: string;
+    bridge_sell_rate: number;
+    spread_percent: number;
+    effective_rate: number;
+    fetched_at: string;
+  }> {
+    const upper = currency.toUpperCase();
+    const pair = `USD_${upper}`;
+    // El spread es configuración de Guira: se lee de la fila del par.
+    const { spread_percent } = await this.getRate(pair);
+
+    let sellRate = NaN;
+    try {
+      const resp = await this.bridgeApi.get<BridgeExchangeRateResponse>(
+        `/v0/exchange_rates?from=usd&to=${upper.toLowerCase()}`,
+      );
+      sellRate = parseFloat(resp?.sell_rate);
+    } catch (err) {
+      this.logger.warn(
+        `No se pudo obtener la tasa en vivo ${pair} de Bridge: ${(err as Error).message}`,
+      );
+    }
+    if (!(sellRate > 0)) {
+      throw new BadRequestException(
+        `No pudimos obtener el tipo de cambio actual para ${upper}. Inténtalo en unos minutos.`,
+      );
+    }
+
+    const bridgeSellRate = this.truncateToCalcPrecision(sellRate, pair);
+    return {
+      pair,
+      bridge_sell_rate: bridgeSellRate,
+      spread_percent,
+      // Misma fórmula que getRate para pares no-BOB: el spread baja la tasa.
+      effective_rate: this.truncateToCalcPrecision(
+        bridgeSellRate * (1 - spread_percent / 100),
+        pair,
+      ),
+      fetched_at: new Date().toISOString(),
+    };
+  }
+
   /** Convierte un monto aplicando tipo de cambio con spread. */
   async convertAmount(
     amount: number,

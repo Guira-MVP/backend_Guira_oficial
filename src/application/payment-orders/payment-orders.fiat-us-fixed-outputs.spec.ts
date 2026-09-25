@@ -128,16 +128,18 @@ describe('PaymentOrdersService — bridge_wallet_to_fiat_us con Fixed Outputs', 
 
   function makeService(
     supabase: any,
-    opts: { bridgePost?: jest.Mock; liveSell?: number } = {},
+    opts: {
+      bridgePost?: jest.Mock;
+      liveSell?: number;
+      liveRateFails?: boolean;
+    } = {},
   ) {
     const bridgePost =
       opts.bridgePost ??
-      jest
-        .fn()
-        .mockResolvedValue({
-          id: 'bridge-transfer-uuid',
-          state: 'awaiting_funds',
-        });
+      jest.fn().mockResolvedValue({
+        id: 'bridge-transfer-uuid',
+        state: 'awaiting_funds',
+      });
     const liveSell = opts.liveSell ?? SELL;
     const getRate = jest.fn().mockImplementation(async () => ({
       effective_rate: Math.trunc(liveSell * (1 - SPREAD) * 1e6) / 1e6,
@@ -145,6 +147,19 @@ describe('PaymentOrdersService — bridge_wallet_to_fiat_us con Fixed Outputs', 
       bridge_sell_rate: liveSell,
       updated_at: new Date().toISOString(),
     }));
+    // Fixed Outputs cotiza y comprueba el margen con la tasa en vivo de Bridge.
+    const getLiveUsdRate = jest.fn().mockImplementation(async () => {
+      if (opts.liveRateFails) {
+        throw new BadRequestException('No pudimos obtener el tipo de cambio');
+      }
+      return {
+        pair: 'USD_EUR',
+        bridge_sell_rate: liveSell,
+        spread_percent: SPREAD * 100,
+        effective_rate: Math.trunc(liveSell * (1 - SPREAD) * 1e6) / 1e6,
+        fetched_at: new Date().toISOString(),
+      };
+    });
 
     const service = new PaymentOrdersService(
       supabase,
@@ -158,7 +173,7 @@ describe('PaymentOrdersService — bridge_wallet_to_fiat_us con Fixed Outputs', 
         getFeeConfigRow: jest.fn().mockResolvedValue(RULE),
       } as any,
       {} as any,
-      { getRate } as any,
+      { getRate, getLiveUsdRate } as any,
       { post: bridgePost } as any,
       {} as any,
       {} as any,
@@ -173,7 +188,7 @@ describe('PaymentOrdersService — bridge_wallet_to_fiat_us con Fixed Outputs', 
       { assertUsableForPayment: jest.fn() } as any,
     ) as any;
 
-    return { service, bridgePost, getRate };
+    return { service, bridgePost, getRate, getLiveUsdRate };
   }
 
   const baseDto = {
@@ -355,9 +370,10 @@ describe('PaymentOrdersService — bridge_wallet_to_fiat_us con Fixed Outputs', 
       liveSell: SELL * 0.98,
     });
 
-    await expect(
-      service.approveOrderReviewStep(ORDER_ID, 'staff-1', {}),
-    ).rejects.toThrow(/vuelva a cotizar/i);
+    const approval = service.approveOrderReviewStep(ORDER_ID, 'staff-1', {});
+    await expect(approval).rejects.toThrow(/vuelva a cotizar/i);
+    // No se le pidió nada a Bridge: el mensaje no debe decir que Bridge falló.
+    await expect(approval).rejects.toThrow(/^No se envió la transferencia/);
     expect(bridgePost).not.toHaveBeenCalled();
     const statuses = supabase.__updates['payment_orders'].map(
       (u: any) => u.status,
@@ -403,6 +419,73 @@ describe('PaymentOrdersService — bridge_wallet_to_fiat_us con Fixed Outputs', 
     expect(body.amount).toBe(QUOTE.source_amount.toFixed(2));
     expect(body.source.amount).toBeUndefined();
     expect(body.destination.amount).toBeUndefined();
+  });
+
+  it('si Bridge no da la tasa en vivo al aprobar, no envía nada y pide reintentar', async () => {
+    const supabase = makeSupabase({ order: pendingOrder() });
+    const { service, bridgePost } = makeService(supabase, {
+      liveRateFails: true,
+    });
+
+    await expect(
+      service.approveOrderReviewStep(ORDER_ID, 'staff-1', {}),
+    ).rejects.toThrow(/No se envió la transferencia.*Reintenta la aprobación/);
+    expect(bridgePost).not.toHaveBeenCalled();
+    const statuses = supabase.__updates['payment_orders'].map(
+      (u: any) => u.status,
+    );
+    expect(statuses).toContain('pending_review');
+  });
+
+  it('si Bridge no da la tasa en vivo al crear, no se reserva saldo', async () => {
+    const supabase = makeSupabase();
+    const { service } = makeService(supabase, { liveRateFails: true });
+
+    await expect(
+      service.createBridgeWalletToFiatUs(
+        'user-1',
+        { ...baseDto, amount: QUOTE.source_amount, destination_amount: 1000 },
+        { skipReviewGate: false },
+      ),
+    ).rejects.toThrow(/tipo de cambio/i);
+    expect(supabase.rpc).not.toHaveBeenCalled();
+  });
+
+  it('solicitud por exceso de límite: si la tasa empeoró, el mensaje le dice al staff que la rechace', async () => {
+    const supabase = makeSupabase();
+    // La tasa cayó 2% desde que el cliente envió la solicitud.
+    const { service } = makeService(supabase, { liveSell: SELL * 0.98 });
+
+    await expect(
+      service.createBridgeWalletToFiatUs(
+        'user-1',
+        { ...baseDto, amount: QUOTE.source_amount, destination_amount: 1000 },
+        { skipReviewGate: true, fromLimitReview: true },
+      ),
+    ).rejects.toThrow(
+      /Rechaza la solicitud para que el cliente vuelva a cotizar/,
+    );
+    expect(supabase.rpc).not.toHaveBeenCalled();
+  });
+
+  it('createWalletRampOrderBypassLimit marca la cotización como proveniente de una solicitud', async () => {
+    const supabase = makeSupabase();
+    const { service } = makeService(supabase);
+    const spy = jest
+      .spyOn(service, 'createBridgeWalletToFiatUs')
+      .mockResolvedValue({ id: ORDER_ID });
+
+    await service.createWalletRampOrderBypassLimit('user-1', {
+      ...baseDto,
+      amount: QUOTE.source_amount,
+      destination_amount: 1000,
+    });
+
+    expect(spy).toHaveBeenCalledWith(
+      'user-1',
+      expect.anything(),
+      expect.objectContaining({ skipReviewGate: true, fromLimitReview: true }),
+    );
   });
 
   it('BridgeSourceAmountTooLowError sigue siendo un BadGateway (no rompe ALTO-02)', () => {

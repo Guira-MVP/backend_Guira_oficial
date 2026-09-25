@@ -29,6 +29,19 @@ export const FIXED_OUTPUT_DEST_CURRENCIES = [
  */
 export const NON_USD_ALLOWED_SOURCE_CURRENCY = 'USDC';
 
+/**
+ * El Transfer Fixed Outputs NO se envió porque el control previo de Guira lo
+ * frenó (margen agotado o tasa de Bridge no disponible). Se distingue de un
+ * fallo de Bridge para que el mensaje al staff no diga "falló en Bridge"
+ * cuando a Bridge no se le pidió nada.
+ */
+export class FixedOutputPreflightError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'FixedOutputPreflightError';
+  }
+}
+
 export function isFixedOutputCurrency(currency: string): boolean {
   return (FIXED_OUTPUT_DEST_CURRENCIES as readonly string[]).includes(
     currency.toUpperCase(),
