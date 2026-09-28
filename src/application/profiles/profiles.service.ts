@@ -55,11 +55,67 @@ export class ProfilesService {
 
     if (error || !data) throw new NotFoundException('Perfil no encontrado');
 
+    const [hasLinkedAccounts, onboardingActionRequired] = await Promise.all([
+      this.hasLinkedAccounts(userId),
+      this.isOnboardingActionRequired(userId, data.onboarding_status),
+    ]);
+
     return {
       ...(data as ProfileResponseDto),
       ...(resolvedRole ? { role: resolvedRole } : {}),
-      has_linked_accounts: await this.hasLinkedAccounts(userId),
+      has_linked_accounts: hasLinkedAccounts,
+      onboarding_action_required: onboardingActionRequired,
     } as ProfileResponseDto;
+  }
+
+  /**
+   * ¿El onboarding espera algo del cliente? Dos casos:
+   *   - el staff dejó lista su solicitud asistida (onboarding_drafts.assisted_ready_at)
+   *     y falta que el cliente la revise, acepte los términos y la envíe;
+   *   - compliance pidió correcciones (solicitud en needs_review).
+   *
+   * Solo decide a dónde entra al iniciar sesión (/onboarding en vez de
+   * /panel). Ante cualquier error devuelve false: el panel sigue mostrando
+   * el aviso con la salida al onboarding.
+   */
+  private async isOnboardingActionRequired(
+    userId: string,
+    onboardingStatus: string | null,
+  ): Promise<boolean> {
+    if (onboardingStatus === 'approved') return false;
+
+    const [draft, kyc, kyb] = await Promise.all([
+      this.supabase
+        .from('onboarding_drafts')
+        .select('assisted_ready_at')
+        .eq('user_id', userId)
+        .maybeSingle(),
+      this.supabase
+        .from('kyc_applications')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', userId)
+        .eq('status', 'needs_review'),
+      this.supabase
+        .from('kyb_applications')
+        .select('id', { count: 'exact', head: true })
+        .eq('requester_user_id', userId)
+        .eq('status', 'needs_review'),
+    ]);
+
+    for (const result of [draft, kyc, kyb]) {
+      if (result.error) {
+        this.logger.warn(
+          `No se pudo calcular onboarding_action_required de ${userId}: ${result.error.message}`,
+        );
+      }
+    }
+
+    const draftRow = draft.data as { assisted_ready_at: string | null } | null;
+    return (
+      !!draftRow?.assisted_ready_at ||
+      (kyc.count ?? 0) > 0 ||
+      (kyb.count ?? 0) > 0
+    );
   }
 
   /**
@@ -312,7 +368,7 @@ export class ProfilesService {
     let query = this.supabase
       .from('profiles')
       .select(
-        'id, email, full_name, phone, role, onboarding_status, is_active, is_frozen, created_at, avatar_url, metadata, assigned_psav_id',
+        'id, email, full_name, phone, role, onboarding_status, is_active, is_frozen, created_at, avatar_url, metadata, assigned_psav_id, company_name, tax_id',
         { count: 'exact' },
       )
       .order('created_at', { ascending: false })

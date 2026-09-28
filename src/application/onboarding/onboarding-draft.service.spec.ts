@@ -239,3 +239,102 @@ describe('OnboardingDraftService.deleteDraft', () => {
     expect(supabase.calls.some((c) => c.table === 'documents' && c.op === 'delete')).toBe(true);
   });
 });
+
+describe('OnboardingDraftService — onboarding asistido', () => {
+  const editable = {
+    kyc_applications: { data: null, error: null },
+    kyb_applications: { data: null, error: null },
+  };
+
+  it('el staff guarda con assisted_by; el cliente no lo pisa', async () => {
+    const staffSupabase = mockSupabase({
+      ...editable,
+      onboarding_drafts: [
+        { data: null, error: null },
+        { data: { updated_at: '2026-09-28T10:00:00Z' }, error: null },
+      ],
+    });
+    await buildService(staffSupabase).service.saveDraft('u1', baseDto, {
+      assistedBy: 'staff-1',
+    });
+    expect(
+      staffSupabase.calls.find((c) => c.op === 'upsert')?.payload,
+    ).toMatchObject({
+      user_id: 'u1',
+      assisted_by: 'staff-1',
+    });
+
+    const clientSupabase = mockSupabase({
+      ...editable,
+      onboarding_drafts: [
+        { data: null, error: null },
+        { data: { updated_at: '2026-09-28T10:05:00Z' }, error: null },
+      ],
+    });
+    await buildService(clientSupabase).service.saveDraft('u1', baseDto);
+    expect(
+      clientSupabase.calls.find((c) => c.op === 'upsert')?.payload,
+    ).not.toHaveProperty('assisted_by');
+  });
+
+  it('marcar listo exige un borrador guardado', async () => {
+    const supabase = mockSupabase({
+      ...editable,
+      onboarding_drafts: { data: null, error: null },
+    });
+    await expect(
+      buildService(supabase).service.markReadyForClient('u1', 'staff-1'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('marcar listo respeta el bloqueo de solicitudes ya enviadas', async () => {
+    const supabase = mockSupabase({
+      kyc_applications: { data: null, error: null },
+      kyb_applications: {
+        data: { status: 'submitted', created_at: '2026-09-20' },
+        error: null,
+      },
+    });
+    await expect(
+      buildService(supabase).service.markReadyForClient('u1', 'staff-1'),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(supabase.calls.some((c) => c.op === 'update')).toBe(false);
+  });
+
+  it('marcar listo guarda quién y cuándo, y avisa al staff sin datos personales', async () => {
+    const supabase = mockSupabase({
+      ...editable,
+      onboarding_drafts: {
+        data: { type: 'company', progress_pct: 90 },
+        error: null,
+      },
+    });
+    const { service, gateway } = buildService(supabase);
+    const res = await service.markReadyForClient('u1', 'staff-1');
+    const update = supabase.calls.find((c) => c.op === 'update');
+    expect(update?.payload).toMatchObject({ assisted_by: 'staff-1' });
+    expect(
+      typeof (update?.payload as { assisted_ready_at: string })
+        .assisted_ready_at,
+    ).toBe('string');
+    expect(res.progress_pct).toBe(90);
+    expect(
+      gateway.emitOnboardingDraftUpdated.mock.calls[0][0],
+    ).not.toHaveProperty('data');
+  });
+
+  it('getAssistance no rompe el borrador del cliente si faltan las columnas', async () => {
+    const supabase = mockSupabase({
+      onboarding_drafts: {
+        data: null,
+        error: { message: 'column "assisted_by" does not exist' },
+      },
+    });
+    await expect(
+      buildService(supabase).service.getAssistance('u1'),
+    ).resolves.toEqual({
+      assisted_by: null,
+      assisted_ready_at: null,
+    });
+  });
+});

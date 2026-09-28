@@ -50,7 +50,7 @@ export function buildTeamInviteEmail(
     previewText: `Acceso de consulta a la cuenta de ${params.companyName}.`,
     bodyHtml: `
       ${renderEyebrowHeading('Invitación', 'Únete al equipo')}
-      <p style="margin:0 0 16px;">${intro}</p>
+      <p style="margin:0 0 16px;">${escapeHtml(intro)}</p>
       <p style="margin:0 0 16px;">
         <strong>${company}</strong> te dio acceso de consulta a su cuenta de Guira
         con el perfil <strong>${escapeHtml(params.presetLabel)}</strong>.

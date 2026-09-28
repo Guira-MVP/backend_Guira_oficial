@@ -6,6 +6,7 @@ import { ZeptoMailRecipient } from './zeptomail.types';
 import { FOOTER_WAVE_CID } from './email-templates/base-layout.template';
 import {
   buildComplianceApprovedEmail,
+  buildAssistedOnboardingReadyEmail,
   buildComplianceCorrectionsRequestedEmail,
   buildComplianceIncompleteEmail,
   buildComplianceRejectedEmail,
@@ -159,6 +160,13 @@ export class EmailService {
       reason: details.reason,
       requiredActions: details.requiredActions,
       fieldObservations: details.fieldObservations,
+    });
+    return this.sendEmail({ to, subject, html, text });
+  }
+
+  async sendAssistedOnboardingReadyEmail(to: EmailRecipient): Promise<boolean> {
+    const { subject, html, text } = buildAssistedOnboardingReadyEmail({
+      name: to.name,
     });
     return this.sendEmail({ to, subject, html, text });
   }

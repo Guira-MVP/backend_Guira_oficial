@@ -8,6 +8,7 @@ import {
   Param,
   Query,
   ParseUUIDPipe,
+  ForbiddenException,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -32,6 +33,19 @@ import {
 import type { LinkedAccessContext } from '../../core/guards/supabase-auth.guard';
 import { maskSuppliersIfNeeded } from '../../common/masking/mask-bank-details';
 
+/**
+ * Desde el registro, un cliente sin onboarding aprobado recorre el panel en
+ * vista previa: puede ver su agenda (vacía), pero no crear, editar ni borrar
+ * beneficiarios. El frontend ya lo bloquea; esta es la barrera real.
+ */
+function assertCanWriteSuppliers(user: AuthenticatedUser): void {
+  if (user.profile.onboarding_status !== 'approved') {
+    throw new ForbiddenException(
+      'Tu cuenta todavía no está verificada. Completa tu registro para gestionar beneficiarios.',
+    );
+  }
+}
+
 @ApiTags('Suppliers')
 @ApiBearerAuth('supabase-jwt')
 @Controller('suppliers')
@@ -51,6 +65,7 @@ export class SuppliersController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreateSupplierDto,
   ) {
+    assertCanWriteSuppliers(user);
     return this.suppliersService.create(user.id, dto);
   }
 
@@ -108,6 +123,7 @@ export class SuppliersController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: UpdateSupplierDto,
   ) {
+    assertCanWriteSuppliers(user);
     return this.suppliersService.update(id, user.id, dto);
   }
 
@@ -117,6 +133,7 @@ export class SuppliersController {
     @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() user: AuthenticatedUser,
   ) {
+    assertCanWriteSuppliers(user);
     return this.suppliersService.remove(id, user.id);
   }
 }

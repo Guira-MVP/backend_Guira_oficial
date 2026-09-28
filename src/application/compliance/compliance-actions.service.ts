@@ -136,6 +136,8 @@ export class ComplianceActionsService {
     let previousData: Record<string, any> | null = null;
     let onboardingType: 'personal' | 'company' = 'personal';
     let diditScreening: Record<string, any> | null = null;
+    // 'staff_assisted' si el formulario lo llenó el staff por el cliente.
+    let applicationSource: string | null = null;
 
     if (review.subject_type === 'kyc_applications') {
       const { data: kyc } = await this.supabase
@@ -149,6 +151,7 @@ export class ComplianceActionsService {
         previousData = kyc.previous_data ?? null;
         onboardingType = 'personal';
         diditScreening = kyc.screening?.didit ?? null;
+        applicationSource = kyc.source ?? null;
       }
     } else if (review.subject_type === 'kyb_applications') {
       const { data: kyb } = await this.supabase
@@ -162,6 +165,7 @@ export class ComplianceActionsService {
         previousData = kyb.previous_data ?? null;
         onboardingType = 'company';
         diditScreening = kyb.screening?.didit ?? null;
+        applicationSource = kyb.source ?? null;
       }
     }
 
@@ -184,6 +188,7 @@ export class ComplianceActionsService {
       profile: profileData,
       documents,
       didit_screening: diditScreening,
+      application_source: applicationSource,
     };
   }
 

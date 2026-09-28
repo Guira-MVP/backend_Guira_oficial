@@ -52,6 +52,10 @@ export interface OnboardingDraftRow {
   progress_pct: number;
   created_at: string;
   updated_at: string;
+  /** Último miembro del staff que escribió en el borrador (onboarding asistido). */
+  assisted_by?: string | null;
+  /** Cuándo el staff lo dejó listo para que el cliente lo revise y envíe. */
+  assisted_ready_at?: string | null;
 }
 
 interface DocumentToRemove {
@@ -78,10 +82,43 @@ export class OnboardingDraftService {
       .eq('user_id', userId)
       .maybeSingle();
     if (error) throwDbError(error);
-    return (data as OnboardingDraftRow | null) ?? null;
+    if (!data) return null;
+    return { ...(data as OnboardingDraftRow), ...(await this.getAssistance(userId)) };
   }
 
-  async saveDraft(userId: string, dto: SaveOnboardingDraftDto) {
+  /**
+   * Datos del onboarding asistido. Consulta aparte y tolerante a errores: si
+   * faltaran las columnas (migración 20260928_staff_assisted_onboarding sin
+   * aplicar), el borrador del cliente sigue funcionando.
+   */
+  async getAssistance(
+    userId: string,
+  ): Promise<{ assisted_by: string | null; assisted_ready_at: string | null }> {
+    const { data, error } = await this.supabase
+      .from('onboarding_drafts')
+      .select('assisted_by, assisted_ready_at')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error) {
+      this.logger.warn(`No se pudo leer la asistencia del borrador de ${userId}: ${error.message}`);
+      return { assisted_by: null, assisted_ready_at: null };
+    }
+    return {
+      assisted_by: (data?.assisted_by as string | null) ?? null,
+      assisted_ready_at: (data?.assisted_ready_at as string | null) ?? null,
+    };
+  }
+
+  /**
+   * @param opts.assistedBy  id del staff cuando guarda el borrador en nombre
+   *   del cliente (onboarding asistido). El cliente guarda sin este dato y no
+   *   lo borra: la marca se conserva hasta que envía la solicitud.
+   */
+  async saveDraft(
+    userId: string,
+    dto: SaveOnboardingDraftDto,
+    opts: { assistedBy?: string } = {},
+  ) {
     await this.assertDraftEditable(userId);
 
     const data = this.sanitizeData(dto.data);
@@ -113,7 +150,12 @@ export class OnboardingDraftService {
     const { data: row, error } = await this.supabase
       .from('onboarding_drafts')
       .upsert(
-        { user_id: userId, ...next, updated_at: new Date().toISOString() },
+        {
+          user_id: userId,
+          ...next,
+          ...(opts.assistedBy ? { assisted_by: opts.assistedBy } : {}),
+          updated_at: new Date().toISOString(),
+        },
         { onConflict: 'user_id' },
       )
       .select('updated_at')
@@ -128,6 +170,42 @@ export class OnboardingDraftService {
     });
 
     return { updated_at: row.updated_at as string, unchanged: false };
+  }
+
+  /**
+   * Onboarding asistido: el staff terminó de cargar la solicitud y la deja
+   * lista para que el cliente la revise, acepte los términos de Bridge y la
+   * envíe. Solo marca el borrador; avisar al cliente es del llamador.
+   */
+  async markReadyForClient(userId: string, staffId: string) {
+    await this.assertDraftEditable(userId);
+
+    const readyAt = new Date().toISOString();
+    const { data, error } = await this.supabase
+      .from('onboarding_drafts')
+      .update({ assisted_by: staffId, assisted_ready_at: readyAt })
+      .eq('user_id', userId)
+      .select('type, progress_pct')
+      .maybeSingle();
+    if (error) throwDbError(error);
+    if (!data) {
+      throw new BadRequestException(
+        'El cliente todavía no tiene un formulario guardado. Completa y guarda el formulario antes de avisarle.',
+      );
+    }
+
+    this.notifyStaff(
+      userId,
+      {
+        type: data.type as 'personal' | 'company',
+        progress_pct: data.progress_pct as number,
+        updated_at: readyAt,
+        action: 'saved',
+      },
+      true,
+    );
+
+    return { assisted_ready_at: readyAt, progress_pct: data.progress_pct as number };
   }
 
   /**
