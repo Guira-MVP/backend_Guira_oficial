@@ -95,12 +95,12 @@ export function renderEmailLayout(opts: EmailLayoutOptions): string {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="x-apple-disable-message-reformatting" />
-    <title>${title}</title>
+    <title>${escapeHtml(title)}</title>
   </head>
   <body style="margin:0; padding:0; background-color:${BRAND.surface}; font-family:${FONT_STACK};">
     ${
       previewText
-        ? `<div style="display:none; max-height:0; overflow:hidden; opacity:0;">${previewText}</div>`
+        ? `<div style="display:none; max-height:0; overflow:hidden; opacity:0;">${escapeHtml(previewText)}</div>`
         : ''
     }
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:${BRAND.surface};">

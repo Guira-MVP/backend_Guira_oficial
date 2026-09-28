@@ -44,6 +44,14 @@ export class ProfileResponseDto {
   @ApiPropertyOptional({ example: false })
   has_linked_accounts?: boolean;
 
+  /**
+   * El onboarding espera una acción del cliente: solicitud asistida lista
+   * para revisar, o correcciones pedidas por compliance. Decide si entra al
+   * onboarding o al panel al iniciar sesión.
+   */
+  @ApiPropertyOptional({ example: false })
+  onboarding_action_required?: boolean;
+
   @ApiPropertyOptional({ example: 10000 })
   daily_limit_usd: number | null;
 
@@ -55,6 +63,26 @@ export class ProfileResponseDto {
 
   @ApiPropertyOptional()
   avatar_url: string | null;
+
+  /**
+   * Datos declarados en el registro (empresa + representante legal). Sirven
+   * para precargar el onboarding e identificar la cuenta antes de que exista
+   * una solicitud; lo que llega a Bridge es lo que se envía en el onboarding.
+   */
+  @ApiPropertyOptional({ example: 'Importadora Andina S.R.L.' })
+  company_name?: string | null;
+
+  @ApiPropertyOptional({ example: '1020304025', description: 'NIT' })
+  tax_id?: string | null;
+
+  @ApiPropertyOptional({ example: 'María José' })
+  contact_first_name?: string | null;
+
+  @ApiPropertyOptional({ example: 'Pérez Gómez' })
+  contact_last_name?: string | null;
+
+  @ApiPropertyOptional({ example: '1234567 LP', description: 'CI del contacto' })
+  contact_id_number?: string | null;
 
   @ApiProperty()
   created_at: string;

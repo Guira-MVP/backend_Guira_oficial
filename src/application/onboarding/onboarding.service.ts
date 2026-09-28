@@ -24,6 +24,10 @@ import {
   getRequiredIdentityDocTypes,
   labelForIdentityDocType,
 } from './document-requirements';
+import {
+  contentMatchesMime,
+  extensionForMime,
+} from './document-file-validation';
 
 const ALLOWED_MIME_TYPES = [
   'application/pdf',
@@ -34,6 +38,20 @@ const ALLOWED_MIME_TYPES = [
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 const STORAGE_BUCKET = 'kyc-documents';
 const ALLOWED_SUBJECT_TYPES = ['person', 'business', 'director', 'ubo'];
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Nombre para mostrar: sin rutas ni caracteres de control, largo acotado. */
+function safeDisplayFileName(originalName: string | undefined, ext: string): string {
+  const base = (originalName ?? '')
+    .split(/[\/]/)
+    .pop()!
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .trim()
+    .slice(0, 200);
+  return base || `documento.${ext}`;
+}
+
 /** draft_key de documentos de UBOs que aún no existen en business_ubos. */
 const UBO_DRAFT_KEY = /^ubo:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -365,11 +383,15 @@ export class OnboardingService {
       );
     }
 
+    const assistance = await this.draftService.getAssistance(userId);
+
     const { data, error } = await this.supabase
       .from('kyc_applications')
       .update({
         status: 'submitted',
         submitted_at: new Date().toISOString(),
+        // Llenada por el staff con los datos del cliente; la envió el cliente.
+        ...(assistance.assisted_by ? { source: 'staff_assisted' } : {}),
         updated_at: new Date().toISOString(),
         observations: null,
         field_observations: {},
@@ -1088,11 +1110,15 @@ export class OnboardingService {
       throw new BadRequestException('Debes aceptar los Terms of Service');
     }
 
+    const assistance = await this.draftService.getAssistance(userId);
+
     const { data, error } = await this.supabase
       .from('kyb_applications')
       .update({
         status: 'submitted',
         submitted_at: new Date().toISOString(),
+        // Llenada por el staff con los datos del cliente; la envió el cliente.
+        ...(assistance.assisted_by ? { source: 'staff_assisted' } : {}),
         // H13-FIX: antes estaban hardcodeados en `true` sin importar el
         // estado real (llegamos a ver `ubos_complete: true` con
         // business_ubos en 0 filas). Ahora reflejan las validaciones que
@@ -1212,6 +1238,8 @@ export class OnboardingService {
     subjectType: string,
     subjectId?: string,
     draftKey?: string,
+    /** Staff que sube el archivo en nombre del cliente (onboarding asistido). */
+    uploadedBy?: string,
   ) {
     if (!file) {
       throw new BadRequestException('El archivo no se encontró o está vacío');
@@ -1229,6 +1257,17 @@ export class OnboardingService {
       throw new BadRequestException('El archivo excede el límite de 10 MB');
     }
 
+    // El mimetype lo declara quien sube: se compara contra el contenido real.
+    if (!contentMatchesMime(file.buffer, file.mimetype)) {
+      throw new BadRequestException(
+        'El contenido del archivo no corresponde a un PDF, JPG o PNG válido.',
+      );
+    }
+
+    if (subjectId && !UUID_PATTERN.test(subjectId)) {
+      throw new BadRequestException('subject_id inválido');
+    }
+
     if (!ALLOWED_SUBJECT_TYPES.includes(subjectType)) {
       throw new BadRequestException('subject_type inválido');
     }
@@ -1244,7 +1283,9 @@ export class OnboardingService {
     // Generar path en storage
     const date = new Date().toISOString().split('T')[0];
     const uniqueId = crypto.randomUUID();
-    const ext = file.originalname.split('.').pop();
+    // La extensión sale del tipo ya validado, nunca del nombre original
+    // (podía traer '../' y escribir fuera de la carpeta del usuario).
+    const ext = extensionForMime(file.mimetype);
     const storagePath = `${userId}/${date}_${documentType}_${uniqueId}.${ext}`;
 
     // Subir a Storage
@@ -1273,10 +1314,13 @@ export class OnboardingService {
         is_draft: true,
         document_type: documentType,
         storage_path: storagePath,
-        file_name: file.originalname,
+        file_name: safeDisplayFileName(file.originalname, ext ?? 'bin'),
         mime_type: file.mimetype,
         file_size_bytes: file.size,
         status: 'pending',
+        // Solo se escribe si lo sube el staff: la subida del cliente no
+        // depende de que exista la columna.
+        ...(uploadedBy ? { uploaded_by: uploadedBy } : {}),
       })
       .select()
       .single();

@@ -1,5 +1,6 @@
 import {
   APP_URL,
+  escapeHtml,
   greetingName,
   renderButton,
   renderEmailLayout,
@@ -40,7 +41,7 @@ export function buildPaymentOrderCompletedEmail(
     previewText: message,
     bodyHtml: `
       ${renderEyebrowHeading('Orden completada', '¡Tu orden de pago fue completada!')}
-      <p style="margin:0 0 16px;">${intro}</p>
+      <p style="margin:0 0 16px;">${escapeHtml(intro)}</p>
       <p style="margin:0;">${message}</p>
       ${renderButton('Ir a Guira', APP_URL)}
     `,
@@ -62,7 +63,7 @@ export function buildPaymentOrderFailedEmail(
     previewText: message,
     bodyHtml: `
       ${renderEyebrowHeading('Orden de pago', 'Tu orden de pago no pudo completarse')}
-      <p style="margin:0 0 16px;">${intro}</p>
+      <p style="margin:0 0 16px;">${escapeHtml(intro)}</p>
       <p style="margin:0;">${message}</p>
       ${renderButton('Ir a Guira', APP_URL)}
     `,

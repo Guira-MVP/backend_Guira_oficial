@@ -14,6 +14,7 @@ import {
   ParseUUIDPipe,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { DOCUMENT_UPLOAD_LIMITS } from './document-file-validation';
 import { Throttle } from '@nestjs/throttler';
 import {
   ApiTags,
@@ -266,7 +267,7 @@ export class OnboardingController {
 
   @Post('documents/upload')
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: DOCUMENT_UPLOAD_LIMITS }))
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Subir documento de identidad o empresa' })
   @ApiBody({
@@ -385,7 +386,7 @@ export class OnboardingController {
 
   @Public()
   @Post('mobile-upload')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: DOCUMENT_UPLOAD_LIMITS }))
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Subir documento desde sesión móvil (sin JWT)' })
   @ApiBody({

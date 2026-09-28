@@ -36,7 +36,7 @@ export function buildComplianceApprovedEmail(
     previewText: message,
     bodyHtml: `
       ${renderEyebrowHeading('Verificación completada', '¡Tu cuenta está verificada!')}
-      <p style="margin:0 0 16px;">${intro}</p>
+      <p style="margin:0 0 16px;">${escapeHtml(intro)}</p>
       <p style="margin:0 0 16px;">${message}</p>
       <p style="margin:0;">Gracias por confiar en Guira.</p>
       ${renderButton('Ir a Guira', APP_URL)}
@@ -62,8 +62,8 @@ export function buildComplianceRejectedEmail(
     previewText: message,
     bodyHtml: `
       ${renderEyebrowHeading('Verificación de identidad', 'Encontramos observaciones en tu verificación')}
-      <p style="margin:0 0 16px;">${intro}</p>
-      <p style="margin:0;">${message}</p>
+      <p style="margin:0 0 16px;">${escapeHtml(intro)}</p>
+      <p style="margin:0;">${escapeHtml(message)}</p>
       ${renderButton('Ir a Guira', APP_URL)}
     `,
   });
@@ -86,7 +86,7 @@ export function buildComplianceIncompleteEmail(
     previewText: message,
     bodyHtml: `
       ${renderEyebrowHeading('Verificación de identidad', 'Necesitamos información adicional')}
-      <p style="margin:0 0 16px;">${intro}</p>
+      <p style="margin:0 0 16px;">${escapeHtml(intro)}</p>
       <p style="margin:0;">${message}</p>
       ${renderButton('Ir a Guira', APP_URL)}
     `,
@@ -133,7 +133,7 @@ export function buildComplianceCorrectionsRequestedEmail(
     previewText: message,
     bodyHtml: `
       ${renderEyebrowHeading('Onboarding · Guira', 'Tu expediente necesita correcciones')}
-      <p style="margin:0 0 16px;">${intro}</p>
+      <p style="margin:0 0 16px;">${escapeHtml(intro)}</p>
       <p style="margin:0 0 16px;">${message}</p>
       <p style="margin:0;">${escapeHtml(reason)}</p>
       ${requiredActionsHtml}
@@ -153,6 +153,37 @@ export function buildComplianceCorrectionsRequestedEmail(
     : '';
 
   const text = `${intro}\n\n${message}\n\n${reason}${requiredActionsText}${fieldObservationsText}\n\nInicia sesión en tu cuenta para corregir y reenviar tu información.`;
+
+  return { subject, html, text };
+}
+
+/**
+ * Onboarding asistido: el staff completó la solicitud con lo que el cliente
+ * le envió por WhatsApp. Falta que el cliente la revise, acepte los términos
+ * del proveedor y la envíe (Bridge exige que los acepte el propio titular).
+ */
+export function buildAssistedOnboardingReadyEmail(
+  params: ComplianceEmailParams,
+): ComplianceEmailContent {
+  const subject = 'Tu solicitud en Guira está lista para revisar';
+  const intro = greeting(params.name);
+  const message =
+    'Nuestro equipo completó tu solicitud de verificación con la información que nos enviaste. Solo falta que la revises, aceptes los términos del servicio y la envíes.';
+  const link = `${APP_URL}/onboarding`;
+
+  const html = renderEmailLayout({
+    title: subject,
+    previewText: message,
+    bodyHtml: `
+      ${renderEyebrowHeading('Onboarding · Guira', 'Tu solicitud está lista')}
+      <p style="margin:0 0 16px;">${escapeHtml(intro)}</p>
+      <p style="margin:0 0 16px;">${message}</p>
+      <p style="margin:0;">Si algún dato no es correcto, puedes corregirlo antes de enviar o escribirnos por WhatsApp.</p>
+      ${renderButton('Revisar mi solicitud', link)}
+    `,
+  });
+
+  const text = `${intro}\n\n${message}\n\nRevisa tu solicitud: ${link}`;
 
   return { subject, html, text };
 }

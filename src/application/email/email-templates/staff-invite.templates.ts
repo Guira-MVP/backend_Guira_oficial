@@ -53,7 +53,7 @@ export function buildStaffInviteEmail(
     previewText: 'Activa tu acceso al panel interno de Guira.',
     bodyHtml: `
       ${renderEyebrowHeading('Acceso al panel', 'Activa tu cuenta')}
-      <p style="margin:0 0 16px;">${intro}</p>
+      <p style="margin:0 0 16px;">${escapeHtml(intro)}</p>
       <p style="margin:0 0 16px;">${message}</p>
       <p style="margin:0 0 16px;">
         Para entrar por primera vez necesitas establecer tu contraseña. Nadie más la conoce
