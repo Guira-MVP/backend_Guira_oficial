@@ -65,6 +65,14 @@ export class ProfileResponseDto {
   avatar_url: string | null;
 
   /**
+   * Tipo de cuenta: nace como la intención declarada al registrarse y se
+   * sincroniza con la solicitud enviada (KYC → personal, KYB → company).
+   * Informativo: no decide comisiones, límites ni permisos.
+   */
+  @ApiPropertyOptional({ enum: ['personal', 'company'], nullable: true })
+  account_type?: 'personal' | 'company' | null;
+
+  /**
    * Datos declarados en el registro (empresa + representante legal). Sirven
    * para precargar el onboarding e identificar la cuenta antes de que exista
    * una solicitud; lo que llega a Bridge es lo que se envía en el onboarding.

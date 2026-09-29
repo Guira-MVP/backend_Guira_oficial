@@ -368,7 +368,7 @@ export class ProfilesService {
     let query = this.supabase
       .from('profiles')
       .select(
-        'id, email, full_name, phone, role, onboarding_status, is_active, is_frozen, created_at, avatar_url, metadata, assigned_psav_id, company_name, tax_id',
+        'id, email, full_name, phone, role, onboarding_status, is_active, is_frozen, created_at, avatar_url, metadata, assigned_psav_id, company_name, tax_id, account_type',
         { count: 'exact' },
       )
       .order('created_at', { ascending: false })
