@@ -183,7 +183,9 @@ export class AccountMembersService {
       .order('created_at', { ascending: false });
 
     if (error) {
-      this.logger.error(`Error listando el equipo de ${ownerId}: ${error.message}`);
+      this.logger.error(
+        `Error listando el equipo de ${ownerId}: ${error.message}`,
+      );
       throw new InternalServerErrorException('No se pudo consultar el equipo');
     }
 
@@ -255,7 +257,7 @@ export class AccountMembersService {
       email,
       fullName: dto.full_name,
       token,
-      companyName: actor.profile.full_name ?? 'Una empresa',
+      companyName: await this.ownerDisplayName(actor),
       preset: dto.preset,
       capabilities,
     });
@@ -268,6 +270,27 @@ export class AccountMembersService {
     });
 
     return { member: this.toResponse(data), email_sent: emailSent };
+  }
+
+  /**
+   * Cómo se presenta la cuenta que invita: su razón social si la declaró al
+   * registrarse (cuenta empresarial), si no el nombre del titular. Nunca
+   * bloquea la invitación: ante cualquier error usa el nombre del titular.
+   */
+  private async ownerDisplayName(actor: AuthenticatedUser): Promise<string> {
+    const fallback = actor.profile.full_name ?? 'Una empresa';
+    try {
+      const { data } = await this.supabase
+        .from('profiles')
+        .select('company_name')
+        .eq('id', actor.id)
+        .maybeSingle();
+      const companyName = (data as { company_name?: string | null } | null)
+        ?.company_name;
+      return companyName?.trim() || fallback;
+    } catch {
+      return fallback;
+    }
   }
 
   private async sendInvite(params: {
@@ -411,9 +434,7 @@ export class AccountMembersService {
     const current = await this.findOwnedRow(actor.id, memberRowId);
 
     if (current.status === 'active') {
-      throw new BadRequestException(
-        'Esa persona ya tiene acceso a tu cuenta.',
-      );
+      throw new BadRequestException('Esa persona ya tiene acceso a tu cuenta.');
     }
 
     await this.assertCanInvite(actor);
@@ -492,7 +513,7 @@ export class AccountMembersService {
       email: data.invited_email,
       fullName: data.full_name ?? data.invited_email,
       token,
-      companyName: actor.profile.full_name ?? 'Una empresa',
+      companyName: await this.ownerDisplayName(actor),
       preset: data.preset,
       capabilities,
     });
@@ -696,14 +717,19 @@ export class AccountMembersService {
 
     const { data: owners } = await this.supabase
       .from('profiles')
-      .select('id, full_name')
+      .select('id, full_name, company_name')
       .in(
         'id',
         rows.map((row) => row.owner_id),
       );
 
+    // Razón social declarada al registrarse; si no hay (cuenta personal o
+    // anterior al registro KYB), el nombre de la persona como antes.
     const nameById = new Map(
-      (owners ?? []).map((owner) => [owner.id, owner.full_name]),
+      (owners ?? []).map((owner) => [
+        owner.id,
+        owner.company_name || owner.full_name,
+      ]),
     );
 
     return rows.map((row) => ({
