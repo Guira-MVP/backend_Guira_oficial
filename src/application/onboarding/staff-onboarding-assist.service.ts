@@ -26,6 +26,8 @@ export interface AssistTarget {
   contact_id_number: string | null;
   phone: string | null;
   onboarding_status: string;
+  /** Tipo declarado al registrarse (o el de su última solicitud enviada). */
+  account_type: 'personal' | 'company' | null;
 }
 
 /**
@@ -268,7 +270,7 @@ export class StaffOnboardingAssistService {
     const { data, error } = await this.supabase
       .from('profiles')
       .select(
-        'id, email, full_name, company_name, tax_id, contact_first_name, contact_last_name, contact_id_number, phone, onboarding_status, is_active, is_frozen',
+        'id, email, full_name, company_name, tax_id, contact_first_name, contact_last_name, contact_id_number, phone, onboarding_status, account_type, is_active, is_frozen',
       )
       .eq('id', userId)
       .maybeSingle();
@@ -339,6 +341,7 @@ export class StaffOnboardingAssistService {
       contact_id_number: row.contact_id_number,
       phone: row.phone,
       onboarding_status: row.onboarding_status,
+      account_type: row.account_type ?? null,
     };
   }
 

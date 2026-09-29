@@ -30,6 +30,7 @@ interface ProfileRow {
   contact_id_number: string | null;
   phone: string | null;
   onboarding_status: string;
+  account_type: 'personal' | 'company' | null;
   is_active: boolean;
   is_frozen: boolean;
 }
@@ -46,6 +47,7 @@ function clientProfile(overrides: Partial<ProfileRow> = {}): ProfileRow {
     contact_id_number: '1234567',
     phone: '+59171234567',
     onboarding_status: 'pending',
+    account_type: 'company',
     is_active: true,
     is_frozen: false,
     ...overrides,
@@ -313,5 +315,17 @@ describe('StaffOnboardingAssistService — controles agregados en la auditoría'
       performed_by: actor.id,
       record_id: CLIENT,
     });
+  });
+});
+
+describe('StaffOnboardingAssistService — tipo de cuenta', () => {
+  it('expone al staff el tipo que el cliente declaró al registrarse', async () => {
+    const { service } = setup();
+    expect((await service.getContext(CLIENT)).client.account_type).toBe('company');
+  });
+
+  it('cuentas antiguas sin tipo llegan como null (el staff elige KYC/KYB)', async () => {
+    const { service } = setup({ profile: clientProfile({ account_type: null }) });
+    expect((await service.getContext(CLIENT)).client.account_type).toBeNull();
   });
 });

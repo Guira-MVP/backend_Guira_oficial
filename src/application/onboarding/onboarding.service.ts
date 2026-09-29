@@ -403,9 +403,11 @@ export class OnboardingService {
     if (error) throwDbError(error);
 
     // Actualizar perfil
+    // account_type pasa a reflejar lo que realmente envió (ver
+    // migrations/20260929_profiles_account_type.sql).
     const { data: kycInReviewProfile } = await this.supabase
       .from('profiles')
-      .update({ onboarding_status: 'in_review' })
+      .update({ onboarding_status: 'in_review', account_type: 'personal' })
       .eq('id', userId)
       .select('id, role, is_active, is_frozen, frozen_reason, onboarding_status, bridge_customer_id, updated_at')
       .single();
@@ -1138,7 +1140,7 @@ export class OnboardingService {
 
     const { data: kybInReviewProfile } = await this.supabase
       .from('profiles')
-      .update({ onboarding_status: 'in_review' })
+      .update({ onboarding_status: 'in_review', account_type: 'company' })
       .eq('id', userId)
       .select('id, role, is_active, is_frozen, frozen_reason, onboarding_status, bridge_customer_id, updated_at')
       .single();
