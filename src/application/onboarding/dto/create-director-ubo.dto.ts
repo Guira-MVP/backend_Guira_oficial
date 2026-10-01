@@ -49,6 +49,16 @@ export class CreateDirectorDto {
   is_signer: boolean;
 
   /**
+   * "¿Es director o miembro del directorio?" del representante legal. Se envía
+   * a Bridge como is_director y a Tazapay como rol `director`. Un apoderado
+   * con poder notarial no es director.
+   */
+  @ApiPropertyOptional({ example: false })
+  @IsOptional()
+  @IsBoolean()
+  is_director?: boolean;
+
+  /**
    * FIX N-05 — Bridge AssociatedPerson schema marks birth_date as REQUIRED.
    * Changed from @IsOptional() to required.
    */

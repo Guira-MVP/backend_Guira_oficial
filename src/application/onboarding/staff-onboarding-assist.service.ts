@@ -165,6 +165,7 @@ export class StaffOnboardingAssistService {
       subject_type: string;
       subject_id?: string;
       draft_key?: string;
+      document_subtype?: string;
     },
   ) {
     await this.getAssistableTarget(userId);
@@ -176,6 +177,7 @@ export class StaffOnboardingAssistService {
       body.subject_id || undefined,
       body.draft_key || undefined,
       actor.id,
+      body.document_subtype || undefined,
     )) as { id?: string } | null;
     await this.audit(actor, 'STAFF_ASSIST_DOC_UPLOAD', userId, {
       target_user_id: userId,

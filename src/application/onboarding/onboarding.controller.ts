@@ -297,6 +297,11 @@ export class OnboardingController {
           type: 'string',
           description: "UBO aún no guardado: 'ubo:<client_uid>'",
         },
+        document_subtype: {
+          type: 'string',
+          enum: ['utility_bill', 'bank_statement', 'lease_agreement'],
+          description: 'Tipo de comprobante de domicilio',
+        },
       },
       required: ['file', 'document_type', 'subject_type'],
     },
@@ -315,6 +320,7 @@ export class OnboardingController {
       subject_type: string;
       subject_id?: string;
       draft_key?: string;
+      document_subtype?: string;
     },
   ) {
     return this.onboardingService.uploadDocument(
@@ -324,6 +330,8 @@ export class OnboardingController {
       body.subject_type,
       body.subject_id || undefined,
       body.draft_key || undefined,
+      undefined,
+      body.document_subtype || undefined,
     );
   }
 

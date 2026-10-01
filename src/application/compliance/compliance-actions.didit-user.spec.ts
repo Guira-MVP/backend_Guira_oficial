@@ -49,6 +49,7 @@ function buildService(opts: {
     {} as never,
     gateway as never,
     didit as never,
+    {} as never,
   );
   return { service, didit, gateway };
 }

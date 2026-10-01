@@ -315,6 +315,8 @@ export class BridgeCustomerService {
     tax_registration: 'proof_of_tax_identification', // NIT/RUT/RFC document uploaded in KYB step 5
     business_formation: 'business_formation',
     incorporation_certificate: 'business_formation',
+    business_registration: 'business_formation', // Matrícula de comercio (SEPREC)
+    lease_agreement: 'proof_of_address',
     ownership_information: 'ownership_information',
     operating_agreement: 'ownership_information', // Bridge enum has no 'operating_agreement'; closest is ownership_information
     proof_of_nature_of_business: 'proof_of_nature_of_business',
@@ -739,6 +741,15 @@ export class BridgeCustomerService {
       payload.identifying_information = identifyingInfo;
     }
 
+    // La selfie se pedía y guardaba pero nunca llegaba a Bridge: está en
+    // IDENTITY_DOC_TYPES (excluida de documents[]) y no la usa
+    // identifying_information. Bridge la recibe en liveness_check_selfies
+    // (solo customers individuales; associated persons no tienen el campo).
+    const selfies = await this.buildLivenessSelfies(userId);
+    if (selfies.length > 0) {
+      payload.liveness_check_selfies = selfies;
+    }
+
     // Documents [] — H04 (P0-A: uses purposes[]/file, excludes identity docs)
     const documents = await this.buildDocumentsArray(userId, 'person');
     if (documents.length > 0) {
@@ -1061,7 +1072,16 @@ export class BridgeCustomerService {
     }
 
     // Documents — H04
-    const documents = await this.buildDocumentsArray(userId, 'business');
+    // Si el cliente indicó que el testimonio de constitución ya muestra a los
+    // socios y sus porcentajes, ese mismo archivo respalda la propiedad.
+    const documents = await this.buildDocumentsArray(
+      userId,
+      'business',
+      undefined,
+      business.ownership_in_incorporation_doc
+        ? { incorporation_certificate: ['ownership_information'] }
+        : {},
+    );
     if (documents.length > 0) {
       payload.documents = documents;
     }
@@ -1380,6 +1400,34 @@ export class BridgeCustomerService {
   }
 
   /**
+   * Selfie del cliente KYC en el formato de liveness_check_selfies de Bridge.
+   * Solo imágenes: Bridge no acepta PDF en este campo.
+   */
+  private async buildLivenessSelfies(
+    userId: string,
+  ): Promise<Array<{ image: string }>> {
+    const { data: selfie } = await this.supabase
+      .from('documents')
+      .select('storage_path, mime_type')
+      .eq('user_id', userId)
+      .eq('subject_type', 'person')
+      .eq('document_type', 'selfie')
+      .neq('status', 'superseded')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!selfie?.storage_path || !String(selfie.mime_type ?? '').startsWith('image/')) {
+      return [];
+    }
+    const image = await this.downloadDocumentAsBase64(
+      selfie.storage_path as string,
+      selfie.mime_type as string,
+    );
+    return image ? [{ image }] : [];
+  }
+
+  /**
    * Helper para descargar y convertir documentos a base64 Data-URI
    */
   private async downloadDocumentAsBase64(
@@ -1412,6 +1460,7 @@ export class BridgeCustomerService {
     userId: string,
     subjectType: string,
     subjectId?: string,
+    extraPurposes: Record<string, string[]> = {},
   ): Promise<Record<string, unknown>[]> {
     // AUDIT 2026-07-31: antes filtraba `.eq('status','pending')`. Hoy solo
     // existen los estados `pending` y `superseded`, así que funcionaba — pero
@@ -1465,7 +1514,7 @@ export class BridgeCustomerService {
 
         // P0-A: Bridge requires { purposes: string[], file: string }
         const item: Record<string, unknown> = {
-          purposes: [bridgePurpose], // P0-A: array, not singular string
+          purposes: [bridgePurpose, ...(extraPurposes[doc.document_type] ?? [])], // P0-A: array, not singular string
           file: base64Content, // P0-A: 'file', not 'data'
         };
 
@@ -1597,6 +1646,16 @@ export class BridgeCustomerService {
   ): Promise<BuiltAssociatedPerson[]> {
     const persons: BuiltAssociatedPerson[] = [];
 
+    // has_ownership = la persona alcanza el umbral de propiedad que la
+    // empresa declaró a Bridge (ownership_threshold, 5–25; por defecto 25).
+    // Antes era true fijo para todo UBO: un socio del 10% o una persona con
+    // control y 0% llegaban declarados como dueños del 25% o más.
+    const ownershipThreshold = Number(business?.ownership_threshold) || 25;
+    const reachesOwnershipThreshold = (pct: unknown): boolean =>
+      pct === undefined || pct === null
+        ? true // registros previos sin porcentaje: se conserva el comportamiento anterior
+        : Number(pct) >= ownershipThreshold;
+
     // Helper: build residential_address with fallback to business address
     // Bridge exige `subdivision` para ciertos países (ej. Bolivia) — confirmado contra
     // Bridge real el 2026-07-29 ("associated_persons[0].residential_address.subdivision
@@ -1654,7 +1713,11 @@ export class BridgeCustomerService {
           has_control: true, // H12: director implica control
           has_ownership: false, // se vuelve true si hay un UBO vinculado (ver abajo)
           is_signer: dir.is_signer ?? false,
-          is_director: true,
+          // Respuesta del cliente a "¿Es director o miembro del directorio?".
+          // Antes era true fijo: un apoderado llegaba declarado como director.
+          // Los representantes cargados antes de la pregunta (NULL) conservan
+          // el comportamiento anterior.
+          is_director: typeof dir.is_director === 'boolean' ? dir.is_director : true,
           // P0-E: residential_address always present
           residential_address: buildPersonAddress(dir),
         };
@@ -1728,7 +1791,7 @@ export class BridgeCustomerService {
 
         if (linkedEntry) {
           const person = linkedEntry.payload;
-          person.has_ownership = true;
+          person.has_ownership = reachesOwnershipThreshold(ubo.ownership_percent);
           person.has_control = Boolean(person.has_control) || Boolean(ubo.has_control);
 
           if (ubo.ownership_percent !== undefined && ubo.ownership_percent !== null) {
@@ -1777,7 +1840,7 @@ export class BridgeCustomerService {
         const person: Record<string, unknown> = {
           first_name: ubo.first_name,
           last_name: ubo.last_name,
-          has_ownership: true, // H12: UBO implica ownership
+          has_ownership: reachesOwnershipThreshold(ubo.ownership_percent),
           has_control: ubo.has_control ?? false,
           is_signer: ubo.is_signer ?? false,
           // AUDIT 2026-07-31: is_director solo se enviaba para directores.

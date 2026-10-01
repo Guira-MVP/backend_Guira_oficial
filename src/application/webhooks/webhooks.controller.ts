@@ -9,6 +9,8 @@ import {
 import { ApiTags, ApiOperation, ApiExcludeEndpoint } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { Throttle } from '@nestjs/throttler';
+import { ConfigService } from '@nestjs/config';
+import { verifyTazapaySignature } from '../tazapay/tazapay-webhook-signature';
 import { Public } from '../../core/guards/supabase-auth.guard';
 import { WebhooksService } from './webhooks.service';
 
@@ -20,7 +22,10 @@ type RequestWithRawBody = Request & { rawBody?: Buffer };
 export class WebhooksController {
   private readonly logger = new Logger(WebhooksController.name);
 
-  constructor(private readonly webhooksService: WebhooksService) {}
+  constructor(
+    private readonly webhooksService: WebhooksService,
+    private readonly config: ConfigService,
+  ) {}
 
   /**
    * Endpoint receptor de webhooks de Bridge.
@@ -69,6 +74,51 @@ export class WebhooksController {
         'bridge-api-version': apiVersion ?? null,
       },
       bridge_api_version: apiVersion ?? null,
+    });
+
+    return { received: true };
+  }
+
+  /**
+   * Endpoint receptor de webhooks de Tazapay (configurado en el dashboard:
+   * Settings → Webhooks, una URL por cuenta: sandbox → staging, live → prod).
+   * Es PÚBLICO. La firma HMAC-SHA256 (header `signature`) se verifica aquí
+   * con el body crudo y TAZAPAY_WEBHOOK_SECRET; el evento se guarda con
+   * provider='tazapay' y lo procesa el mismo worker que los de Bridge.
+   * Tazapay reintenta durante 24 h si no recibe 2xx.
+   */
+  @Public()
+  @Throttle({ default: { limit: 1000, ttl: 60000 } })
+  @Post('tazapay')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Receptor de webhooks Tazapay' })
+  @ApiExcludeEndpoint()
+  async receiveTazapayWebhook(
+    @Req() req: RequestWithRawBody,
+    @Headers('signature') signatureHeader: string,
+  ) {
+    const payload = (req.body ?? {}) as Record<string, unknown>;
+    const rawBody = req.rawBody ?? Buffer.from(JSON.stringify(payload));
+    const providerEventId = typeof payload.id === 'string' ? payload.id : null;
+    const eventType = typeof payload.type === 'string' ? payload.type : 'unknown';
+
+    const signatureVerified = verifyTazapaySignature({
+      secret: this.config.get<string>('app.tazapayWebhookSecret') ?? '',
+      rawBody,
+      signatureHeader,
+    });
+
+    this.logger.log(`📨 Tazapay webhook recibido: ${eventType} (${providerEventId})`);
+
+    await this.webhooksService.sinkEvent({
+      provider: 'tazapay',
+      event_type: eventType,
+      provider_event_id: providerEventId,
+      raw_payload: payload,
+      raw_body: rawBody,
+      headers: { signature: signatureHeader ?? null },
+      bridge_api_version: null,
+      signature_verified: signatureVerified,
     });
 
     return { received: true };

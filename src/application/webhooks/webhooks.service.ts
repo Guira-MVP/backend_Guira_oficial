@@ -12,6 +12,7 @@ import { OrdersGateway } from '../orders/orders.gateway';
 import { AdminGateway } from '../admin/admin.gateway';
 import { EmailService } from '../email/email.service';
 import { PaymentOrdersService } from '../payment-orders/payment-orders.service';
+import { ProviderOnboardingService } from '../onboarding/providers/provider-onboarding.service';
 import {
   AppEnv,
   resolveAppEnv,
@@ -27,6 +28,11 @@ interface SinkEventDto {
   raw_body: Buffer;
   headers: Record<string, string | null>;
   bridge_api_version: string | null;
+  /**
+   * Resultado de la verificación de firma hecha por el controller (Tazapay
+   * usa HMAC con su propio secreto). Si no viene, se verifica como Bridge.
+   */
+  signature_verified?: boolean;
 }
 
 interface WebhookEventContext {
@@ -59,6 +65,7 @@ export class WebhooksService {
     private readonly adminGateway: AdminGateway,
     private readonly emailService: EmailService,
     private readonly paymentOrdersService: PaymentOrdersService,
+    private readonly providerOnboarding: ProviderOnboardingService,
   ) {}
 
   /**
@@ -168,14 +175,13 @@ export class WebhooksService {
     // Esta es la única oportunidad de verificar de forma fidedigna — en el CRON el
     // body ha sido re-serializado desde JSON y no coincide byte a byte con el original.
     const signatureHeader = dto.headers['x-webhook-signature'] ?? null;
-    const signatureVerified = this.verifyBridgeSignature(
-      dto.raw_body,
-      signatureHeader,
-    );
+    const signatureVerified =
+      dto.signature_verified ??
+      this.verifyBridgeSignature(dto.raw_body, signatureHeader);
 
     if (!signatureVerified) {
       this.logger.warn(
-        `⚠️  Firma Bridge no verificada para evento ${dto.provider_event_id ?? dto.event_type}`,
+        `⚠️  Firma ${dto.provider} no verificada para evento ${dto.provider_event_id ?? dto.event_type}`,
       );
     }
 
@@ -294,7 +300,7 @@ export class WebhooksService {
             table_name: 'webhook_events',
             record_id: id,
             new_values: {
-              provider: 'bridge',
+              provider: (event.provider as string) ?? 'bridge',
               event_type: event.event_type,
             },
             source: 'webhook',
@@ -312,13 +318,18 @@ export class WebhooksService {
         );
       }
 
-      // Despachar
+      // Despachar según el proveedor que envió el evento. Antes todo evento
+      // de la cola se procesaba con la lógica de Bridge.
       const eventType = event.event_type as string;
       const payload = event.raw_payload as Record<string, unknown>;
-      await this.dispatchEvent(eventType, payload, {
-        webhookEventId: id,
-        providerEventId: (event.provider_event_id as string | null) ?? null,
-      });
+      if ((event.provider as string) === 'tazapay') {
+        await this.dispatchTazapayEvent(eventType, payload);
+      } else {
+        await this.dispatchEvent(eventType, payload, {
+          webhookEventId: id,
+          providerEventId: (event.provider_event_id as string | null) ?? null,
+        });
+      }
 
       // Marcar procesado
       await this.supabase
@@ -366,6 +377,18 @@ export class WebhooksService {
   // ═══════════════════════════════════════════════
   //  DISPATCHER
   // ═══════════════════════════════════════════════
+
+  private async dispatchTazapayEvent(
+    eventType: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    if (eventType.startsWith('entity.approval_')) {
+      await this.providerOnboarding.applyTazapayEntityEvent(eventType, payload);
+      return;
+    }
+    // Collects, payouts y demás llegan cuando se construyan los flujos SWIFT.
+    this.logger.log(`Webhook Tazapay ${eventType} sin manejador (registrado)`);
+  }
 
   private async dispatchEvent(
     eventType: string,

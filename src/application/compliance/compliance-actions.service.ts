@@ -17,6 +17,7 @@ import { SetLimitsDto } from './dto/admin-compliance.dto';
 import { buildBridgeIssueDetails } from '../webhooks/bridge-rejection-reasons';
 import { AdminGateway } from '../admin/admin.gateway';
 import { DiditVerificationService } from '../didit/didit-verification.service';
+import { ProviderOnboardingService } from '../onboarding/providers/provider-onboarding.service';
 
 @Injectable()
 export class ComplianceActionsService {
@@ -31,6 +32,7 @@ export class ComplianceActionsService {
     private readonly psavService: PsavService,
     private readonly adminGateway: AdminGateway,
     private readonly diditVerificationService: DiditVerificationService,
+    private readonly providerOnboarding: ProviderOnboardingService,
   ) {}
 
   /**
@@ -705,6 +707,10 @@ export class ComplianceActionsService {
       reason,
     );
 
+    // 3b. Registrar el envío a Bridge y despachar Tazapay (si está activo).
+    // Nunca hace fallar la aprobación: la de Tazapay es independiente.
+    await this.providerOnboarding.afterStaffApproval(review.subject_type, review.subject_id);
+
     // 4. Audit Log
     await this.supabase.from('audit_logs').insert({
       performed_by: actorId,
@@ -817,6 +823,7 @@ export class ComplianceActionsService {
     userId: string,
     bridgeCustomerId: string,
   ): Promise<void> {
+    await this.providerOnboarding.markBridgeOutcome(userId, 'approved');
     this.logger.log(
       `Bridge aprobó cuenta para user ${userId} (customer ${bridgeCustomerId})`,
     );
@@ -890,6 +897,7 @@ export class ComplianceActionsService {
     bridgeCustomerId: string,
     issues: string[],
   ): Promise<void> {
+    await this.providerOnboarding.markBridgeOutcome(userId, 'rejected', issues.join(', '));
     // Resuelve cada issue contra el catálogo de Bridge (Rejection reasons.md)
     // para obtener un texto explicativo en vez de códigos crudos.
     const issueDetails = buildBridgeIssueDetails(issues);

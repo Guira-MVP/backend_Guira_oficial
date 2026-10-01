@@ -14,6 +14,7 @@ import { OnboardingModule } from '../onboarding/onboarding.module';
 import { PsavModule } from '../psav/psav.module';
 import { AdminModule } from '../admin/admin.module';
 import { DiditModule } from '../didit/didit.module';
+import { ProvidersModule } from '../onboarding/providers/providers.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { DiditModule } from '../didit/didit.module';
     PsavModule,
     AdminModule,
     DiditModule,
+    ProvidersModule,
   ],
   controllers: [
     ComplianceController,

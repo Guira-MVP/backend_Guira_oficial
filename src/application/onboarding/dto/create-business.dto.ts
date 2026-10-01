@@ -93,6 +93,29 @@ export class CreateBusinessDto {
   tax_id: string;
 
   /**
+   * Número de registro de la empresa (en Bolivia, matrícula de comercio del
+   * SEPREC). Tazapay lo exige al someter la entity (registration_number).
+   * Opcional en el DTO para no romper expedientes anteriores; el formulario
+   * lo pide como obligatorio.
+   */
+  @ApiPropertyOptional({ example: '00123456' })
+  @Transform(trimString)
+  @IsOptional()
+  @IsString()
+  @Length(1, 100)
+  registration_number?: string;
+
+  /**
+   * El testimonio de constitución (incorporation_certificate) ya muestra a los
+   * socios y sus porcentajes vigentes: se usa también como estructura
+   * accionaria (Bridge ownership_information / Tazapay shareholder_registry).
+   */
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @IsBoolean()
+  ownership_in_incorporation_doc?: boolean;
+
+  /**
    * H11 — Bridge accepts strict business_type enum.
    * Use BusinessTypeEnum values: llc, corporation, partnership, sole_prop, trust, cooperative, other.
    */

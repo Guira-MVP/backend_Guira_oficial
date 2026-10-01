@@ -7,6 +7,7 @@ import { ComplianceModule } from '../compliance/compliance.module';
 import { OrdersModule } from '../orders/orders.module';
 import { AdminModule } from '../admin/admin.module';
 import { PaymentOrdersModule } from '../payment-orders/payment-orders.module';
+import { ProvidersModule } from '../onboarding/providers/providers.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { PaymentOrdersModule } from '../payment-orders/payment-orders.module';
     PaymentOrdersModule,
     OrdersModule,
     AdminModule,
+    ProvidersModule,
   ],
   controllers: [WebhooksController],
   providers: [WebhooksService],

@@ -51,6 +51,20 @@ export const environmentValidationSchema = Joi.object({
     .uri()
     .allow('')
     .default('https://verification.didit.me'),
+  // Tazapay (segundo proveedor, onboarding KYC/KYB y SWIFT): opcional en
+  // todos los tiers, como Didit. El envío a Tazapay además depende del
+  // interruptor TAZAPAY_ONBOARDING_ENABLED de app_settings; sin credenciales
+  // el orquestador lo registra como error y Bridge sigue igual. Las keys
+  // live solo existen cuando Tazapay aprueba el KYB de Guira, por eso no se
+  // exigen en producción. Sin TAZAPAY_WEBHOOK_SECRET todo webhook de Tazapay
+  // queda sin verificar y se ignora fuera de desarrollo.
+  TAZAPAY_API_KEY: Joi.string().allow('').default(''),
+  TAZAPAY_API_SECRET: Joi.string().allow('').default(''),
+  TAZAPAY_API_URL: Joi.string()
+    .uri()
+    .allow('')
+    .default('https://service-sandbox.tazapay.com'),
+  TAZAPAY_WEBHOOK_SECRET: Joi.string().allow('').default(''),
   // Staging can be deployed before its sandbox webhook is registered. Until
   // configured, invalid or unsigned events are rejected by the service.
   BRIDGE_WEBHOOK_PUBLIC_KEY: Joi.when('APP_ENV', {

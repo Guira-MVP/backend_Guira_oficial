@@ -245,6 +245,7 @@ describe('StaffOnboardingAssistService — borrador y documentos', () => {
       undefined,
       undefined,
       actor.id,
+      undefined,
     );
     expect(audits[0]).toMatchObject({ action: 'STAFF_ASSIST_DOC_UPLOAD' });
   });

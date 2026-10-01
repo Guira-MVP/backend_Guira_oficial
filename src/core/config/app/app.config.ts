@@ -18,6 +18,10 @@ export interface AppConfig {
   bridgeWebhookPublicKey: string;
   diditApiKey: string;
   diditApiUrl: string;
+  tazapayApiKey: string;
+  tazapayApiSecret: string;
+  tazapayApiUrl: string;
+  tazapayWebhookSecret: string;
   binanceP2pApiUrl: string;
   zeptoMailToken: string;
   zeptoMailApiUrl: string;
@@ -41,6 +45,10 @@ export default registerAs(
     bridgeWebhookPublicKey: process.env.BRIDGE_WEBHOOK_PUBLIC_KEY ?? '',
     diditApiKey: process.env.DIDIT_API_KEY ?? '',
     diditApiUrl: process.env.DIDIT_API_URL ?? '',
+    tazapayApiKey: process.env.TAZAPAY_API_KEY ?? '',
+    tazapayApiSecret: process.env.TAZAPAY_API_SECRET ?? '',
+    tazapayApiUrl: process.env.TAZAPAY_API_URL ?? '',
+    tazapayWebhookSecret: process.env.TAZAPAY_WEBHOOK_SECRET ?? '',
     binanceP2pApiUrl:
       process.env.BINANCE_P2P_API_URL ??
       'https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search',

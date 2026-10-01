@@ -28,6 +28,15 @@ const REQUIRED_DB_OBJECTS: Array<{ object: string; pattern: RegExp }> = [
   { object: 'tabla onboarding_drafts', pattern: /create table[^;]*onboarding_drafts/i },
   { object: 'columna documents.draft_key', pattern: /alter table public\.documents add column[^;]*draft_key/i },
   { object: 'columna documents.is_draft', pattern: /alter table public\.documents add column[^;]*is_draft/i },
+  { object: 'tabla provider_accounts', pattern: /create table[^;]*provider_accounts/i },
+  { object: 'tabla provider_onboarding_submissions', pattern: /create table[^;]*provider_onboarding_submissions/i },
+  { object: 'tabla provider_submission_documents', pattern: /create table[^;]*provider_submission_documents/i },
+  { object: 'setting TAZAPAY_ONBOARDING_ENABLED', pattern: /'TAZAPAY_ONBOARDING_ENABLED'/ },
+  { object: 'columna business_directors.is_director', pattern: /alter table public\.business_directors[^;]*is_director/i },
+  { object: 'columna documents.document_subtype', pattern: /alter table public\.documents[^;]*document_subtype/i },
+  { object: 'tabla naics_tazapay_vertical_map', pattern: /create table[^;]*naics_tazapay_vertical_map/i },
+  { object: 'columna businesses.tazapay_vertical', pattern: /alter table public\.businesses[^;]*tazapay_vertical/i },
+  { object: 'columna businesses.ownership_in_incorporation_doc', pattern: /alter table public\.businesses[^;]*ownership_in_incorporation_doc/i },
 ];
 
 describe('migrations/ cubre los objetos de base de datos que usa el backend', () => {

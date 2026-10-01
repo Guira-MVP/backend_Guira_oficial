@@ -77,6 +77,7 @@ export class StaffOnboardingAssistController {
       subject_type: string;
       subject_id?: string;
       draft_key?: string;
+      document_subtype?: string;
     },
   ) {
     return this.assistService.uploadDocument(actor, userId, file, body);

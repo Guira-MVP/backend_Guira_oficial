@@ -36,6 +36,8 @@ const ALLOWED_MIME_TYPES = [
   'image/png',
 ];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+/** Tipos de comprobante de domicilio (lista "Select address proof" de Tazapay). */
+const DOCUMENT_SUBTYPES = ['utility_bill', 'bank_statement', 'lease_agreement'];
 const STORAGE_BUCKET = 'kyc-documents';
 const ALLOWED_SUBJECT_TYPES = ['person', 'business', 'director', 'ubo'];
 const UUID_PATTERN =
@@ -1242,6 +1244,11 @@ export class OnboardingService {
     draftKey?: string,
     /** Staff que sube el archivo en nombre del cliente (onboarding asistido). */
     uploadedBy?: string,
+    /**
+     * Tipo del comprobante de domicilio (utility_bill / bank_statement /
+     * lease_agreement): Tazapay lo pide al subir el address proof.
+     */
+    documentSubtype?: string,
   ) {
     if (!file) {
       throw new BadRequestException('El archivo no se encontró o está vacío');
@@ -1275,6 +1282,9 @@ export class OnboardingService {
     }
     if (!/^[a-z0-9_]{2,64}$/.test(documentType)) {
       throw new BadRequestException('document_type inválido');
+    }
+    if (documentSubtype && !DOCUMENT_SUBTYPES.includes(documentSubtype)) {
+      throw new BadRequestException('document_subtype inválido');
     }
     // draft_key solo tiene sentido para un UBO que todavía no existe en DB.
     const normalizedDraftKey = subjectId ? null : (draftKey ?? null);
@@ -1323,6 +1333,7 @@ export class OnboardingService {
         // Solo se escribe si lo sube el staff: la subida del cliente no
         // depende de que exista la columna.
         ...(uploadedBy ? { uploaded_by: uploadedBy } : {}),
+        ...(documentSubtype ? { document_subtype: documentSubtype } : {}),
       })
       .select()
       .single();
