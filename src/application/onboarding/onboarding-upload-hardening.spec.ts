@@ -114,6 +114,44 @@ describe('OnboardingService.uploadDocument — endurecimiento', () => {
     expect(inserts[0].file_name).toBe('evil.html');
   });
 
+  it('rechaza un PDF como documento de identidad o selfie', async () => {
+    const { service, uploads } = setup();
+    const pdf = Buffer.from('%PDF-1.4 %');
+    for (const type of ['national_id_front', 'passport', 'selfie']) {
+      await expect(
+        service.uploadDocument(
+          USER,
+          file({
+            mimetype: 'application/pdf',
+            buffer: pdf,
+            size: pdf.length,
+            originalname: 'ci.pdf',
+          }),
+          type,
+          'person',
+        ),
+      ).rejects.toThrow('no PDF');
+    }
+    expect(uploads).toHaveLength(0);
+  });
+
+  it('sigue aceptando PDF en los demás documentos', async () => {
+    const { service, uploads } = setup();
+    const pdf = Buffer.from('%PDF-1.4 %');
+    await service.uploadDocument(
+      USER,
+      file({
+        mimetype: 'application/pdf',
+        buffer: pdf,
+        size: pdf.length,
+        originalname: 'factura.pdf',
+      }),
+      'proof_of_address',
+      'person',
+    );
+    expect(uploads).toHaveLength(1);
+  });
+
   it('rechaza un subject_id que no es UUID', async () => {
     const { service, uploads } = setup();
     await expect(

@@ -36,6 +36,19 @@ const ALLOWED_MIME_TYPES = [
   'image/png',
 ];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+/**
+ * Documento de identidad y selfie: solo imagen (JPG/PNG), nunca PDF.
+ * Bridge los recibe como imagen (identifying_information.image_front/back y
+ * liveness_check_selfies) para verificar el documento y el rostro.
+ */
+const IMAGE_ONLY_DOCUMENT_TYPES = new Set([
+  'passport',
+  'national_id_front',
+  'national_id_back',
+  'drivers_license_front',
+  'drivers_license_back',
+  'selfie',
+]);
 /** Tipos de comprobante de domicilio (lista "Select address proof" de Tazapay). */
 const DOCUMENT_SUBTYPES = ['utility_bill', 'bank_statement', 'lease_agreement'];
 const STORAGE_BUCKET = 'kyc-documents';
@@ -1282,6 +1295,14 @@ export class OnboardingService {
     }
     if (!/^[a-z0-9_]{2,64}$/.test(documentType)) {
       throw new BadRequestException('document_type inválido');
+    }
+    if (
+      IMAGE_ONLY_DOCUMENT_TYPES.has(documentType) &&
+      !file.mimetype.startsWith('image/')
+    ) {
+      throw new BadRequestException(
+        'El documento de identidad y la selfie deben ser una foto JPG o PNG, no PDF.',
+      );
     }
     if (documentSubtype && !DOCUMENT_SUBTYPES.includes(documentSubtype)) {
       throw new BadRequestException('document_subtype inválido');
