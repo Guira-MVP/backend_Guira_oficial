@@ -322,6 +322,8 @@ export class ProviderOnboardingService {
         await this.finish(submissionId, {
           status: eligibility.status,
           ineligibility_reason: eligibility.reason,
+          last_error_code: null,
+          last_error_message: null,
         });
         await this.upsertAccount(ctx.userId, 'tazapay', {
           status: 'pending',
@@ -380,9 +382,16 @@ export class ProviderOnboardingService {
         attempt_count: isMapping
           ? ((claimed.attempt_count as number) ?? 0)
           : attempts,
+        // Cada intento deja un solo motivo visible: el anterior (p. ej. "falta
+        // confirmar el vertical") no debe tapar el error real.
         ...(isMapping
-          ? { ineligibility_reason: message }
+          ? {
+              ineligibility_reason: message,
+              last_error_code: null,
+              last_error_message: null,
+            }
           : {
+              ineligibility_reason: null,
               last_error_code:
                 err instanceof TazapayApiError
                   ? String(err.status ?? 'network')

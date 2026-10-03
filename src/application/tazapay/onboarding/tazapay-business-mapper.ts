@@ -61,7 +61,6 @@ export interface TazapayBusinessEntityDraft {
   relationship: 'customer';
   purpose_of_use: string[];
   reference_id: string;
-  source_of_wealth?: string;
   transaction_profile?: { monthly_expected_transactions_value: number };
   representatives: TazapayRepresentativeDraft[];
   /** Casillas que solo acepta PUT /v3/entity/{id}. */
@@ -160,12 +159,6 @@ export function businessTaxIdType(countryAlpha3: string): string {
     default:
       return 'others';
   }
-}
-
-function humanize(value: unknown): string | undefined {
-  if (typeof value !== 'string' || !value) return undefined;
-  const text = value.replace(/_/g, ' ');
-  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function normalizeWebsite(value: unknown): string | undefined {
@@ -357,12 +350,9 @@ export function buildBusinessEntityDraft(params: {
   const phone = toTazapayPhone(business.phone);
   if (phone) draft.phone = phone;
 
-  const sof = humanize(business.source_of_funds);
-  if (sof) {
-    draft.source_of_wealth = business.source_of_funds_description
-      ? `${sof}: ${String(business.source_of_funds_description)}`
-      : sof;
-  }
+  // source_of_wealth NO es texto: Tazapay espera un objeto de evidencia
+  // ({ type: 'document' | 'url', url }) y rechaza un string con error de
+  // parseo (sandbox 2026-10-03). Es opcional y Guira no tiene esa evidencia.
   const monthlyUsd = Number(business.expected_monthly_payments_usd);
   if (Number.isFinite(monthlyUsd) && monthlyUsd > 0) {
     // Tazapay pide el valor en la unidad mínima de la moneda (centavos de USD).

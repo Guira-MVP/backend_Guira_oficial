@@ -470,7 +470,6 @@ export class TazapayKybOnboardingService {
       'tax_id_type',
       'website',
       'phone',
-      'source_of_wealth',
       'transaction_profile',
     ] as const) {
       if (draft[key] !== undefined) body[key] = draft[key];

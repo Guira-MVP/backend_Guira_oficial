@@ -307,7 +307,10 @@ export class WebhooksService {
           });
           await this.supabase
             .from('webhook_events')
-            .update({ status: 'ignored' })
+            // 'skipped': el CHECK de webhook_events no admite 'ignored'; con
+            // ese valor el update fallaba y el evento quedaba en 'processing',
+            // rescatado y re-evaluado cada 2,5 min para siempre.
+            .update({ status: 'skipped' })
             .eq('id', id);
           return;
         }
