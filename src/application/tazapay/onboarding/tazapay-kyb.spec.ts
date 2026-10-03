@@ -99,6 +99,7 @@ describe('Tazapay — entity de empresa', () => {
       city: 'La Paz',
       state: 'La Paz',
       country: 'BO',
+      postal_code: '0000',
     });
     expect(draft.operating_address).toEqual(draft.registration_address);
     expect(draft.flags.is_operating_address_same_as_registration_address).toBe(
@@ -112,9 +113,9 @@ describe('Tazapay — entity de empresa', () => {
     expect(draft.website).toBe('https://andina.bo');
     expect(draft.purpose_of_use).toEqual(['collect', 'payout']);
     expect(draft.relationship).toBe('customer');
-    expect(draft.transaction_profile).toEqual({
-      monthly_expected_transactions_value: 5000000,
-    });
+    // Sin tildes: Tazapay solo admite [a-zA-Z0-9 &,.-] en el nombre.
+    expect(draft.name).toBe('Andina Logistica S.A.');
+    expect(draft).not.toHaveProperty('transaction_profile');
 
     const [rMarta, rAna, rCarlos] = draft.representatives;
     expect(rMarta.roles).toEqual([
@@ -248,7 +249,7 @@ describe('Tazapay — entity de empresa', () => {
     ]);
   });
 
-  it('dirección: USA conserva el ZIP; Bolivia omite el marcador 0000', () => {
+  it('dirección: USA conserva el ZIP; Bolivia lleva el marcador 0000', () => {
     expect(
       toTazapayAddress({
         address1: 'a',
@@ -265,10 +266,16 @@ describe('Tazapay — entity de empresa', () => {
       toTazapayAddress({
         address1: 'a',
         city: 'La Paz',
-        postal_code: '0000',
         country: 'BOL',
       })?.postal_code,
-    ).toBeUndefined();
+    ).toBe('0000');
+    expect(
+      toTazapayAddress({
+        address1: 'Calle <1> = {2}',
+        city: 'La Paz',
+        country: 'BOL',
+      })?.line1,
+    ).toBe('Calle 1 2');
     expect(toTazapayPhone('no-es-telefono')).toBeUndefined();
   });
 });

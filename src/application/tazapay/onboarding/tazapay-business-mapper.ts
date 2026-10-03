@@ -61,7 +61,6 @@ export interface TazapayBusinessEntityDraft {
   relationship: 'customer';
   purpose_of_use: string[];
   reference_id: string;
-  transaction_profile?: { monthly_expected_transactions_value: number };
   representatives: TazapayRepresentativeDraft[];
   /** Casillas que solo acepta PUT /v3/entity/{id}. */
   flags: {
@@ -114,6 +113,32 @@ export function toTazapayPhone(raw: unknown): TazapayPhone | undefined {
   };
 }
 
+/** Caracteres que Tazapay no admite en los campos de texto de una dirección. */
+const ADDRESS_FORBIDDEN = /[<>{}|\\^`=]/g;
+/** Marcador de código postal para países sin código postal (Tazapay lo exige: 3–12 caracteres). */
+export const NO_POSTAL_CODE_PLACEHOLDER = '0000';
+
+function cleanAddressText(value: unknown): string {
+  return String(value)
+    .replace(ADDRESS_FORBIDDEN, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Nombre de la entity en el formato que admite Tazapay:
+ * ^[a-zA-Z0-9][a-zA-Z0-9 &,.-]*$ (sin tildes ni ñ).
+ */
+export function toTazapayEntityName(raw: unknown): string {
+  return String(raw ?? '')
+    .normalize('NFD') // separa la tilde de la letra; el rango siguiente es U+0300–U+036F
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-zA-Z0-9 &,.-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^[^a-zA-Z0-9]+/, '');
+}
+
 export function toTazapayAddress(fields: {
   address1: unknown;
   address2?: unknown;
@@ -128,11 +153,11 @@ export function toTazapayAddress(fields: {
   if (!fields.address1 || !fields.city || !country) return undefined;
 
   const address: TazapayAddress = {
-    line1: String(fields.address1),
-    city: String(fields.city),
+    line1: cleanAddressText(fields.address1),
+    city: cleanAddressText(fields.city),
     country,
   };
-  if (fields.address2) address.line2 = String(fields.address2);
+  if (fields.address2) address.line2 = cleanAddressText(fields.address2);
   const state = subdivisionName(
     country3.length === 3 ? country3 : undefined,
     fields.state as string | undefined,
@@ -140,12 +165,11 @@ export function toTazapayAddress(fields: {
   if (state) address.state = state;
   const postal =
     typeof fields.postal_code === 'string' ? fields.postal_code.trim() : '';
-  if (
-    postal &&
-    !(COUNTRIES_WITHOUT_POSTAL_CODE.has(country3) && /^0+$/.test(postal))
-  ) {
-    address.postal_code = postal;
-  }
+  // Tazapay exige postal_code en toda dirección de la entity (sandbox
+  // 2026-10-03, error 2606). En países sin código postal va el marcador.
+  if (postal) address.postal_code = postal;
+  else if (COUNTRIES_WITHOUT_POSTAL_CODE.has(country3))
+    address.postal_code = NO_POSTAL_CODE_PLACEHOLDER;
   return address;
 }
 
@@ -316,7 +340,7 @@ export function buildBusinessEntityDraft(params: {
 
   const country3 = String(business.country ?? '').toUpperCase();
   const draft: TazapayBusinessEntityDraft = {
-    name: String(business.legal_name ?? ''),
+    name: toTazapayEntityName(business.legal_name),
     type,
     registration_number: String(business.registration_number),
     registration_address: registration,
@@ -353,12 +377,8 @@ export function buildBusinessEntityDraft(params: {
   // source_of_wealth NO es texto: Tazapay espera un objeto de evidencia
   // ({ type: 'document' | 'url', url }) y rechaza un string con error de
   // parseo (sandbox 2026-10-03). Es opcional y Guira no tiene esa evidencia.
-  const monthlyUsd = Number(business.expected_monthly_payments_usd);
-  if (Number.isFinite(monthlyUsd) && monthlyUsd > 0) {
-    // Tazapay pide el valor en la unidad mínima de la moneda (centavos de USD).
-    draft.transaction_profile = {
-      monthly_expected_transactions_value: Math.round(monthlyUsd * 100),
-    };
-  }
+  // transaction_profile es opcional, pero si se envía Tazapay exige todos sus
+  // campos (volumen, países, monedas y riesgo del cliente; sandbox
+  // 2026-10-03). Guira no recolecta esos datos: no se envía.
   return draft;
 }
