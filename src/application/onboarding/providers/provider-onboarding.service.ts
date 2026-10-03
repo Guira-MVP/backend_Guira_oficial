@@ -404,7 +404,7 @@ export class ProviderOnboardingService {
   async retryTazapay(submissionId: string): Promise<{ status: string }> {
     const { data: sub } = await this.supabase
       .from('provider_onboarding_submissions')
-      .select('id, provider, status')
+      .select('id, provider, status, kyb_application_id')
       .eq('id', submissionId)
       .maybeSingle();
     if (!sub || sub.provider !== 'tazapay')
@@ -422,6 +422,15 @@ export class ProviderOnboardingService {
         `El envío está en estado ${String(sub.status)}: no se puede reintentar.`,
       );
     }
+    if (
+      sub.status === 'pending_provider_confirmation' &&
+      sub.kyb_application_id &&
+      !(await this.isVerticalConfirmed(sub.kyb_application_id as string))
+    ) {
+      throw new BadRequestException(
+        'Confirma primero el vertical de Tazapay de la empresa.',
+      );
+    }
     await this.finish(submissionId, { status: 'pending' });
     await this.processTazapaySubmission(submissionId);
     const { data: after } = await this.supabase
@@ -430,6 +439,25 @@ export class ProviderOnboardingService {
       .eq('id', submissionId)
       .single();
     return { status: String(after?.status ?? 'pending') };
+  }
+
+  private async isVerticalConfirmed(
+    kybApplicationId: string,
+  ): Promise<boolean> {
+    const { data: kyb } = await this.supabase
+      .from('kyb_applications')
+      .select('business_id')
+      .eq('id', kybApplicationId)
+      .maybeSingle();
+    if (!kyb?.business_id) return false;
+    const { data: business } = await this.supabase
+      .from('businesses')
+      .select('tazapay_vertical, tazapay_vertical_confirmed_at')
+      .eq('id', kyb.business_id)
+      .maybeSingle();
+    return (
+      !!business?.tazapay_vertical && !!business.tazapay_vertical_confirmed_at
+    );
   }
 
   /**
