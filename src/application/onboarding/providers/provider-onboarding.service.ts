@@ -11,6 +11,7 @@ import { SUPABASE_CLIENT } from '../../../core/supabase/supabase.module';
 import { TazapayApiError } from '../../tazapay/tazapay-api.client';
 import { TazapayMappingError } from '../../tazapay/onboarding/tazapay-business-mapper';
 import { TazapayKybOnboardingService } from '../../tazapay/onboarding/tazapay-kyb-onboarding.service';
+import { TazapayKycOnboardingService } from '../../tazapay/onboarding/tazapay-kyc-onboarding.service';
 
 export const TAZAPAY_ONBOARDING_ENABLED_SETTING_KEY =
   'TAZAPAY_ONBOARDING_ENABLED';
@@ -58,6 +59,7 @@ export class ProviderOnboardingService {
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly tazapayKyb: TazapayKybOnboardingService,
+    private readonly tazapayKyc: TazapayKycOnboardingService,
   ) {}
 
   // ── Interruptor ────────────────────────────────────────────────────────
@@ -102,13 +104,6 @@ export class ProviderOnboardingService {
       await this.recordBridgeSubmission(subjectType, subjectId, userId);
 
       if (!(await this.isTazapayEnabled())) return;
-      if (subjectType !== 'kyb_applications') {
-        // El KYC de personas en Tazapay es la fase siguiente del plan.
-        this.logger.log(
-          `KYC ${subjectId}: envío a Tazapay aún no implementado para personas.`,
-        );
-        return;
-      }
       const submissionId = await this.ensureSubmission(
         'tazapay',
         subjectType,
@@ -295,15 +290,6 @@ export class ProviderOnboardingService {
       .maybeSingle();
     if (!claimed) return; // otro proceso la tomó o ya terminó
 
-    if (!claimed.kyb_application_id) {
-      await this.finish(submissionId, {
-        status: 'pending',
-        ineligibility_reason:
-          'KYC de personas: envío a Tazapay aún no implementado.',
-      });
-      return;
-    }
-
     try {
       if (!this.tazapayKyb.isConfigured) {
         throw new TazapayApiError(
@@ -314,32 +300,49 @@ export class ProviderOnboardingService {
         );
       }
 
-      const ctx = await this.tazapayKyb.loadContext(
-        claimed.kyb_application_id as string,
-      );
-      const eligibility = await this.tazapayKyb.checkEligibility(ctx.business);
-      if (eligibility.status !== 'eligible') {
-        await this.finish(submissionId, {
-          status: eligibility.status,
-          ineligibility_reason: eligibility.reason,
-          last_error_code: null,
-          last_error_message: null,
-        });
-        await this.upsertAccount(ctx.userId, 'tazapay', {
-          status: 'pending',
-          status_reason: eligibility.reason,
-        });
-        return;
-      }
-
-      const result = await this.tazapayKyb.run({
+      const row = {
         id: claimed.id as string,
         user_id: claimed.user_id as string,
-        kyb_application_id: claimed.kyb_application_id as string,
         external_id: (claimed.external_id as string) ?? null,
         idempotency_key: claimed.idempotency_key as string,
         attempt_count: (claimed.attempt_count as number) ?? 0,
-      });
+      };
+      let result: Awaited<ReturnType<TazapayKybOnboardingService['run']>>;
+      let userId: string;
+      if (claimed.kyb_application_id) {
+        const ctx = await this.tazapayKyb.loadContext(
+          claimed.kyb_application_id as string,
+        );
+        userId = ctx.userId;
+        const eligibility = await this.tazapayKyb.checkEligibility(
+          ctx.business,
+        );
+        if (eligibility.status !== 'eligible') {
+          await this.finish(submissionId, {
+            status: eligibility.status,
+            ineligibility_reason: eligibility.reason,
+            last_error_code: null,
+            last_error_message: null,
+          });
+          await this.upsertAccount(ctx.userId, 'tazapay', {
+            status: 'pending',
+            status_reason: eligibility.reason,
+          });
+          return;
+        }
+        result = await this.tazapayKyb.run({
+          ...row,
+          kyb_application_id: claimed.kyb_application_id as string,
+        });
+      } else {
+        // KYC: sin vertical. Si faltan datos o documentos, run() lanza
+        // TazapayMappingError y el envío queda pendiente con el motivo.
+        userId = claimed.user_id as string;
+        result = await this.tazapayKyc.run({
+          ...row,
+          kyc_application_id: claimed.kyc_application_id as string,
+        });
+      }
 
       const normalized =
         TAZAPAY_STATUS_MAP[String(result.rawStatus ?? 'submitted')] ??
@@ -354,7 +357,7 @@ export class ProviderOnboardingService {
         last_error_message: null,
         submitted_at: new Date().toISOString(),
       });
-      await this.upsertAccount(ctx.userId, 'tazapay', {
+      await this.upsertAccount(userId, 'tazapay', {
         external_id: result.entityId,
         status: ACCOUNT_STATUS[normalized] ?? 'submitted',
         raw_status: result.rawStatus,
@@ -476,15 +479,26 @@ export class ProviderOnboardingService {
   async sendKybToTazapay(
     kybApplicationId: string,
   ): Promise<{ submissionId: string; status: string }> {
-    const userId = await this.resolveUserId(
-      'kyb_applications',
-      kybApplicationId,
-    );
-    if (!userId) throw new NotFoundException('Expediente KYB no encontrado');
+    return this.sendToTazapay('kyb_applications', kybApplicationId);
+  }
+
+  /** Igual que sendKybToTazapay, para un KYC ya aprobado por el staff. */
+  async sendKycToTazapay(
+    kycApplicationId: string,
+  ): Promise<{ submissionId: string; status: string }> {
+    return this.sendToTazapay('kyc_applications', kycApplicationId);
+  }
+
+  private async sendToTazapay(
+    subjectType: SubjectType,
+    applicationId: string,
+  ): Promise<{ submissionId: string; status: string }> {
+    const userId = await this.resolveUserId(subjectType, applicationId);
+    if (!userId) throw new NotFoundException('Expediente no encontrado');
     const submissionId = await this.ensureSubmission(
       'tazapay',
-      'kyb_applications',
-      kybApplicationId,
+      subjectType,
+      applicationId,
       userId,
     );
     await this.processTazapaySubmission(submissionId);

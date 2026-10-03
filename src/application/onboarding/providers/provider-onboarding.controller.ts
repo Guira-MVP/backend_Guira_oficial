@@ -21,6 +21,7 @@ import { RolesGuard } from '../../../core/guards/roles.guard';
 import { Roles } from '../../../core/decorators/roles.decorator';
 import { ProviderOnboardingService } from './provider-onboarding.service';
 import { TazapayKybOnboardingService } from '../../tazapay/onboarding/tazapay-kyb-onboarding.service';
+import { TazapayKycOnboardingService } from '../../tazapay/onboarding/tazapay-kyc-onboarding.service';
 import { TazapayMappingError } from '../../tazapay/onboarding/tazapay-business-mapper';
 
 class ConfirmVerticalDto {
@@ -48,6 +49,7 @@ export class ProviderOnboardingController {
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly providers: ProviderOnboardingService,
     private readonly tazapayKyb: TazapayKybOnboardingService,
+    private readonly tazapayKyc: TazapayKycOnboardingService,
   ) {}
 
   @Get('users/:userId')
@@ -103,7 +105,29 @@ export class ProviderOnboardingController {
         missing_documents: missing,
       };
     }
-    return { ...status, tazapay_kyb };
+    // KYC (persona): sin vertical; solo los faltantes de datos y documentos.
+    let tazapay_kyc: Record<string, unknown> | null = null;
+    if (!business) {
+      const { data: kyc } = await this.supabase
+        .from('kyc_applications')
+        .select('id')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (kyc?.id) {
+        let missing: string[] = [];
+        try {
+          missing = this.tazapayKyc.missingForTazapay(
+            await this.tazapayKyc.loadContext(kyc.id as string),
+          );
+        } catch (err) {
+          missing = [(err as Error).message];
+        }
+        tazapay_kyc = { kyc_application_id: kyc.id, missing };
+      }
+    }
+    return { ...status, tazapay_kyb, tazapay_kyc };
   }
 
   @Get('tazapay/verticals')
@@ -157,6 +181,34 @@ export class ProviderOnboardingController {
   @ApiOperation({ summary: 'Reintentar el envío a Tazapay' })
   retry(@Param('submissionId', new ParseUUIDPipe()) submissionId: string) {
     return this.providers.retryTazapay(submissionId);
+  }
+
+  @Post('kyc/:kycApplicationId/send-to-tazapay')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({
+    summary:
+      'Enviar a Tazapay un KYC ya aprobado en Bridge (envío pendiente o reenvío asistido)',
+  })
+  async sendKyc(
+    @Param('kycApplicationId', new ParseUUIDPipe()) kycApplicationId: string,
+  ) {
+    if (!(await this.providers.isTazapayEnabled())) {
+      throw new BadRequestException(
+        'El envío a Tazapay está desactivado (TAZAPAY_ONBOARDING_ENABLED).',
+      );
+    }
+    const { data: kyc } = await this.supabase
+      .from('kyc_applications')
+      .select('id, status')
+      .eq('id', kycApplicationId)
+      .maybeSingle();
+    if (!kyc) throw new NotFoundException('Expediente KYC no encontrado');
+    if (!['sent_to_bridge', 'approved'].includes(String(kyc.status))) {
+      throw new BadRequestException(
+        'El expediente todavía no fue aprobado por el staff.',
+      );
+    }
+    return this.providers.sendKycToTazapay(kycApplicationId);
   }
 
   @Post('kyb/:kybApplicationId/send-to-tazapay')
