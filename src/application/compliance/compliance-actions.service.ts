@@ -1507,13 +1507,21 @@ export class ComplianceActionsService {
             );
           } catch (err) {
             this.logger.error(`Error registrando cliente en Bridge: ${err}`);
-            await this.supabase
-              .from('kyc_applications')
-              .update({ status: 'needs_review' })
-              .eq('id', subjectId);
-            throw new BadRequestException(
-              `Error enviando a Bridge: ${(err as Error).message}. El expediente ha sido devuelto para revisión.`,
-            );
+            // El envío falló después de marcar el expediente como enviado. Dejar
+            // tanto la aplicación como el perfil en un estado que permita al
+            // cliente corregirla y reenviarla; de otro modo el panel y el wizard
+            // muestran estados contradictorios.
+            await Promise.all([
+              this.supabase
+                .from('kyc_applications')
+                .update({ status: 'needs_review' })
+                .eq('id', subjectId),
+              this.supabase
+                .from('profiles')
+                .update({ onboarding_status: 'kyc_started' })
+                .eq('id', kyc.user_id),
+            ]);
+            throw this.bridgeSubmissionFailed();
           }
 
           // Bridge aceptó la solicitud — ahora es seguro marcar pending_bridge.
@@ -1553,13 +1561,17 @@ export class ComplianceActionsService {
             );
           } catch (err) {
             this.logger.error(`Error registrando negocio en Bridge: ${err}`);
-            await this.supabase
-              .from('kyb_applications')
-              .update({ status: 'needs_review' })
-              .eq('id', subjectId);
-            throw new BadRequestException(
-              `Error enviando a Bridge: ${(err as Error).message}. El expediente ha sido devuelto para revisión.`,
-            );
+            await Promise.all([
+              this.supabase
+                .from('kyb_applications')
+                .update({ status: 'needs_review' })
+                .eq('id', subjectId),
+              this.supabase
+                .from('profiles')
+                .update({ onboarding_status: 'kyb_started' })
+                .eq('id', kyb.requester_user_id),
+            ]);
+            throw this.bridgeSubmissionFailed();
           }
 
           await this.supabase
@@ -1575,6 +1587,19 @@ export class ComplianceActionsService {
         break;
       }
     }
+  }
+
+  /**
+   * El proveedor puede devolver detalles técnicos o transitorios. El panel
+   * necesita reconocer que el expediente ya volvió a revisión, sin convertirlo
+   * en un error inesperado de consola ni exponer el detalle del proveedor.
+   */
+  private bridgeSubmissionFailed(): BadRequestException {
+    return new BadRequestException({
+      code: 'BRIDGE_SUBMISSION_FAILED',
+      message:
+        'No se pudo enviar el expediente a Bridge. Fue devuelto a revisión; corrige los datos necesarios e inténtalo de nuevo.',
+    });
   }
 
   private async applyRejectionToSubject(
