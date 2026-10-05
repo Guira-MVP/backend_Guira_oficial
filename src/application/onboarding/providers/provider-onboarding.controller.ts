@@ -22,6 +22,11 @@ import { Roles } from '../../../core/decorators/roles.decorator';
 import { ProviderOnboardingService } from './provider-onboarding.service';
 import { TazapayKybOnboardingService } from '../../tazapay/onboarding/tazapay-kyb-onboarding.service';
 import { TazapayKycOnboardingService } from '../../tazapay/onboarding/tazapay-kyc-onboarding.service';
+import {
+  CollectionWalletError,
+  TazapayCollectionAccountService,
+} from '../../tazapay/collection/tazapay-collection-account.service';
+import { TazapayApiError } from '../../tazapay/tazapay-api.client';
 import { TazapayMappingError } from '../../tazapay/onboarding/tazapay-business-mapper';
 
 class ConfirmVerticalDto {
@@ -50,6 +55,7 @@ export class ProviderOnboardingController {
     private readonly providers: ProviderOnboardingService,
     private readonly tazapayKyb: TazapayKybOnboardingService,
     private readonly tazapayKyc: TazapayKycOnboardingService,
+    private readonly collectionWallets: TazapayCollectionAccountService,
   ) {}
 
   @Get('users/:userId')
@@ -127,7 +133,42 @@ export class ProviderOnboardingController {
         tazapay_kyc = { kyc_application_id: kyc.id, missing };
       }
     }
-    return { ...status, tazapay_kyb, tazapay_kyc };
+    // Wallet de fondeo interna (solo staff; el cliente no la ve).
+    const funding = await this.collectionWallets.getForUser(userId);
+    return {
+      ...status,
+      tazapay_kyb,
+      tazapay_kyc,
+      tazapay_collection_wallet: {
+        auto_create_enabled: await this.collectionWallets.isAutoCreateEnabled(),
+        ...funding,
+      },
+    };
+  }
+
+  @Post('users/:userId/tazapay-collection-wallet')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({
+    summary:
+      'Crear (o adoptar) la wallet de fondeo interna de Tazapay del cliente (USDC/Solana)',
+  })
+  async createCollectionWallet(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+  ) {
+    try {
+      await this.collectionWallets.ensureCollectionWallet(userId);
+    } catch (err) {
+      if (err instanceof CollectionWalletError)
+        throw new BadRequestException(err.message);
+      if (err instanceof TazapayApiError)
+        throw new BadRequestException(
+          err.providerMessage
+            ? `${err.message} — ${err.providerMessage}`
+            : err.message,
+        );
+      throw err;
+    }
+    return this.collectionWallets.getForUser(userId);
   }
 
   @Get('tazapay/verticals')

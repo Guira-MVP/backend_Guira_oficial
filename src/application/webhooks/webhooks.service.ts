@@ -389,6 +389,17 @@ export class WebhooksService {
       await this.providerOnboarding.applyTazapayEntityEvent(eventType, payload);
       return;
     }
+    if (eventType.startsWith('collection_account.')) {
+      await this.providerOnboarding.applyTazapayCollectionAccountEvent(
+        eventType,
+        payload,
+      );
+      return;
+    }
+    if (eventType.startsWith('collect.')) {
+      await this.providerOnboarding.applyTazapayCollectEvent(eventType, payload);
+      return;
+    }
     // Collects, payouts y demás llegan cuando se construyan los flujos SWIFT.
     this.logger.log(`Webhook Tazapay ${eventType} sin manejador (registrado)`);
   }

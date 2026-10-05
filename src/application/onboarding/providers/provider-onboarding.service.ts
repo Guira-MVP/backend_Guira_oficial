@@ -12,6 +12,7 @@ import { TazapayApiError } from '../../tazapay/tazapay-api.client';
 import { TazapayMappingError } from '../../tazapay/onboarding/tazapay-business-mapper';
 import { TazapayKybOnboardingService } from '../../tazapay/onboarding/tazapay-kyb-onboarding.service';
 import { TazapayKycOnboardingService } from '../../tazapay/onboarding/tazapay-kyc-onboarding.service';
+import { TazapayCollectionAccountService } from '../../tazapay/collection/tazapay-collection-account.service';
 
 export const TAZAPAY_ONBOARDING_ENABLED_SETTING_KEY =
   'TAZAPAY_ONBOARDING_ENABLED';
@@ -60,6 +61,7 @@ export class ProviderOnboardingService {
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly tazapayKyb: TazapayKybOnboardingService,
     private readonly tazapayKyc: TazapayKycOnboardingService,
+    private readonly collectionWallets: TazapayCollectionAccountService,
   ) {}
 
   // ── Interruptor ────────────────────────────────────────────────────────
@@ -574,6 +576,41 @@ export class ProviderOnboardingService {
       ...(normalized === 'approved' ? { approved_at: now } : {}),
       ...(normalized === 'rejected' ? { rejected_at: now } : {}),
     });
+
+    // Entity aprobada → wallet de fondeo (como la wallet Bridge al aprobar).
+    // Nunca hace fallar el webhook: si falla queda registrado y se reintenta
+    // desde el panel staff.
+    if (
+      normalized === 'approved' &&
+      (await this.collectionWallets.isAutoCreateEnabled())
+    ) {
+      void this.collectionWallets
+        .ensureCollectionWallet(submission.user_id as string)
+        .catch((err: Error) =>
+          this.logger.warn(
+            `Wallet de fondeo Tazapay de ${String(submission.user_id)}: ${err.message}`,
+          ),
+        );
+    }
+  }
+
+  /** Webhook collection_account.* (wallet de fondeo). */
+  async applyTazapayCollectionAccountEvent(
+    eventType: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    await this.collectionWallets.applyCollectionAccountEvent(
+      eventType,
+      payload,
+    );
+  }
+
+  /** Webhook collect.* (depósito en una wallet de fondeo). */
+  async applyTazapayCollectEvent(
+    eventType: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    await this.collectionWallets.applyCollectEvent(eventType, payload);
   }
 
   // ── Trabajos periódicos ────────────────────────────────────────────────
@@ -585,6 +622,16 @@ export class ProviderOnboardingService {
    */
   @Cron(CronExpression.EVERY_5_MINUTES, { name: 'tazapay-onboarding-worker' })
   async runWorker(): Promise<void> {
+    // Wallets de fondeo que no terminaron de habilitarse: Tazapay aún no
+    // envía los webhooks de fallo, así que se consultan.
+    try {
+      await this.collectionWallets.pollPending();
+    } catch (err) {
+      this.logger.warn(
+        `Polling de wallets de fondeo: ${(err as Error).message}`,
+      );
+    }
+
     if (!(await this.isTazapayEnabled()) || !this.tazapayKyb.isConfigured)
       return;
 

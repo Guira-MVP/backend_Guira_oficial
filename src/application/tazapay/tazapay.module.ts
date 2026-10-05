@@ -7,8 +7,9 @@ import { TazapaySwiftEligibilityService } from './swift/tazapay-swift-eligibilit
 import { TazapayCorridorService } from './swift/tazapay-corridor.service';
 import { TazapayBeneficiariesService } from './swift/tazapay-beneficiaries.service';
 import { TazapaySwiftController } from './swift/tazapay-swift.controller';
+import { TazapayCollectionAccountService } from './collection/tazapay-collection-account.service';
 
-/** Tazapay: segundo proveedor (onboarding KYB/KYC y beneficiarios SWIFT). */
+/** Tazapay: segundo proveedor (onboarding KYB/KYC, beneficiarios SWIFT y wallet de fondeo). */
 @Module({
   controllers: [TazapaySwiftController],
   providers: [
@@ -19,6 +20,7 @@ import { TazapaySwiftController } from './swift/tazapay-swift.controller';
     TazapaySwiftEligibilityService,
     TazapayCorridorService,
     TazapayBeneficiariesService,
+    TazapayCollectionAccountService,
   ],
   exports: [
     TazapayApiClient,
@@ -27,6 +29,7 @@ import { TazapaySwiftController } from './swift/tazapay-swift.controller';
     TazapaySwiftEligibilityService,
     TazapayCorridorService,
     TazapayBeneficiariesService,
+    TazapayCollectionAccountService,
   ],
 })
 export class TazapayModule {}
