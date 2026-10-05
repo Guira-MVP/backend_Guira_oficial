@@ -548,6 +548,7 @@ export class ComplianceActionsService {
       legal_rep_id_type: director?.id_type,
       legal_rep_id_number: director?.id_number,
       legal_rep_email: director?.email,
+      legal_rep_phone: director?.phone,
       legal_rep_nationality: director?.nationality,
       legal_rep_is_pep: director?.is_pep,
       legal_rep_state: director?.state,
