@@ -9,7 +9,7 @@ import { SuppliersService } from './suppliers.service';
  * y al crearla queda en NULL). Solo un bloqueo explícito corta el pago.
  */
 describe('SuppliersService.assertUsableForPayment — beneficiarios de main siguen operando', () => {
-  const service = new SuppliersService({} as any, {} as any, {} as any, {} as any);
+  const service = new SuppliersService({} as any, {} as any, {} as any, {} as any, {} as any);
 
   it.each([
     ['sin la propiedad (fila leída antes de la migración)', {}],

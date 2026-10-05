@@ -38,6 +38,12 @@ const REQUIRED_DB_OBJECTS: Array<{ object: string; pattern: RegExp }> = [
   { object: 'columna businesses.tazapay_vertical', pattern: /alter table public\.businesses[^;]*tazapay_vertical/i },
   { object: 'columna businesses.ownership_in_incorporation_doc', pattern: /alter table public\.businesses[^;]*ownership_in_incorporation_doc/i },
   { object: 'columna people.employer_name', pattern: /alter table public\.people[^;]*employer_name/i },
+  { object: 'tabla tazapay_beneficiaries', pattern: /create table[^;]*tazapay_beneficiaries/i },
+  { object: 'tabla tazapay_corridor_cache', pattern: /create table[^;]*tazapay_corridor_cache/i },
+  { object: 'tabla tazapay_corridor_rules', pattern: /create table[^;]*tazapay_corridor_rules/i },
+  { object: 'índice suppliers_unique_swift_email_country_currency', pattern: /create unique index[^;]*suppliers_unique_swift_email_country_currency/i },
+  { object: 'setting TAZAPAY_SWIFT_BENEFICIARIES_ENABLED', pattern: /'TAZAPAY_SWIFT_BENEFICIARIES_ENABLED'/ },
+  { object: 'setting TAZAPAY_SWIFT_ALLOWED_CURRENCIES', pattern: /'TAZAPAY_SWIFT_ALLOWED_CURRENCIES'/ },
 ];
 
 describe('migrations/ cubre los objetos de base de datos que usa el backend', () => {

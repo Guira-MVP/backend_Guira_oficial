@@ -85,6 +85,31 @@ class DocumentNumberConstraint implements ValidatorConstraintInterface {
   }
 }
 
+/**
+ * Campos del formulario SWIFT (Tazapay): objeto plano clave → texto, con las
+ * claves del diccionario de campos. Qué claves son obligatorias no se decide
+ * aquí (depende del país y la moneda): lo valida el esquema del corredor en
+ * TazapayCorridorService.validateAgainstSchema().
+ */
+@ValidatorConstraint({ name: 'swiftFields', async: false })
+class SwiftFieldsConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown) {
+    if (value === undefined || value === null) return true;
+    if (typeof value !== 'object' || Array.isArray(value)) return false;
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length > 50) return false;
+    return entries.every(
+      ([k, v]) =>
+        /^[a-z_]+(\.[a-z_]+)?$/.test(k) &&
+        (v === null || (typeof v === 'string' && v.length <= 300)),
+    );
+  }
+
+  defaultMessage() {
+    return 'swift_fields debe ser un objeto de texto con claves del formulario SWIFT';
+  }
+}
+
 export class CreateSupplierDto {
   @ApiProperty({ example: 'Acme Logistics S.A.' })
   @IsString()
@@ -115,6 +140,7 @@ export class CreateSupplierDto {
       'co_bank_transfer',
       'pe_bank_transfer',
       'crypto',
+      'swift',
     ],
   })
   @IsIn([
@@ -129,6 +155,7 @@ export class CreateSupplierDto {
     'co_bank_transfer',
     'pe_bank_transfer',
     'crypto',
+    'swift',
   ])
   payment_rail: string;
 
@@ -413,6 +440,26 @@ export class CreateSupplierDto {
     message: `Token no soportado. Permitidos: ${ALLOWED_CRYPTO_CURRENCIES.join(', ')}`,
   })
   wallet_currency?: string;
+
+  // ── SWIFT (Tazapay) ──
+  @ApiPropertyOptional({ example: 'CN', description: 'País del banco del beneficiario (ISO alfa-2). Requerido si payment_rail es \'swift\'.' })
+  @ValidateIf((o) => o.payment_rail === 'swift')
+  @IsString()
+  @Matches(/^[A-Za-z]{2}$/, { message: 'bank_country debe ser un código de país de 2 letras' })
+  bank_country?: string;
+
+  @ApiPropertyOptional({ enum: ['individual', 'business'], description: 'Requerido si payment_rail es \'swift\'.' })
+  @ValidateIf((o) => o.payment_rail === 'swift')
+  @IsIn(['individual', 'business'])
+  beneficiary_type?: string;
+
+  @ApiPropertyOptional({
+    description: 'Campos del beneficiario SWIFT según el esquema de GET /tazapay/swift/form-schema.',
+    example: { 'bank.account_holder_name': 'Shenzhen Hongda Trading Co., Ltd.', 'bank_codes.swift_code': 'CMBCCNBS' },
+  })
+  @ValidateIf((o) => o.payment_rail === 'swift')
+  @Validate(SwiftFieldsConstraint)
+  swift_fields?: Record<string, string>;
 }
 
 export class UpdateSupplierDto {
@@ -692,4 +739,11 @@ export class UpdateSupplierDto {
     message: `Token no soportado. Permitidos: ${ALLOWED_CRYPTO_CURRENCIES.join(', ')}`,
   })
   wallet_currency?: string;
+
+  // SWIFT (Tazapay): solo datos de contacto y dirección del beneficiario;
+  // los bancarios no se editan (se crea un proveedor nuevo).
+  @ApiPropertyOptional({ description: 'Campos editables del beneficiario SWIFT (dirección, teléfono, email).' })
+  @IsOptional()
+  @Validate(SwiftFieldsConstraint)
+  swift_fields?: Record<string, string>;
 }

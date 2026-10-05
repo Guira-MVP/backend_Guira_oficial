@@ -90,6 +90,7 @@ function build(existing: Record<string, unknown>, screen: jest.Mock) {
     {} as any,
     { screenBeneficiaryWallet: screen } as any,
     {} as any,
+    { attachStatus: async (s: unknown[]) => s, markInactive: async () => undefined } as any,
   );
   jest.spyOn(service, 'findOne').mockResolvedValue(existing as any);
   return { service, supabase };

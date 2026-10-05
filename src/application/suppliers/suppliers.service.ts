@@ -19,6 +19,7 @@ import { DiditWalletScreeningService } from '../didit/didit-wallet-screening.ser
 import { WalletScreeningVerdict } from '../didit/didit.types';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/dto/notifications.dto';
+import { SWIFT_RAIL, SwiftSuppliersService } from './swift/swift-suppliers.service';
 
 /**
  * Rails que NO se integran con Bridge: el proveedor se guarda solo en la DB y el
@@ -41,6 +42,7 @@ export class SuppliersService {
     private readonly bridgeService: BridgeService,
     private readonly walletScreening: DiditWalletScreeningService,
     private readonly notifications: NotificationsService,
+    private readonly swiftSuppliers: SwiftSuppliersService,
   ) {}
 
   /**
@@ -90,25 +92,28 @@ export class SuppliersService {
     supplierName?: string;
     usedRails: string[];
     usedNetworks: string[];
+    usedSwift: Array<{ country: string | null; currency: string | null }>;
   }> {
     const normalizedEmail = this.normalizeEmail(email);
     if (!normalizedEmail) {
-      return { exists: false, usedRails: [], usedNetworks: [] };
+      return { exists: false, usedRails: [], usedNetworks: [], usedSwift: [] };
     }
 
     const { data } = await this.supabase
       .from('suppliers')
-      .select('name, payment_rail, bank_details')
+      .select('name, payment_rail, currency, bank_details')
       .eq('user_id', userId)
       .eq('contact_email', normalizedEmail)
       .eq('is_active', true);
 
     if (!data || data.length === 0) {
-      return { exists: false, usedRails: [], usedNetworks: [] };
+      return { exists: false, usedRails: [], usedNetworks: [], usedSwift: [] };
     }
 
+    // SWIFT no ocupa el rail: un contacto puede tener una cuenta SWIFT por
+    // país de banco y moneda. Se informan aparte.
     const usedRails = data
-      .filter((s) => s.payment_rail !== 'crypto')
+      .filter((s) => s.payment_rail !== 'crypto' && s.payment_rail !== SWIFT_RAIL)
       .map((s) => s.payment_rail as string);
 
     const usedNetworks = data
@@ -116,11 +121,20 @@ export class SuppliersService {
       .map((s) => (s.bank_details as Record<string, string>)?.wallet_network)
       .filter(Boolean) as string[];
 
+    const usedSwift = data
+      .filter((s) => s.payment_rail === SWIFT_RAIL)
+      .map((s) => ({
+        country:
+          ((s.bank_details as Record<string, string> | null)?.bank_country as string) ?? null,
+        currency: (s as { currency?: string | null }).currency?.toUpperCase() ?? null,
+      }));
+
     return {
       exists: true,
       supplierName: data[0].name as string,
       usedRails,
       usedNetworks,
+      usedSwift,
     };
   }
 
@@ -128,6 +142,16 @@ export class SuppliersService {
   async create(userId: string, dto: CreateSupplierDto) {
     if (dto.payment_rail === 'ach_wire') {
       return this.createAchWireSupplierPair(userId, dto);
+    }
+
+    // SWIFT (Tazapay): rama propia ANTES de clasificar el rail. Si cayera en
+    // la lógica de abajo se trataría como fiat y se registraría en Bridge.
+    if (dto.payment_rail === SWIFT_RAIL) {
+      return this.swiftSuppliers.create(
+        userId,
+        dto,
+        this.normalizeEmail(dto.contact_email),
+      );
     }
 
     // Rails manuales: no pasan por Bridge (sin external account ni liquidation
@@ -785,7 +809,8 @@ export class SuppliersService {
     const suppliers = (data ?? []).map((supplier) =>
       this.mapBridgeDetailsToBankDetails(supplier),
     );
-    return this.attachLiquidationFee(userId, suppliers);
+    const withFee = await this.attachLiquidationFee(userId, suppliers);
+    return this.swiftSuppliers.attachStatus(withFee);
   }
 
   /**
@@ -865,7 +890,10 @@ export class SuppliersService {
     const suppliers = (data ?? []).map((supplier) =>
       this.mapBridgeDetailsToBankDetails(supplier),
     );
-    const withFee = await this.attachLiquidationFee(userId, suppliers);
+    const withFee = await this.swiftSuppliers.attachStatus(
+      await this.attachLiquidationFee(userId, suppliers),
+      { includeProviderIds: true },
+    );
 
     // Enriquecimiento con la liquidation address referenciada. Permite
     // distinguir en la UI tres casos que de otro modo se confunden:
@@ -925,8 +953,9 @@ export class SuppliersService {
 
     if (error || !data) throw new NotFoundException('Proveedor no encontrado');
     const supplier = this.mapBridgeDetailsToBankDetails(data);
-    const [withFee] = await this.attachLiquidationFee(userId, [supplier]);
-    return withFee;
+    const withFee = await this.attachLiquidationFee(userId, [supplier]);
+    const [withStatus] = await this.swiftSuppliers.attachStatus(withFee);
+    return withStatus;
   }
 
   /**
@@ -994,6 +1023,10 @@ export class SuppliersService {
   async update(supplierId: string, userId: string, dto: UpdateSupplierDto) {
     // Verificar propiedad y obtener datos actuales
     const existing = await this.findOne(supplierId, userId);
+
+    if (existing.payment_rail === SWIFT_RAIL) {
+      return this.updateSwiftSupplier(existing, userId, dto);
+    }
 
     // ── Bloquear edición de campos bancarios inmutables si hay EA en Bridge ──
     // Bridge Update API solo permite: address + US account (routing_number, checking_or_savings)
@@ -1266,6 +1299,61 @@ export class SuppliersService {
     return data;
   }
 
+  /**
+   * Edición de un proveedor SWIFT (Tazapay). Los datos bancarios no se
+   * cambian; nombre, dirección y teléfono se sincronizan con Tazapay.
+   */
+  private async updateSwiftSupplier(
+    existing: Record<string, any>,
+    userId: string,
+    dto: UpdateSupplierDto,
+  ) {
+    const updateData = await this.swiftSuppliers.buildUpdate(existing, userId, dto);
+    if (dto.contact_email !== undefined) {
+      updateData.contact_email = this.normalizeEmail(dto.contact_email);
+    }
+    updateData.updated_at = new Date().toISOString();
+
+    const { data, error } = await this.supabase
+      .from('suppliers')
+      .update(updateData)
+      .eq('id', existing.id)
+      .eq('user_id', userId)
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === '23505') {
+        throw new ConflictException(
+          'Ese contacto ya tiene otra cuenta SWIFT activa en el mismo país y moneda.',
+        );
+      }
+      throwDbError(error);
+    }
+
+    await this.supabase.from('audit_logs').insert({
+      performed_by: userId,
+      role: 'client',
+      action: 'UPDATE_SUPPLIER',
+      table_name: 'suppliers',
+      record_id: existing.id,
+      old_values: {
+        name: existing.name,
+        contact_email: existing.contact_email,
+        notes: existing.notes,
+      },
+      new_values: {
+        name: data.name,
+        contact_email: data.contact_email,
+        notes: data.notes,
+        swift_fields_changed: Object.keys(dto.swift_fields ?? {}),
+      },
+    });
+
+    const [withStatus] = await this.swiftSuppliers.attachStatus([data]);
+    return withStatus;
+  }
+
   // ── Cumplimiento (compliance_status) ────────────────────────────────
 
   /**
@@ -1284,7 +1372,18 @@ export class SuppliersService {
    */
   assertUsableForPayment(supplier: {
     compliance_status?: string | null;
+    payment_rail?: string | null;
   }): void {
+    // Los beneficiarios SWIFT (Tazapay) se pueden registrar pero todavía no
+    // pagar: no tienen external account ni liquidation address de Bridge y el
+    // payout por Tazapay es otra etapa. Sin esto, cada flujo fallaría con un
+    // mensaje engañoso ("cuenta externa no encontrada").
+    if (supplier?.payment_rail === SWIFT_RAIL) {
+      throw new BadRequestException(
+        'Los pagos a beneficiarios SWIFT todavía no están disponibles. ' +
+          'Elige otro método de pago de este beneficiario.',
+      );
+    }
     if (supplier?.compliance_status === 'blocked') {
       throw new BadRequestException(
         'Este beneficiario no está disponible para envíos por una restricción de ' +
@@ -1527,6 +1626,10 @@ export class SuppliersService {
       .update({ is_active: false, updated_at: new Date().toISOString() })
       .eq('id', supplierId)
       .eq('user_id', userId);
+
+    if (existing.payment_rail === SWIFT_RAIL) {
+      await this.swiftSuppliers.markInactive(supplierId);
+    }
 
     await this.supabase.from('audit_logs').insert({
       performed_by: userId,

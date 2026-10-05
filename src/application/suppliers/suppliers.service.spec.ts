@@ -181,6 +181,7 @@ function makeService(opts: MockOptions = {}) {
     {} as any,
     {} as any,
     {} as any,
+    { attachStatus: async (s: unknown[]) => s, markInactive: async () => undefined } as any,
   );
   return { service, queries };
 }

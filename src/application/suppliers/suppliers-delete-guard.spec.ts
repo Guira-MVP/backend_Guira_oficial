@@ -88,7 +88,7 @@ function mockSupabase(opts: MockOptions) {
 
 function makeService(opts: MockOptions) {
   const { supabase, updates, inserts } = mockSupabase(opts);
-  const service = new SuppliersService(supabase, {} as any, {} as any, {} as any);
+  const service = new SuppliersService(supabase, {} as any, {} as any, {} as any, { attachStatus: async (s: unknown[]) => s, markInactive: async () => undefined } as any);
   // findOne arrastra el mapeo de Bridge y el fee de la LA, que aquí no importan.
   jest.spyOn(service, 'findOne').mockImplementation(async (id: string) => {
     const row = opts.suppliers.find((s) => s.id === id);

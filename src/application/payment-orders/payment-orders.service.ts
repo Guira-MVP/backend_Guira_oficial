@@ -864,6 +864,10 @@ export class PaymentOrdersService {
       );
     }
 
+    // Antes de comparar cuentas: un proveedor SWIFT no tiene external account
+    // de Bridge y el error sería engañoso.
+    this.suppliersService.assertUsableForPayment(supplier);
+
     // El proveedor y la cuenta de destino deben ser la misma pareja: si no, el
     // control de compliance se haría sobre un proveedor y el pago saldría hacia
     // la cuenta de otro (con el riel y la comisión del primero).
@@ -1301,9 +1305,11 @@ export class PaymentOrdersService {
     // Validar que el proveedor tenga liquidation address configurada
     const { data: supplier } = await this.supabase
       .from('suppliers')
-      .select('bank_details, bridge_liquidation_address_id, compliance_status')
+      .select('bank_details, bridge_liquidation_address_id, compliance_status, payment_rail')
       .eq('id', dto.supplier_id)
       .single();
+
+    if (supplier) this.suppliersService.assertUsableForPayment(supplier);
 
     if (!supplier?.bridge_liquidation_address_id) {
       throw new BadRequestException(

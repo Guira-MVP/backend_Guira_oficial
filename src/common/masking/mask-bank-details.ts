@@ -103,6 +103,7 @@ export function maskOrderBankDetails<T extends Record<string, any>>(
  * pagó.
  */
 const SUPPLIER_BANK_FIELDS = [
+  'iban',
   'account_number',
   'routing_number',
   'crypto_address',
