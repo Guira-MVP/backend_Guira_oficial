@@ -500,6 +500,9 @@ export class ComplianceActionsService {
       estimated_monthly_volume: p.expected_monthly_payments_usd,
       is_pep: p.is_pep,
       employment_status: p.employment_status,
+      // Datos de empleo (origen de fondos = salario; Tazapay employment_details).
+      employer_name: p.employer_name,
+      job_title: p.job_title,
     };
   }
 
