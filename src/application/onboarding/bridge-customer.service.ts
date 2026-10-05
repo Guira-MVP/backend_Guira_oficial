@@ -741,14 +741,11 @@ export class BridgeCustomerService {
       payload.identifying_information = identifyingInfo;
     }
 
-    // La selfie se pedía y guardaba pero nunca llegaba a Bridge: está en
-    // IDENTITY_DOC_TYPES (excluida de documents[]) y no la usa
-    // identifying_information. Bridge la recibe en liveness_check_selfies
-    // (solo customers individuales; associated persons no tienen el campo).
-    const selfies = await this.buildLivenessSelfies(userId);
-    if (selfies.length > 0) {
-      payload.liveness_check_selfies = selfies;
-    }
+    // La selfie queda guardada pero NO se envía a Bridge: liveness_check_selfies
+    // solo se admite para customers con endorsements reliance + ARS o PIX
+    // (sandbox 2026-10-05: 400 "liveness check selfies may only be submitted
+    // for customers with both reliance and ARS endorsements, or a PIX
+    // endorsement"). Enviarla rompía el alta de todo KYC.
 
     // Documents [] — H04 (P0-A: uses purposes[]/file, excludes identity docs)
     const documents = await this.buildDocumentsArray(userId, 'person');
@@ -1397,34 +1394,6 @@ export class BridgeCustomerService {
     }
 
     return result;
-  }
-
-  /**
-   * Selfie del cliente KYC en el formato de liveness_check_selfies de Bridge.
-   * Solo imágenes: Bridge no acepta PDF en este campo.
-   */
-  private async buildLivenessSelfies(
-    userId: string,
-  ): Promise<Array<{ image: string }>> {
-    const { data: selfie } = await this.supabase
-      .from('documents')
-      .select('storage_path, mime_type')
-      .eq('user_id', userId)
-      .eq('subject_type', 'person')
-      .eq('document_type', 'selfie')
-      .neq('status', 'superseded')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (!selfie?.storage_path || !String(selfie.mime_type ?? '').startsWith('image/')) {
-      return [];
-    }
-    const image = await this.downloadDocumentAsBase64(
-      selfie.storage_path as string,
-      selfie.mime_type as string,
-    );
-    return image ? [{ image }] : [];
   }
 
   /**
