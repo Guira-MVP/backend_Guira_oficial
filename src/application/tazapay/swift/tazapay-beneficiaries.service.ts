@@ -209,11 +209,12 @@ export class TazapayBeneficiariesService {
       ...top,
       ...(Object.keys(address).length > 0 ? { address } : {}),
       ...(phone.number ? { phone } : {}),
-      // Tazapay documenta metadata como string JSON.
-      metadata: JSON.stringify({
+      // Objeto, no string: el esquema de la doc dice "string JSON", pero la
+      // API real rechaza el string con "proto: syntax error" (sandbox, 2026-10-05).
+      metadata: {
         guira_user_id: input.userId,
         guira_supplier_id: input.supplierId,
-      }),
+      },
       destination_details: { type: 'bank', bank },
     };
   }

@@ -203,7 +203,7 @@ describe('SuppliersService.create con payment_rail = swift', () => {
         },
       },
     });
-    expect(JSON.parse(body.metadata)).toEqual({
+    expect(body.metadata).toEqual({
       guira_user_id: USER,
       guira_supplier_id: supplier.id,
     });
