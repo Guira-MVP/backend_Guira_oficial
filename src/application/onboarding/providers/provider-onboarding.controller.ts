@@ -8,6 +8,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -133,17 +134,60 @@ export class ProviderOnboardingController {
         tazapay_kyc = { kyc_application_id: kyc.id, missing };
       }
     }
-    // Wallet de fondeo interna (solo staff; el cliente no la ve).
-    const funding = await this.collectionWallets.getForUser(userId);
+    // Solo un resumen de la wallet de fondeo: el detalle está en
+    // users/:userId/tazapay-funding (pestaña Cuentas → Tazapay).
+    const wallet = await this.collectionWallets.getWallet(userId);
     return {
       ...status,
       tazapay_kyb,
       tazapay_kyc,
-      tazapay_collection_wallet: {
-        auto_create_enabled: await this.collectionWallets.isAutoCreateEnabled(),
-        ...funding,
-      },
+      tazapay_collection_wallet: wallet
+        ? {
+            account_status: wallet.account_status,
+            request_status: wallet.request_status,
+          }
+        : null,
     };
+  }
+
+  @Get('users/:userId/tazapay-funding')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({
+    summary:
+      'Wallet de fondeo interna de Tazapay del cliente (USDC/Solana). Solo staff',
+  })
+  async getFundingWallet(@Param('userId', new ParseUUIDPipe()) userId: string) {
+    const [wallet, autoCreateEnabled, status] = await Promise.all([
+      this.collectionWallets.getWallet(userId),
+      this.collectionWallets.isAutoCreateEnabled(),
+      this.providers.getProviderStatus(userId),
+    ]);
+    const tazapay = (status.accounts as Array<Record<string, unknown>>).find(
+      (a) => a.provider === 'tazapay',
+    );
+    return {
+      auto_create_enabled: autoCreateEnabled,
+      tazapay_approved: tazapay?.status === 'approved',
+      wallet,
+    };
+  }
+
+  @Get('users/:userId/tazapay-collects')
+  @Roles('staff', 'admin', 'super_admin')
+  @ApiOperation({
+    summary:
+      'Depósitos recibidos en la wallet de fondeo de Tazapay del cliente',
+  })
+  listCollects(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.collectionWallets.listCollects(
+      userId,
+      Number(limit) || 20,
+      Number(offset) || 0,
+    );
   }
 
   @Post('users/:userId/tazapay-collection-wallet')
@@ -168,7 +212,7 @@ export class ProviderOnboardingController {
         );
       throw err;
     }
-    return this.collectionWallets.getForUser(userId);
+    return this.getFundingWallet(userId);
   }
 
   @Get('tazapay/verticals')

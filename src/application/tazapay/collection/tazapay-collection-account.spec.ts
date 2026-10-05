@@ -69,6 +69,15 @@ function fakeSupabase(tables: Record<string, Row[]>) {
       not: (k: string) => (filters.push((r) => r[k] != null), b),
       order: () => b,
       limit: () => b,
+      // Paginación: devuelve la página y el total (count: 'exact').
+      range: (from: number, to: number) => {
+        const all = rows();
+        return Promise.resolve({
+          data: all.slice(from, to + 1),
+          count: all.length,
+          error: null,
+        });
+      },
       insert: (p: Row) => ((op = 'insert'), (payload = p), b),
       update: (p: Row) => ((op = 'update'), (payload = p), b),
       upsert: (p: Row, o: { onConflict: string }) => {
@@ -315,6 +324,18 @@ describe('Tazapay — wallet de fondeo (collection account)', () => {
       data: { id: 'col_2', destination: 'cwa_otra' },
     });
     expect(tables.tazapay_collects).toHaveLength(1);
+  });
+
+  it('depósitos paginados del cliente, con el total', async () => {
+    const { service, tables } = setup();
+    for (let i = 0; i < 3; i++)
+      tables.tazapay_collects.push({ collect_id: `col_${i}`, user_id: USER });
+    tables.tazapay_collects.push({ collect_id: 'col_otro', user_id: 'otro' });
+    const page = await service.listCollects(USER, 2, 0);
+    expect(page.items).toHaveLength(2);
+    expect(page.total).toBe(3);
+    // Límite acotado a 100.
+    expect((await service.listCollects(USER, 5000, 0)).limit).toBe(100);
   });
 
   it('lector tolerante: con o sin sobre data, enablement y mayúsculas', () => {

@@ -160,28 +160,39 @@ export class TazapayCollectionAccountService {
     return `tz_cwa_${userId}_${COLLECTION_PAYMENT_METHOD}_${COLLECTION_CHAIN}`;
   }
 
-  /** La wallet del cliente y sus últimos depósitos (panel staff). */
-  async getForUser(userId: string) {
-    const [{ data: wallet }, { data: collects }] = await Promise.all([
-      this.supabase
-        .from('tazapay_collection_accounts')
-        .select(
-          'collection_account_id, entity_id, payment_method_type, chain, deposit_address, account_status, request_status, failure_code, failure_reason, transfer_limit_min, transfer_limit_max, limit_currency, restricted_remitter_countries, setup_time, fee_details, enabled_at, created_at, updated_at',
-        )
-        .eq('user_id', userId)
-        .eq('payment_method_type', COLLECTION_PAYMENT_METHOD)
-        .eq('chain', COLLECTION_CHAIN)
-        .maybeSingle(),
-      this.supabase
-        .from('tazapay_collects')
-        .select(
-          'collect_id, status, amount, currency, holding_currency, payer_wallet, tx_hash, payment_order_id, created_at, updated_at',
-        )
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false })
-        .limit(20),
-    ]);
-    return { wallet: wallet ?? null, collects: collects ?? [] };
+  /** La wallet de fondeo del cliente (panel staff: Cuentas → Tazapay). */
+  async getWallet(userId: string) {
+    const { data } = await this.supabase
+      .from('tazapay_collection_accounts')
+      .select(
+        'collection_account_id, entity_id, payment_method_type, chain, deposit_address, account_status, request_status, failure_code, failure_reason, transfer_limit_min, transfer_limit_max, limit_currency, restricted_remitter_countries, setup_time, fee_details, enabled_at, created_at, updated_at',
+      )
+      .eq('user_id', userId)
+      .eq('payment_method_type', COLLECTION_PAYMENT_METHOD)
+      .eq('chain', COLLECTION_CHAIN)
+      .maybeSingle();
+    return data ?? null;
+  }
+
+  /** Depósitos recibidos en la wallet del cliente, paginados (Instrucciones → Depósitos). */
+  async listCollects(userId: string, limit = 20, offset = 0) {
+    const safeLimit = Math.min(Math.max(limit, 1), 100);
+    const safeOffset = Math.max(offset, 0);
+    const { data, count } = await this.supabase
+      .from('tazapay_collects')
+      .select(
+        'collect_id, collection_account_id, status, amount, currency, holding_currency, payment_method_type, balance_transaction, payer_wallet, payer_network, tx_hash, payment_order_id, created_at, updated_at',
+        { count: 'exact' },
+      )
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .range(safeOffset, safeOffset + safeLimit - 1);
+    return {
+      items: data ?? [],
+      total: count ?? 0,
+      limit: safeLimit,
+      offset: safeOffset,
+    };
   }
 
   /**
