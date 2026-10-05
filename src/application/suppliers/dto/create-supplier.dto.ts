@@ -100,7 +100,8 @@ class SwiftFieldsConstraint implements ValidatorConstraintInterface {
     if (entries.length > 50) return false;
     return entries.every(
       ([k, v]) =>
-        /^[a-z_]+(\.[a-z_]+)?$/.test(k) &&
+        // Las claves pueden llevar dígitos: address.line1, address.line2.
+        /^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)?$/.test(k) &&
         (v === null || (typeof v === 'string' && v.length <= 300)),
     );
   }
