@@ -27,8 +27,9 @@ const ID_TYPE_TO_TAZAPAY: Readonly<Record<string, string>> = {
 /**
  * Origen de fondos de Guira (enum de Bridge) → source_of_funds de Tazapay.
  * Cuando no hay un valor que lo describa tal cual se usa `other` con la
- * descripción. `salary` va como `other`: Tazapay exige el empleador y el
- * cargo (employment_details) para `salary`, y Guira no los pregunta.
+ * descripción. `salary` va como `other` + "Salary" salvo que el cliente haya
+ * dado empleador y cargo: Tazapay exige employment_details para `salary`
+ * (ver buildIndividualEntityDraft).
  */
 const SOURCE_OF_FUNDS: Readonly<
   Record<string, { primary_source: string; description?: string }>
@@ -83,6 +84,7 @@ export interface TazapayIndividualDetails {
   nationality: string;
   profession?: { isco_code: string; employment_status?: string };
   source_of_funds?: { primary_source: string; description?: string };
+  employment_details?: { employer_name: string; designation: string };
 }
 
 export interface TazapayIndividualEntityDraft {
@@ -178,6 +180,23 @@ export function buildIndividualEntityDraft(params: {
 
   const sof = SOURCE_OF_FUNDS[String(person.source_of_funds ?? '')];
   if (sof) individual.source_of_funds = { ...sof };
+
+  // Salario: Tazapay exige employment_details para primary_source = salary.
+  // Con empleador y cargo se envía salary; sin ellos (expedientes anteriores
+  // al formulario con esos campos) sigue yendo como other + "Salary".
+  const employer = String(person.employer_name ?? '')
+    .trim()
+    .slice(0, 200);
+  const jobTitle = String(person.job_title ?? '')
+    .trim()
+    .slice(0, 100);
+  if (person.source_of_funds === 'salary' && employer && jobTitle) {
+    individual.source_of_funds = { primary_source: 'salary' };
+    individual.employment_details = {
+      employer_name: employer,
+      designation: jobTitle,
+    };
+  }
 
   const draft: TazapayIndividualEntityDraft = {
     name: toTazapayEntityName(fullName(person)),

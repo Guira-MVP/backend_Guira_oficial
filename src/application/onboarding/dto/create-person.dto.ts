@@ -7,6 +7,7 @@ import {
   IsBoolean,
   IsEnum,
   Length,
+  MaxLength,
   ValidateIf,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
@@ -177,7 +178,10 @@ export class CreatePersonDto {
   @ApiPropertyOptional()
   @Transform(trimString)
   @ValidateIf((o) => o.id_type !== 'national_id')
-  @IsNotEmpty({ message: 'tax_id es requerido cuando el documento no es Cédula de Identidad / DNI' })
+  @IsNotEmpty({
+    message:
+      'tax_id es requerido cuando el documento no es Cédula de Identidad / DNI',
+  })
   @IsString()
   tax_id?: string;
 
@@ -185,7 +189,10 @@ export class CreatePersonDto {
   @ApiPropertyOptional()
   @Transform(trimString)
   @ValidateIf((o) => o.id_type !== 'national_id')
-  @IsNotEmpty({ message: 'tax_id_type es requerido cuando el documento no es Cédula de Identidad / DNI' })
+  @IsNotEmpty({
+    message:
+      'tax_id_type es requerido cuando el documento no es Cédula de Identidad / DNI',
+  })
   @IsString()
   tax_id_type?: string;
 
@@ -278,9 +285,29 @@ export class CreatePersonDto {
    */
   @ApiPropertyOptional({
     example: false,
-    description: 'True if the customer acts as an intermediary for a third party',
+    description:
+      'True if the customer acts as an intermediary for a third party',
   })
   @IsOptional()
   @IsBoolean()
   acting_as_intermediary?: boolean;
+
+  /**
+   * Empleador, cuando el origen de fondos es salario. Tazapay lo exige
+   * (employment_details.employer_name) para enviar primary_source = salary.
+   */
+  @ApiPropertyOptional({ example: 'Banco Mercantil Santa Cruz S.A.' })
+  @Transform(trimString)
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  employer_name?: string;
+
+  /** Cargo o puesto, cuando el origen de fondos es salario (employment_details.designation). */
+  @ApiPropertyOptional({ example: 'Analista de sistemas' })
+  @Transform(trimString)
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  job_title?: string;
 }

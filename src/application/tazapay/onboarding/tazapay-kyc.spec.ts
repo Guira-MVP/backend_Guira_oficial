@@ -46,7 +46,8 @@ describe('Tazapay — entity individual (KYC)', () => {
       country: 'BO',
       postal_code: '0000',
     });
-    expect(draft.phone).toEqual({ calling_code: '+591', number: '71234567' });
+    // calling_code sin "+": el dashboard de Tazapay antepone el suyo.
+    expect(draft.phone).toEqual({ calling_code: '591', number: '71234567' });
     expect(draft.individual).toEqual({
       national_identification_number: {
         type: 'national_id',
@@ -65,6 +66,47 @@ describe('Tazapay — entity individual (KYC)', () => {
       source_of_funds: { primary_source: 'other', description: 'Salary' },
     });
     expect(draft).not.toHaveProperty('tax_id');
+  });
+
+  it('salario con empleador y cargo → salary + employment_details', () => {
+    const draft = buildIndividualEntityDraft({
+      userId: 'u-1',
+      person: {
+        ...PERSON,
+        employer_name: ' Banco Mercantil Santa Cruz S.A. ',
+        job_title: 'Analista de sistemas',
+      },
+    });
+    expect(draft.individual.source_of_funds).toEqual({
+      primary_source: 'salary',
+    });
+    expect(draft.individual.employment_details).toEqual({
+      employer_name: 'Banco Mercantil Santa Cruz S.A.',
+      designation: 'Analista de sistemas',
+    });
+
+    // Falta el cargo: sigue como other + Salary, sin employment_details.
+    const partial = buildIndividualEntityDraft({
+      userId: 'u-1',
+      person: { ...PERSON, employer_name: 'Entel S.A.', job_title: '' },
+    });
+    expect(partial.individual.source_of_funds).toEqual({
+      primary_source: 'other',
+      description: 'Salary',
+    });
+    expect(partial.individual).not.toHaveProperty('employment_details');
+
+    // Empleador cargado pero el origen no es salario: no se envía.
+    const savings = buildIndividualEntityDraft({
+      userId: 'u-1',
+      person: {
+        ...PERSON,
+        source_of_funds: 'savings',
+        employer_name: 'Entel S.A.',
+        job_title: 'Técnico',
+      },
+    });
+    expect(savings.individual).not.toHaveProperty('employment_details');
   });
 
   it('licencia → driving_license, vencimiento y NIT como others', () => {

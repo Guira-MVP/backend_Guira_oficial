@@ -109,7 +109,7 @@ describe('Tazapay — entity de empresa', () => {
       false,
     );
     expect(draft.tax_id_type).toBe('others');
-    expect(draft.phone).toEqual({ calling_code: '+591', number: '71234567' });
+    expect(draft.phone).toEqual({ calling_code: '591', number: '71234567' });
     expect(draft.website).toBe('https://andina.bo');
     expect(draft.purpose_of_use).toEqual(['collect', 'payout']);
     expect(draft.relationship).toBe('customer');

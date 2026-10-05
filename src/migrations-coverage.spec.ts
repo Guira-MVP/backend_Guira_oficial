@@ -37,6 +37,7 @@ const REQUIRED_DB_OBJECTS: Array<{ object: string; pattern: RegExp }> = [
   { object: 'tabla naics_tazapay_vertical_map', pattern: /create table[^;]*naics_tazapay_vertical_map/i },
   { object: 'columna businesses.tazapay_vertical', pattern: /alter table public\.businesses[^;]*tazapay_vertical/i },
   { object: 'columna businesses.ownership_in_incorporation_doc', pattern: /alter table public\.businesses[^;]*ownership_in_incorporation_doc/i },
+  { object: 'columna people.employer_name', pattern: /alter table public\.people[^;]*employer_name/i },
 ];
 
 describe('migrations/ cubre los objetos de base de datos que usa el backend', () => {

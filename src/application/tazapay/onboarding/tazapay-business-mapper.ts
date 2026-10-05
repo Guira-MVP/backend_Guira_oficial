@@ -103,12 +103,18 @@ export function toTazapayDate(value: unknown): string | undefined {
   return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : undefined;
 }
 
+/**
+ * Teléfono para la entity de Tazapay. calling_code va SIN "+": el esquema
+ * Phone de /v3/entity lo define así ('1' EE.UU., '91' India) y el dashboard
+ * le antepone su propio "+" (con "+591" mostraba "++591", sandbox 2026-10-05).
+ * Ojo: beneficiarios/customers/checkout sí exigen el "+" (validaciones 2026).
+ */
 export function toTazapayPhone(raw: unknown): TazapayPhone | undefined {
   if (typeof raw !== 'string' || !raw.trim()) return undefined;
   const parsed = parsePhoneNumberFromString(raw.trim());
   if (!parsed) return undefined;
   return {
-    calling_code: `+${parsed.countryCallingCode}`,
+    calling_code: String(parsed.countryCallingCode),
     number: String(parsed.nationalNumber),
   };
 }
