@@ -57,7 +57,8 @@ describe('Tazapay — entity individual (KYC)', () => {
       date_of_birth: '1990-05-15',
       nationality: 'BO',
       profession: {
-        occupation: 'Software Developer',
+        // ISCO-08 2512 Software developers (tabla O*NET → ISCO aprobada).
+        isco_code: '2512',
         employment_status: 'employed',
       },
       // `salary` exige empleador y cargo en Tazapay: va como `other`.

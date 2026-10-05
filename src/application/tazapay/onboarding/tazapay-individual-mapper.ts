@@ -1,5 +1,5 @@
 import { toAlpha2 } from '../../../core/utils/country-codes';
-import { OCCUPATION_LABELS_EN } from '../../../core/utils/occupation-labels';
+import { OCCUPATION_TO_ISCO08 } from '../../../core/utils/occupation-isco';
 import {
   TazapayAddress,
   TazapayMappingError,
@@ -81,7 +81,7 @@ export interface TazapayIndividualDetails {
   };
   date_of_birth: string;
   nationality: string;
-  profession?: { occupation: string; employment_status?: string };
+  profession?: { isco_code: string; employment_status?: string };
   source_of_funds?: { primary_source: string; description?: string };
 }
 
@@ -165,10 +165,12 @@ export function buildIndividualEntityDraft(params: {
     nationality,
   };
 
-  const occupation =
-    OCCUPATION_LABELS_EN[String(person.most_recent_occupation ?? '')];
-  if (occupation) {
-    individual.profession = { occupation };
+  // Tazapay valida la ocupación contra ISCO-08 (un título libre da error
+  // 2642): se manda solo isco_code, que basta según su documentación.
+  const iscoCode =
+    OCCUPATION_TO_ISCO08[String(person.most_recent_occupation ?? '')];
+  if (iscoCode) {
+    individual.profession = { isco_code: iscoCode };
     const status = String(person.employment_status ?? '');
     if (EMPLOYMENT_STATUSES.has(status))
       individual.profession.employment_status = status;
