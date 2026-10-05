@@ -6,6 +6,7 @@ import {
   buildBusinessEntityDraft,
   TazapayBusinessEntityDraft,
   TazapayMappingError,
+  toTazapayEntityName,
 } from './tazapay-business-mapper';
 import {
   BUSINESS_DOCUMENT_SLOTS,
@@ -34,6 +35,56 @@ export type KybEligibility =
       reason: string;
       evaluation?: IndustryEvaluation;
     };
+
+/** Representante tal como lo devuelve GET /v3/entity/{id}. */
+export interface ExistingRepresentative {
+  person_id?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+}
+
+/** Nombre comparable: sin tildes, símbolos ni mayúsculas (mismas reglas que el nombre de la entity). */
+function personKey(first: unknown, last: unknown): string {
+  return toTazapayEntityName(
+    `${String(first ?? '')} ${String(last ?? '')}`,
+  ).toLowerCase();
+}
+
+/**
+ * person_id de Tazapay para cada representante del borrador (mismo orden).
+ * Se empareja por nombre completo; si no coincide ninguno, por posición
+ * (Tazapay los guarda en el orden en que se crearon). Cada person_id se usa
+ * una sola vez. Sin coincidencia, el representante va sin person_id (nuevo).
+ */
+export function assignPersonIds(
+  draftReps: Array<{ first_name: string; last_name?: string }>,
+  existing: ExistingRepresentative[],
+): Array<string | undefined> {
+  const used = new Set<number>();
+  const candidates = existing.map((e, i) => ({ ...e, i }));
+  return draftReps.map((rep, idx) => {
+    const key = personKey(rep.first_name, rep.last_name);
+    let match = candidates.find(
+      (c) =>
+        !used.has(c.i) &&
+        !!c.person_id &&
+        personKey(c.first_name, c.last_name) === key,
+    );
+    if (!match) {
+      const byPosition = candidates[idx];
+      if (
+        byPosition &&
+        !used.has(byPosition.i) &&
+        byPosition.person_id &&
+        !personKey(byPosition.first_name, byPosition.last_name)
+      )
+        match = byPosition;
+    }
+    if (!match) return undefined;
+    used.add(match.i);
+    return match.person_id ?? undefined;
+  });
+}
 
 interface SubmissionRow {
   id: string;
@@ -395,11 +446,20 @@ export class TazapayKybOnboardingService {
     const { entityDocuments, representativeDocuments } =
       await this.uploadDocuments(submission.id, ctx, draft);
 
-    // 3. Datos completos + casillas (solo PUT las acepta).
+    // 3. Datos completos + casillas (solo PUT las acepta). Cada representante
+    // que ya existe en Tazapay va con su person_id: sin él, el PUT y el submit
+    // lo toman como una persona nueva y la entity queda con representantes
+    // duplicados (sandbox 2026-10-05; changelog "Person ID Support For Entity
+    // Representatives").
+    const personIds = assignPersonIds(
+      draft.representatives,
+      await this.fetchRepresentatives(entityId),
+    );
     const fullBody = {
       ...this.entityBody(draft),
       documents: entityDocuments,
       representatives: draft.representatives.map((rep, i) => ({
+        ...(personIds[i] ? { person_id: personIds[i] } : {}),
         ...this.representativeBody(rep),
         documents: representativeDocuments[i] ?? [],
       })),
@@ -421,6 +481,16 @@ export class TazapayKybOnboardingService {
       rawStatus: submitted?.data?.approval_status ?? null,
       requestSnapshot: redactedSnapshot(fullBody),
     };
+  }
+
+  /** Representantes que Tazapay ya tiene en la entity (con su person_id). */
+  private async fetchRepresentatives(
+    entityId: string,
+  ): Promise<ExistingRepresentative[]> {
+    const res = await this.api.get<{
+      data?: { representatives?: ExistingRepresentative[] | null };
+    }>(`/v3/entity/${entityId}`);
+    return res?.data?.representatives ?? [];
   }
 
   async fetchEntityStatus(entityId: string): Promise<string | null> {
