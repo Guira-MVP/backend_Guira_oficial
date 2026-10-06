@@ -2,10 +2,14 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../../../core/supabase/supabase.module';
 import { TazapayApiClient } from '../tazapay-api.client';
+import { toAlpha2 } from '../../../core/utils/country-codes';
 import {
   buildBusinessEntityDraft,
+  ENTITY_TYPE_TO_TAZAPAY,
   TazapayBusinessEntityDraft,
   TazapayMappingError,
+  toTazapayAddress,
+  toTazapayDate,
   toTazapayEntityName,
 } from './tazapay-business-mapper';
 import {
@@ -335,7 +339,58 @@ export class TazapayKybOnboardingService {
     };
   }
 
-  /** Faltantes para enviar a Tazapay (documentos de la empresa y de cada persona). */
+  /**
+   * Datos de la empresa y de sus representantes que Tazapay exige y todavía
+   * faltan. Es la versión sin excepciones de los chequeos de
+   * buildBusinessEntityDraft: sirve para mostrarle al staff qué completar (y
+   * cubre el caso de un cliente migrado sin representantes, que antes pasaba
+   * la validación y se enviaba vacío).
+   */
+  missingData(
+    ctx: Awaited<ReturnType<TazapayKybOnboardingService['loadContext']>>,
+  ): string[] {
+    const text = (value: unknown) => (typeof value === 'string' ? value : '');
+    const b = ctx.business;
+    const missing: string[] = [];
+    if (!ENTITY_TYPE_TO_TAZAPAY[text(b.entity_type)])
+      missing.push('Tipo societario de la empresa');
+    if (!b.registration_number)
+      missing.push('Número de registro de la empresa (matrícula de comercio)');
+    if (
+      !toTazapayAddress({
+        address1: b.address1,
+        city: b.city,
+        state: b.state,
+        postal_code: b.postal_code,
+        country: b.country,
+      })
+    )
+      missing.push('Dirección registrada completa de la empresa');
+    if (ctx.directors.length === 0)
+      missing.push('Representante legal (director) de la empresa');
+    const people = [
+      ...ctx.directors.map((d) => ({ row: d, label: 'director' })),
+      ...ctx.ubos
+        .filter((u) => !u.director_id)
+        .map((u) => ({ row: u, label: 'beneficiario final' })),
+    ];
+    for (const { row, label } of people) {
+      const name = `${text(row.first_name)} ${text(row.last_name)}`.trim();
+      if (!toTazapayDate(row.date_of_birth))
+        missing.push(`Fecha de nacimiento de ${name} (${label})`);
+      if (
+        !(
+          toAlpha2(row.nationality as string) ??
+          toAlpha2(row.country_of_residence as string) ??
+          toAlpha2(row.country as string)
+        )
+      )
+        missing.push(`Nacionalidad de ${name} (${label})`);
+    }
+    return missing;
+  }
+
+  /** Faltantes para enviar a Tazapay (datos, y documentos de la empresa y de cada persona). */
   missingForTazapay(
     ctx: Awaited<ReturnType<TazapayKybOnboardingService['loadContext']>>,
   ): string[] {
@@ -344,14 +399,17 @@ export class TazapayKybOnboardingService {
         .filter((d) => d.subject_type === 'business')
         .map((d) => d.document_type),
     );
-    const missing = missingBusinessDocuments({
-      entityType: String(ctx.business.entity_type ?? ''),
-      available: businessDocs,
-      ownershipInIncorporationDoc:
-        ctx.business.ownership_in_incorporation_doc === true,
-      shareholdingSameAsRegistration:
-        ctx.business.shareholding_same_as_registration === true,
-    });
+    const missing = this.missingData(ctx);
+    missing.push(
+      ...missingBusinessDocuments({
+        entityType: String(ctx.business.entity_type ?? ''),
+        available: businessDocs,
+        ownershipInIncorporationDoc:
+          ctx.business.ownership_in_incorporation_doc === true,
+        shareholdingSameAsRegistration:
+          ctx.business.shareholding_same_as_registration === true,
+      }),
+    );
     const people: Array<{ subject: string; id: string; name: string }> = [
       ...ctx.directors.map((d) => ({
         subject: 'director',

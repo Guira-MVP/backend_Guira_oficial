@@ -22,6 +22,7 @@ import { AnnouncementsModule } from './announcements/announcements.module';
 import { StaffAdminModule } from './staff-admin/staff-admin.module';
 import { AccountMembersModule } from './account-members/account-members.module';
 import { QuotesModule } from './quotes/quotes.module';
+import { StaffClientCompletionModule } from './tazapay/completion/staff-client-completion.module';
 
 /**
  * ApplicationModule agrupa todos los módulos de negocio de Guira.
@@ -32,6 +33,7 @@ import { QuotesModule } from './quotes/quotes.module';
     AuthModule,
     ProfilesModule,
     OnboardingModule,
+    StaffClientCompletionModule,
     WalletsModule,
     LedgerModule,
     FeesModule,
