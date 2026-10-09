@@ -23,6 +23,7 @@ export interface AppConfig {
   zeptoMailApiUrl: string;
   emailFromAddress: string;
   emailFromName: string;
+  internalWebhookSecret: string;
 }
 
 export default registerAs(
@@ -49,5 +50,6 @@ export default registerAs(
       process.env.ZEPTOMAIL_API_URL ?? 'https://api.zeptomail.com/v1.1/email',
     emailFromAddress: process.env.EMAIL_FROM_ADDRESS ?? '',
     emailFromName: process.env.EMAIL_FROM_NAME ?? 'Guira',
+    internalWebhookSecret: process.env.INTERNAL_WEBHOOK_SECRET ?? '',
   }),
 );

@@ -80,4 +80,7 @@ export const environmentValidationSchema = Joi.object({
     otherwise: Joi.string().allow('').default(''),
   }),
   EMAIL_FROM_NAME: Joi.string().allow('').default('Guira'),
+
+  // Secreto compartido con los triggers de la DB (pg_net). Vacio = endpoints internos desactivados.
+  INTERNAL_WEBHOOK_SECRET: Joi.string().min(24).allow('').default(''),
 });

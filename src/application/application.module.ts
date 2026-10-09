@@ -22,6 +22,7 @@ import { AnnouncementsModule } from './announcements/announcements.module';
 import { StaffAdminModule } from './staff-admin/staff-admin.module';
 import { AccountMembersModule } from './account-members/account-members.module';
 import { QuotesModule } from './quotes/quotes.module';
+import { InternalModule } from './internal/internal.module';
 
 /**
  * ApplicationModule agrupa todos los módulos de negocio de Guira.
@@ -52,6 +53,7 @@ import { QuotesModule } from './quotes/quotes.module';
     StaffAdminModule,
     AccountMembersModule,
     QuotesModule,
+    InternalModule,
   ],
 })
 export class ApplicationModule {}
