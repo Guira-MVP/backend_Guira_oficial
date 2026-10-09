@@ -15,6 +15,7 @@ import {
   buildPaymentOrderCompletedEmail,
   buildPaymentOrderFailedEmail,
 } from './email-templates/payment-order.templates';
+import { buildNewUserAlertEmail } from './email-templates/new-user-alert.templates';
 import { buildStaffInviteEmail } from './email-templates/staff-invite.templates';
 import { buildTeamInviteEmail } from './email-templates/team-invite.templates';
 
@@ -217,6 +218,28 @@ export class EmailService {
       ...details,
     });
     return this.sendEmail({ to, subject, html, text });
+  }
+
+  /**
+   * Aviso interno de cliente nuevo. Un envío por destinatario para no exponer
+   * las direcciones entre sí. Devuelve cuántos se enviaron; nunca lanza.
+   */
+  async sendNewUserAlertEmail(
+    recipients: string[],
+    details: {
+      email: string;
+      fullName?: string | null;
+      accountType?: string | null;
+      verifiedAt: string;
+    },
+  ): Promise<number> {
+    const { subject, html, text } = buildNewUserAlertEmail(details);
+    const results = await Promise.all(
+      recipients.map((email) =>
+        this.sendEmail({ to: { email }, subject, html, text }),
+      ),
+    );
+    return results.filter(Boolean).length;
   }
 
   /**

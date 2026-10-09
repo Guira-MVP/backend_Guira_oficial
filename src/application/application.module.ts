@@ -23,6 +23,7 @@ import { StaffAdminModule } from './staff-admin/staff-admin.module';
 import { AccountMembersModule } from './account-members/account-members.module';
 import { QuotesModule } from './quotes/quotes.module';
 import { StaffClientCompletionModule } from './tazapay/completion/staff-client-completion.module';
+import { InternalModule } from './internal/internal.module';
 
 /**
  * ApplicationModule agrupa todos los módulos de negocio de Guira.
@@ -54,6 +55,7 @@ import { StaffClientCompletionModule } from './tazapay/completion/staff-client-c
     StaffAdminModule,
     AccountMembersModule,
     QuotesModule,
+    InternalModule,
   ],
 })
 export class ApplicationModule {}
