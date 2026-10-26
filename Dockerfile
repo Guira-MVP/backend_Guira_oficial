@@ -1,5 +1,5 @@
 # Multi-stage build para optimizar la imagen final de producción
-FROM node:22.16.0-alpine3.21 AS builder
+FROM node:26.12.1-alpine AS builder
 
 # Crear directorio de app
 WORKDIR /app
@@ -19,7 +19,7 @@ RUN npm run build
 # ---
 # STAGE 2: Imagen de Producción (distroless/alpine minimizado)
 # ---
-FROM node:22.16.0-alpine3.21 AS runner
+FROM node:26.12.1-alpine AS runner
 
 WORKDIR /app
 
